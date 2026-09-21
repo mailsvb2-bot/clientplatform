@@ -4,8 +4,8 @@ from dataclasses import asdict, dataclass
 
 from clientplatform.application.activity import get_business_profile, save_business_profile
 from clientplatform.application.cockpit import resolve_cockpit_context
-from clientplatform.application.tenancy import rename_business, resolve_tenant_context
-from clientplatform.domain.tenancy import TenantAccessDenied, TenantContext
+from clientplatform.application.tenancy import archive_business, rename_business, resolve_tenant_context
+from clientplatform.domain.tenancy import Business, PlatformRole, TenantAccessDenied, TenantContext
 from services.db import atomic_db
 
 _SCHEMA_VERSION = "2026-09-06.v1"
@@ -18,6 +18,7 @@ class CockpitSettingsSnapshot:
     business_name: str
     activity_description: str
     timezone_name: str
+    can_archive_business: bool
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -33,6 +34,7 @@ def build_cockpit_settings(*, actor: TenantContext, business_name: str) -> Cockp
         business_name=str(business_name),
         activity_description=profile.activity_description,
         timezone_name=profile.timezone,
+        can_archive_business=current.role == PlatformRole.OWNER,
     )
 
 
@@ -83,11 +85,30 @@ def update_cockpit_settings(
         business_name=business.name,
         activity_description=profile.activity_description,
         timezone_name=profile.timezone,
+        can_archive_business=actor.role == PlatformRole.OWNER,
     )
+
+
+def archive_cockpit_business(
+    *,
+    telegram_user_id: int,
+    requested_business_id: str | None,
+    confirmation_business_id: str,
+) -> Business:
+    actor, _business_name = _resolve_actor(
+        telegram_user_id=telegram_user_id,
+        requested_business_id=requested_business_id,
+    )
+    if actor.role != PlatformRole.OWNER:
+        actor.assert_can_manage_members(PlatformRole.OWNER)
+    if str(confirmation_business_id or "").strip() != actor.business_id:
+        raise ValueError("business archive confirmation does not match current business")
+    return archive_business(actor=actor)
 
 
 __all__ = [
     "CockpitSettingsSnapshot",
+    "archive_cockpit_business",
     "build_cockpit_settings",
     "resolve_cockpit_settings",
     "update_cockpit_settings",
