@@ -704,7 +704,16 @@ async def open_webinar_live_room(callback: CallbackQuery) -> None:
             actor=actor,
             event_id=event_id,
         )
-    except (TenantPermissionDenied, LookupError, ValueError, RuntimeError):
+    except TenantPermissionDenied:
+        await callback.answer("Не удалось открыть эфир этого вебинара", show_alert=True)
+        return
+    except LookupError:
+        await callback.answer("Не удалось открыть эфир этого вебинара", show_alert=True)
+        return
+    except ValueError:
+        await callback.answer("Не удалось открыть эфир этого вебинара", show_alert=True)
+        return
+    except RuntimeError:
         await callback.answer("Не удалось открыть эфир этого вебинара", show_alert=True)
         return
     ready = tuple(
