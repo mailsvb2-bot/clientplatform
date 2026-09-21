@@ -216,13 +216,13 @@ class ExternalProductConnector:
     created_by_member_id: str
     created_at: str
     updated_at: str
-    ingress_mode: ExternalProductIngressMode = ExternalProductIngressMode.SIGNED_WEBHOOK
     activated_at: str | None = None
     disabled_at: str | None = None
     revoked_at: str | None = None
     last_event_at: str | None = None
     last_error_at: str | None = None
     last_error_code: str | None = None
+    ingress_mode: ExternalProductIngressMode = ExternalProductIngressMode.SIGNED_WEBHOOK
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", normalize_uuid(self.id, field_name="connector_id"))
