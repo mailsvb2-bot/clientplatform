@@ -102,6 +102,24 @@ def event_hub_actions(snapshot: object) -> tuple[EventHubAction, ...]:
                 )
             )
             break
+    live_item = next(
+        (
+            item
+            for item in items
+            if getattr(item, "id", None)
+            and bool(getattr(item, "join_ready", False))
+            and str(getattr(item, "status", "") or "") == "published"
+        ),
+        None,
+    )
+    if live_item is not None:
+        actions.append(
+            EventHubAction(
+                "conduct",
+                f"▶️ Провести вебинар · {str(live_item.title)[:15]}",
+                key=str(live_item.id),
+            )
+        )
     for item in items[:3]:
         if not getattr(item, "id", None):
             continue
