@@ -661,21 +661,39 @@ async def cancel_business_rename(callback: CallbackQuery, state: FSMContext) -> 
 @router.callback_query(F.data.startswith("cps:archive-prompt:"))
 async def confirm_business_archive(callback: CallbackQuery, state: FSMContext) -> None:
     business_id = control._token_uuid(str(callback.data).split(":", 2)[2])
-    actor = await control._actor(int(callback.from_user.id), business_id)
-    accesses = await asyncio.to_thread(
-        list_accessible_businesses,
-        user_id=int(callback.from_user.id),
-    )
-    access = next(
-        item
-        for item in accesses
-        if str(item.business.id) == str(business_id)
-    )
-    actor.assert_can_manage_business()
+    user_id = int(callback.from_user.id)
+    try:
+        actor = await control._actor(user_id, business_id)
+    except control.TenancyError:
+        await _answer_callback(
+            callback,
+            "Бизнес уже недоступен. Обновите экран.",
+            show_alert=True,
+        )
+        return
     if getattr(actor.role, "value", actor.role) != "owner":
         await _answer_callback(
             callback,
             "Удалить бизнес может только владелец.",
+            show_alert=True,
+        )
+        return
+    accesses = await asyncio.to_thread(
+        list_accessible_businesses,
+        user_id=user_id,
+    )
+    access = next(
+        (
+            item
+            for item in accesses
+            if str(item.business.id) == str(business_id)
+        ),
+        None,
+    )
+    if access is None:
+        await _answer_callback(
+            callback,
+            "Бизнес уже недоступен. Обновите экран.",
             show_alert=True,
         )
         return
@@ -698,8 +716,16 @@ async def confirm_business_archive(callback: CallbackQuery, state: FSMContext) -
 @router.callback_query(F.data.startswith("cps:archive-confirm:"))
 async def archive_business_from_settings(callback: CallbackQuery, state: FSMContext) -> None:
     business_id = control._token_uuid(str(callback.data).split(":", 2)[2])
-    actor = await control._actor(int(callback.from_user.id), business_id)
+    user_id = int(callback.from_user.id)
     try:
+        actor = await control._actor(user_id, business_id)
+        if getattr(actor.role, "value", actor.role) != "owner":
+            await _answer_callback(
+                callback,
+                "Удалить бизнес может только владелец.",
+                show_alert=True,
+            )
+            return
         business = await asyncio.to_thread(archive_business, actor=actor)
     except control.TenancyError:
         await _answer_callback(
@@ -714,7 +740,7 @@ async def archive_business_from_settings(callback: CallbackQuery, state: FSMCont
     message = control._callback_message(callback)
     remaining = await asyncio.to_thread(
         list_accessible_businesses,
-        user_id=int(callback.from_user.id),
+        user_id=user_id,
     )
     await message.answer(
         f"Бизнес «{business.name}» удалён из активных. История сохранена."
@@ -730,7 +756,7 @@ async def archive_business_from_settings(callback: CallbackQuery, state: FSMCont
     if len(remaining) == 1:
         await control._resume_business(
             message,
-            user_id=int(callback.from_user.id),
+            user_id=user_id,
             business_id=remaining[0].business.id,
             state=state,
         )
