@@ -309,7 +309,7 @@ def _dashboard_keyboard(business_id: str, capabilities: list[object]) -> InlineK
     rows.extend(
         [
             [("Клиенты", f"cp:clients:{token}"), ("Результаты", f"cp:results:{token}")],
-            [("✏️ Изменить направление", f"cp:editact:{token}")],
+            [("✏️ Описание организации", f"cp:editact:{token}")],
         ]
     )
     markup = _keyboard(rows)
@@ -526,7 +526,7 @@ async def receive_activity_description(message: Message, state: FSMContext) -> N
     )
     if editing_activity:
         await state.clear()
-        await message.answer("Описание деятельности обновлено. Новое направление сохранено.")
+        await message.answer("Описание организации обновлено.")
         await _send_dashboard(message, user_id=_user_id(message), business_id=business_id)
         return
 
@@ -679,7 +679,7 @@ async def edit_activity(callback: CallbackQuery, state: FSMContext) -> None:
         actor.assert_can_manage_business()
     except TenantPermissionDenied:
         await callback.answer(
-            "Изменить направление может владелец или администратор.",
+            "Изменить описание организации может владелец или администратор.",
             show_alert=True,
         )
         return
