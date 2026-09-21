@@ -198,6 +198,8 @@ _ONE_SHOT_PREFIXES = (
     "cp:clients:",
     "cp:results:",
     "cp:editact:",
+    "cp:retire:",
+    "cp:retireok:",
     "cp:cap:",
     "cp:invite:",
     "cp:client:",
