@@ -91,6 +91,89 @@ jobs:
             exit 12
           fi
 
+          recovery="$(python3 - "$env_file" <<'PY'
+          from pathlib import Path
+          import os
+          import sys
+          import tempfile
+
+          path = Path(sys.argv[1])
+          required = ('MAX_BOT_TOKEN', 'MAX_WEBHOOK_SECRET', 'MAX_BOT_LINK_BASE')
+
+          def read_values(candidate: Path) -> dict[str, str]:
+              values = {}
+              for raw in candidate.read_text(encoding='utf-8').splitlines():
+                  line = raw.strip()
+                  if not line or line.startswith('#') or '=' not in line:
+                      continue
+                  key, value = line.split('=', 1)
+                  values[key.strip()] = value.strip()
+              return values
+
+          current = read_values(path)
+          missing = [name for name in required if not current.get(name, '').strip()]
+          if not missing:
+              print('not-needed')
+              raise SystemExit(0)
+
+          candidates = sorted(
+              path.parent.glob(path.name + '.before-*'),
+              key=lambda p: p.stat().st_mtime,
+              reverse=True,
+          )
+          source = None
+          source_values = None
+          for candidate in candidates:
+              try:
+                  values = read_values(candidate)
+              except (OSError, UnicodeError):
+                  continue
+              if all(values.get(name, '').strip() for name in required):
+                  source = candidate
+                  source_values = values
+                  break
+          if source is None or source_values is None:
+              print('backup-not-found')
+              raise SystemExit(0)
+
+          original = path.read_text(encoding='utf-8').splitlines()
+          replacements = {name: source_values[name].strip() for name in required}
+          seen = set()
+          out = []
+          for line in original:
+              stripped = line.strip()
+              if '=' in stripped and not stripped.startswith('#'):
+                  key = stripped.split('=', 1)[0].strip()
+                  if key in replacements:
+                      out.append(f'{key}={replacements[key]}')
+                      seen.add(key)
+                      continue
+              out.append(line)
+          for name in required:
+              if name not in seen:
+                  out.append(f'{name}={replacements[name]}')
+
+          fd, tmp_name = tempfile.mkstemp(prefix=path.name + '.', dir=str(path.parent))
+          try:
+              with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+                  handle.write('\\n'.join(out) + '\\n')
+                  handle.flush()
+                  os.fsync(handle.fileno())
+              os.chmod(tmp_name, 0o600)
+              os.replace(tmp_name, path)
+          finally:
+              if os.path.exists(tmp_name):
+                  os.unlink(tmp_name)
+          print('restored-from-backup')
+          PY
+          )"
+          case "$recovery" in
+            not-needed) echo "CLIENTPLATFORM_MAX_REPAIR_ENV_PRESENT" ;;
+            restored-from-backup) echo "CLIENTPLATFORM_MAX_REPAIR_ENV_RECOVERED" ;;
+            backup-not-found) echo "CLIENTPLATFORM_MAX_REPAIR_ENV_BACKUP_NOT_FOUND" ;;
+            *) echo "CLIENTPLATFORM_MAX_REPAIR_FAILED:env_recovery_unexpected" >&2; exit 13 ;;
+          esac
+
           validation="$(python3 - "$env_file" <<'PY'
           from pathlib import Path
           import re
