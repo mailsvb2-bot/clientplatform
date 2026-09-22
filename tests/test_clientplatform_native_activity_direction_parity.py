@@ -63,6 +63,27 @@ def test_vk_and_max_render_the_same_direction_workspace() -> None:
     assert "cpm:activity-edit-help" in _commands(vk)
 
 
+def test_vk_and_max_require_confirmation_before_direction_removal() -> None:
+    actor = _actor()
+    direction = _direction()
+
+    results = []
+    with patch.object(ui, "get_activity_direction", return_value=direction):
+        for platform in (ConnectionPlatform.VK, ConnectionPlatform.MAX):
+            results.append(
+                ui.render_native_member_interaction(
+                    actor=actor,
+                    raw_text=f"cpm:direction-archive:{direction.id}",
+                    interaction_key=f"{platform.value}-direction-remove",
+                    current_platform=platform,
+                )
+            )
+
+    assert results[0] == results[1]
+    assert "Удалить направление" in results[0].text
+    assert f"cpm:direction-archive-ok:{direction.id}" in _commands(results[0])
+
+
 def test_cross_channel_direction_read_refreshes_from_one_canonical_state() -> None:
     actor = _actor()
     before = _direction()
@@ -129,10 +150,19 @@ def test_native_direction_crud_delegates_to_canonical_application_operations() -
     assert "обновлено" in edited.text
 
     archived = SimpleNamespace(**{**vars(updated), "status": ActivityDirectionStatus.ARCHIVED})
+    with (
+        patch.object(ui, "get_activity_direction", return_value=updated),
+        patch.object(ui, "archive_activity_direction") as archive,
+    ):
+        confirmation = ui._direction_archive_confirm(actor, direction.id)
+    archive.assert_not_called()
+    assert "Удалить направление" in confirmation.text
+    assert f"cpm:direction-archive-ok:{direction.id}" in _commands(confirmation)
+
     with patch.object(ui, "archive_activity_direction", return_value=archived) as archive:
         result = ui._direction_archive_result(actor, direction.id)
     archive.assert_called_once_with(actor=actor, direction_id=direction.id)
-    assert "не удалены" in result.text
+    assert "сохранены в архиве" in result.text
 
     with patch.object(ui, "restore_activity_direction", return_value=updated) as restore:
         result = ui._direction_restore_result(actor, direction.id)
