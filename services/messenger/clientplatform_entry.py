@@ -352,7 +352,9 @@ def _business_actor(
 
 
 def _business_selector_reply(accesses: list[object], *, page: int = 0) -> MessengerReply:
-    page_size = 8
+    # Leave room for previous/next navigation plus the account-level create action.
+    # CustomerInteractionMessage allows at most 10 buttons in total.
+    page_size = 7
     page_count = max(1, (len(accesses) + page_size - 1) // page_size)
     safe_page = min(max(int(page), 0), page_count - 1)
     current = accesses[safe_page * page_size : (safe_page + 1) * page_size]
