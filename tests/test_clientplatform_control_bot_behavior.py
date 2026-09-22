@@ -166,6 +166,8 @@ def test_keyboard_builders_and_content_detection(monkeypatch: pytest.MonkeyPatch
     choice = handlers._business_choice_keyboard([access])
     assert choice.inline_keyboard[0][0].text == "Моя практика"
     assert choice.inline_keyboard[0][0].callback_data.startswith("cp:business:")
+    assert choice.inline_keyboard[-1][0].text == "➕ Создать организацию"
+    assert choice.inline_keyboard[-1][0].callback_data == "cps:start"
 
     client_choice = handlers._client_business_keyboard(
         [SimpleNamespace(business_id=business_id, business_name="Моя практика")]
