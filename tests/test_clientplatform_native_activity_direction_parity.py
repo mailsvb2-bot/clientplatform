@@ -68,7 +68,10 @@ def test_vk_and_max_require_confirmation_before_direction_removal() -> None:
     direction = _direction()
 
     results = []
-    with patch.object(ui, "get_activity_direction", return_value=direction):
+    with (
+        patch.object(ui, "resolve_tenant_context", return_value=actor),
+        patch.object(ui, "get_activity_direction", return_value=direction),
+    ):
         for platform in (ConnectionPlatform.VK, ConnectionPlatform.MAX):
             results.append(
                 ui.render_native_member_interaction(
