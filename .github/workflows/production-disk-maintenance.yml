@@ -11,6 +11,9 @@ on:
         options:
           - audit
           - cleanup
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -21,6 +24,7 @@ concurrency:
 
 jobs:
   maintain:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[production-disk-cleanup]')
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     env:
@@ -59,7 +63,7 @@ jobs:
       - name: Audit or safely clean production disk
         shell: bash
         env:
-          MODE: ${{ inputs.mode }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'cleanup' }}
         run: |
           set -Eeuo pipefail
           key="$RUNNER_TEMP/clientplatform-production-ssh-key"

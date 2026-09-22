@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TOPOLOGY = ROOT / ".github" / "workflows" / "production-server-topology-probe.yml"
 RECOVERY = ROOT / ".github" / "workflows" / "production-deploy-recovery.yml"
+DISK_MAINTENANCE = ROOT / ".github" / "workflows" / "production-disk-maintenance.yml"
 BRANCH_CLEANUP = ROOT / ".github" / "workflows" / "single-main-topology.yml"
 REPAIR = ROOT / "scripts" / "repair_production_deploy_channel.sh"
 OPERATIONS = ROOT / "deploy" / "clientplatform" / "GITHUB_OPERATIONS.md"
@@ -77,6 +78,32 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
         self.assertNotIn("git fetch --prune origin main", text)
         self.assertNotIn("git fetch origin", text)
 
+
+    def test_disk_maintenance_is_marker_gated_and_never_prunes_runtime_state(self) -> None:
+        text = self._text(DISK_MAINTENANCE)
+        for required in (
+            "workflow_dispatch:",
+            "push:",
+            "- main",
+            "[production-disk-cleanup]",
+            "github.event_name == 'workflow_dispatch'",
+            "docker builder prune --force --all --keep-storage 512MB",
+            "journalctl --vacuum-size=256M",
+            "apt-get clean",
+            "/opt/clientplatform",
+            "StrictHostKeyChecking=yes",
+            "UserKnownHostsFile=",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, text)
+        for forbidden in (
+            "docker image prune",
+            "docker volume prune",
+            "docker system prune",
+            "docker network prune",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, text)
 
     def test_branch_cleanup_deletes_only_exact_merged_pr_heads(self) -> None:
         text = self._text(BRANCH_CLEANUP)
