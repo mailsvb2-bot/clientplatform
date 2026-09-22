@@ -58,7 +58,7 @@ jobs:
           chmod 600 "$key" "$known_hosts"
           ssh-keygen -y -f "$key" >/dev/null
 
-      - name: Verify, enable and register production MAX entry
+      - name: Recover, enable and register production MAX entry
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -91,76 +91,6 @@ jobs:
             exit 12
           fi
 
-          validation="$(python3 - "$env_file" <<'PY'
-          from pathlib import Path
-          import re
-          import sys
-          from urllib.parse import urlsplit
-
-          path = Path(sys.argv[1])
-          values = {}
-          for raw in path.read_text(encoding='utf-8').splitlines():
-              line = raw.strip()
-              if not line or line.startswith('#') or '=' not in line:
-                  continue
-              key, value = line.split('=', 1)
-              values[key.strip()] = value.strip()
-
-          missing = [
-              name
-              for name in (
-                  'MAX_BOT_TOKEN',
-                  'MAX_WEBHOOK_SECRET',
-                  'MAX_BOT_LINK_BASE',
-                  'MESSENGER_PUBLIC_BASE_URL',
-              )
-              if not values.get(name, '').strip()
-          ]
-          secret = values.get('MAX_WEBHOOK_SECRET', '').strip()
-          if secret and not re.fullmatch(r'[A-Za-z0-9_-]{5,256}', secret):
-              missing.append('MAX_WEBHOOK_SECRET_FORMAT')
-          api_base = values.get('MAX_API_BASE_URL', 'https://platform-api2.max.ru').strip() or 'https://platform-api2.max.ru'
-          if api_base.rstrip('/') != 'https://platform-api2.max.ru':
-              missing.append('MAX_API_BASE_URL_OFFICIAL')
-          link = values.get('MAX_BOT_LINK_BASE', '').strip()
-          if '{bot}' in link and not values.get('MAX_BOT_NAME', '').strip():
-              missing.append('MAX_BOT_NAME')
-          public_base = values.get('MESSENGER_PUBLIC_BASE_URL', '').strip()
-          parsed = urlsplit(public_base)
-          if public_base and (parsed.scheme != 'https' or not parsed.hostname):
-              missing.append('MESSENGER_PUBLIC_BASE_URL_HTTPS')
-          parsed_link = urlsplit(link.replace('{bot}', 'bot').replace('{payload}', 'payload'))
-          if link and (parsed_link.scheme != 'https' or parsed_link.hostname not in {'max.ru', 'www.max.ru'}):
-              missing.append('MAX_BOT_LINK_BASE_OFFICIAL_HTTPS')
-          if missing:
-              print('missing=' + ','.join(dict.fromkeys(missing)))
-              raise SystemExit(20)
-          print('ok')
-          PY
-          )" || {
-            status=$?
-            echo "CLIENTPLATFORM_MAX_REPAIR_FAILED:${validation:-configuration_invalid}" >&2
-            exit "$status"
-          }
-          echo "CLIENTPLATFORM_MAX_REPAIR_CONFIG_OK"
-
-          cd "$repo/deploy/clientplatform"
-          compose=(docker compose)
-          if [ -f .env ]; then compose+=(--env-file .env); fi
-          compose+=(--env-file clientplatform.env -f compose.production.yml)
-          "${compose[@]}" config --quiet
-          set +e
-          audit_before="$("${compose[@]}" run --rm --no-deps --entrypoint python app scripts/max_provider_audit.py 2>&1)"
-          audit_status=$?
-          set -e
-          printf '%s\n' "$audit_before"
-          if [ "$audit_status" -ne 0 ] && [ "$audit_status" -ne 7 ]; then
-            echo "CLIENTPLATFORM_MAX_REPAIR_FAILED:provider_precheck" >&2
-            exit 21
-          fi
-          echo "CLIENTPLATFORM_MAX_PROVIDER_AUTH_OK"
-          cd "$repo"
-
           backup="$env_file.before-max-entry-repair-$(date -u +%Y%m%dT%H%M%SZ)"
           cp -p "$env_file" "$backup"
           rollback_needed=1
@@ -171,42 +101,24 @@ jobs:
               compose=(docker compose)
               if [ -f .env ]; then compose+=(--env-file .env); fi
               compose+=(--env-file clientplatform.env -f compose.production.yml)
-              "${compose[@]}" up -d --no-deps --force-recreate app >/dev/null
+              "${compose[@]}" up -d --no-deps --force-recreate app >/dev/null || true
               echo "CLIENTPLATFORM_MAX_REPAIR_ROLLED_BACK" >&2
             fi
           }
           trap rollback EXIT
 
-          python3 - "$env_file" <<'PY'
-          from pathlib import Path
-          import os
-          import sys
-          import tempfile
-
-          path = Path(sys.argv[1])
-          original = path.read_text(encoding='utf-8').splitlines()
-          out = []
-          found = False
-          for line in original:
-              if line.strip().startswith('MAX_WEBHOOK_ENABLED='):
-                  out.append('MAX_WEBHOOK_ENABLED=1')
-                  found = True
-              else:
-                  out.append(line)
-          if not found:
-              out.append('MAX_WEBHOOK_ENABLED=1')
-          fd, tmp_name = tempfile.mkstemp(prefix=path.name + '.', dir=str(path.parent))
-          try:
-              with os.fdopen(fd, 'w', encoding='utf-8') as handle:
-                  handle.write('\n'.join(out) + '\n')
-                  handle.flush()
-                  os.fsync(handle.fileno())
-              os.chmod(tmp_name, 0o600)
-              os.replace(tmp_name, path)
-          finally:
-              if os.path.exists(tmp_name):
-                  os.unlink(tmp_name)
-          PY
+          recovery_report="$(
+            python3 scripts/clientplatform_recover_max_production_env.py \
+              --env-file "$env_file" \
+              --timeout-sec 15
+          )" || {
+            status=$?
+            printf '%s\n' "$recovery_report"
+            echo "CLIENTPLATFORM_MAX_REPAIR_FAILED:credential_recovery" >&2
+            exit "$status"
+          }
+          printf '%s\n' "$recovery_report"
+          echo "CLIENTPLATFORM_MAX_REPAIR_CONFIG_OK"
 
           cd "$repo/deploy/clientplatform"
           compose=(docker compose)
@@ -231,17 +143,22 @@ jobs:
             echo "CLIENTPLATFORM_MAX_REPAIR_FAILED:owner_entry_not_ready" >&2
             exit 30
           fi
-
-          rollback_needed=0
-          rm -f "$backup"
-          trap - EXIT
           echo "CLIENTPLATFORM_MAX_OWNER_ENTRY_OK"
+
+          # From this point the public MAX endpoint is live with a provider-verified
+          # token. Keep it live even if provider registration needs a retry, so a
+          # partially-created subscription can never be pointed at a disabled route.
+          rollback_needed=0
+          trap - EXIT
 
           "${compose[@]}" run --rm --no-deps --entrypoint python app \
             scripts/register_max_webhook.py --apply --timeout-sec 20
           "${compose[@]}" run --rm --no-deps --entrypoint python app \
             scripts/max_provider_audit.py
           echo "CLIENTPLATFORM_MAX_PROVIDER_OK"
+
+          rm -f "$backup"
+          echo "CLIENTPLATFORM_MAX_REPAIR_OK"
           REMOTE
 
       - name: Verify public MAX owner entry
