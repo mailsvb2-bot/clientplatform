@@ -40,6 +40,7 @@ from clientplatform.domain.customer_interactions import (
 from clientplatform.domain.tenancy import (
     OwnerOnboardingSession,
     OwnerOnboardingStep,
+    PlatformRole,
     TenantContext,
     TenantPermissionDenied,
     TenancyError,
@@ -351,7 +352,9 @@ def _business_actor(
 
 
 def _business_selector_reply(accesses: list[object], *, page: int = 0) -> MessengerReply:
-    page_size = 8
+    # Leave room for previous/next navigation plus the account-level create action.
+    # CustomerInteractionMessage allows at most 10 buttons in total.
+    page_size = 7
     page_count = max(1, (len(accesses) + page_size - 1) // page_size)
     safe_page = min(max(int(page), 0), page_count - 1)
     current = accesses[safe_page * page_size : (safe_page + 1) * page_size]
@@ -381,10 +384,19 @@ def _business_selector_reply(accesses: list[object], *, page: int = 0) -> Messen
         )
     if navigation:
         rows.append(tuple(navigation))
+    rows.append(
+        (
+            CustomerInteractionButton(
+                label="➕ Создать организацию",
+                command="business",
+            ),
+        )
+    )
     interaction = CustomerInteractionMessage(
         text=(
-            "Выберите бизнес, с которым хотите работать.\n\n"
-            "ClientPlatform проверит Ваш доступ заново при каждом выборе."
+            "Выберите организацию, с которой хотите работать.\n\n"
+            "ClientPlatform проверит Ваш доступ заново при каждом выборе. "
+            "Здесь же можно создать ещё одну организацию."
             + (f"\n\nСтраница {safe_page + 1}/{page_count}" if page_count > 1 else "")
         ),
         rows=tuple(rows),
@@ -475,6 +487,43 @@ def _personalized_owner_home(
     )
 
 
+def _with_official_owner_account_actions(
+    interaction: CustomerInteractionMessage,
+    *,
+    actor: TenantContext,
+    raw_text: str,
+) -> CustomerInteractionMessage:
+    """Expose account-level organization actions on official owner channels only."""
+
+    if getattr(actor, "role", None) != PlatformRole.OWNER:
+        return interaction
+    if " ".join(str(raw_text or "").strip().split()).casefold() != "cpm:manage":
+        return interaction
+    if any(
+        button.command == "business"
+        for row in interaction.rows
+        for button in row
+    ):
+        return interaction
+
+    create_row = (
+        CustomerInteractionButton(
+            label="➕ Создать организацию",
+            command="business",
+        ),
+    )
+    rows = list(interaction.rows)
+    insert_at = max(0, len(rows) - 1)
+    rows.insert(insert_at, create_row)
+    text = interaction.text
+    if "➕ Создать организацию" not in text:
+        text += (
+            "\n• создать ещё одну организацию → "
+            "«➕ Создать организацию»"
+        )
+    return CustomerInteractionMessage(text=text, rows=tuple(rows))
+
+
 def _owner_control_reply(
     *,
     canonical_user_id: int,
@@ -519,6 +568,11 @@ def _owner_control_reply(
             setup_issuer=_issue_setup_command,
             resolve_pending_input=resolve_pending_input,
         )
+    interaction = _with_official_owner_account_actions(
+        interaction,
+        actor=actor,
+        raw_text=raw_text,
+    )
     return _interaction_reply(interaction, business_id=actor.business_id)
 
 
