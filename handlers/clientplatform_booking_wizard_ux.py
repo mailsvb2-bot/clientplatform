@@ -12,6 +12,11 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, User
 
 from clientplatform.application.activity import get_business_profile
+from clientplatform.presentation.booking_schedule_picker import (
+    BOOKING_DURATIONS as _QUICK_DURATIONS,
+    BOOKING_DURATION_LABELS,
+    BOOKING_START_TIMES as _BOOKING_START_TIMES,
+)
 from clientplatform.presentation.event_schedule_picker import (
     MAX_CALENDAR_MONTHS,
     calendar_days,
@@ -35,12 +40,6 @@ router = Router(name="clientplatform_booking_wizard_ux")
 router.message.filter(control.ClientPlatformControlEnabled())
 router.callback_query.filter(control.ClientPlatformControlEnabled())
 
-_QUICK_DURATIONS = (15, 30, 45, 60, 75, 90, 120, 180)
-_BOOKING_START_TIMES = tuple(
-    f"{hour:02d}:{minute:02d}"
-    for hour in range(8, 22)
-    for minute in (0, 30)
-) + ("22:00",)
 # Kept for callback compatibility with keyboards rendered by earlier releases.
 _DATE_PAGE_SIZE = 7
 _MAX_DATE_DAYS = 365
@@ -174,16 +173,7 @@ async def send_booking_date_picker(
 
 def _duration_keyboard(business_id: str):
     token = _business_token(business_id)
-    labels = {
-        15: "15 мин",
-        30: "30 мин",
-        45: "45 мин",
-        60: "1 час",
-        75: "1 ч 15 мин",
-        90: "1,5 часа",
-        120: "2 часа",
-        180: "3 часа",
-    }
+    labels = BOOKING_DURATION_LABELS
     rows = [
         [
             (labels[value], f"cpj:wizdur:{token}:{value}")
