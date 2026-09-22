@@ -24,6 +24,8 @@ _ALLOWED_ACTIONS = frozenset(
         "payment",
         "price",
         "program_lesson",
+        "program_lesson_content_edit",
+        "program_lesson_title_edit",
         "program_title",
         "publication_draft",
     }
