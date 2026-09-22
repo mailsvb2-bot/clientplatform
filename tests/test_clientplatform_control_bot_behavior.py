@@ -364,7 +364,10 @@ async def test_start_invite_new_multi_and_single_business(monkeypatch: pytest.Mo
     await handlers.clientplatform_start(multiple, multi_state)
     assert multi_state.clear_count == 1
     assert "Выберите организацию" in multiple.answers[-1][0]
-    assert len(multiple.answers[-1][1]["reply_markup"].inline_keyboard) == 2
+    multiple_rows = multiple.answers[-1][1]["reply_markup"].inline_keyboard
+    assert len(multiple_rows) == 3
+    assert multiple_rows[-1][0].text == "➕ Создать организацию"
+    assert multiple_rows[-1][0].callback_data == "cps:start"
 
     one = [business_access(business_id)]
     monkeypatch.setattr(handlers, "list_accessible_businesses", lambda **_kwargs: one)
