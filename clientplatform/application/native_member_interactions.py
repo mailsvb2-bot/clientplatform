@@ -412,6 +412,7 @@ TELEGRAM_NATIVE_ACTION_EQUIVALENTS: dict[str, tuple[str, ...]] = {
         "direction-edit",
         "direction-edit-text",
         "direction-archive",
+        "direction-archive-ok",
         "direction-restore",
     ),
     "prices": ("prices",),
@@ -975,6 +976,7 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "direction-edit",
             "direction-edit-text",
             "direction-archive",
+            "direction-archive-ok",
             "direction-restore",
             "program-create",
             "program-create-dirs",
@@ -1439,6 +1441,7 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "direction-edit": "cpm:directions:0",
     "direction-edit-text": "cpm:directions:0",
     "direction-archive": "cpm:directions:0",
+    "direction-archive-ok": "cpm:directions:0",
     "direction-restore": "cpm:directions-archived:0",
     "manage-more": "cpm:manage",
     "release": "cpm:manage",
@@ -3569,7 +3572,7 @@ def _direction_message(actor: TenantContext, direction_id: str) -> CustomerInter
         rows.extend(
             [
                 (_button("✏️ Изменить", f"cpm:direction-edit:{direction.id}"),),
-                (_button("🗑 Убрать из активных", f"cpm:direction-archive:{direction.id}"),),
+                (_button("🗑 Удалить направление", f"cpm:direction-archive:{direction.id}"),),
             ]
         )
         rows.append((_button("🧭 К направлениям", "cpm:directions:0"),))
@@ -3584,7 +3587,8 @@ def _direction_message(actor: TenantContext, direction_id: str) -> CustomerInter
             f"Материалы и программы: {counts['program']}\n"
             f"Услуги и предложения: {counts['offering']}\n"
             f"События и вебинары: {counts['event']}\n\n"
-            f"Статус: {'в работе' if active else 'в архиве'}."
+            f"Статус: {'в работе' if active else 'в архиве'}.\n\n"
+            + ("Нажмите «Удалить направление», чтобы убрать его из активной работы без потери связанных данных." if active else "Направление можно вернуть в работу в любой момент.")
         ),
         rows=tuple(rows),
     )
@@ -3681,6 +3685,33 @@ def _direction_edit_result(
     )
 
 
+def _direction_archive_confirm(
+    actor: TenantContext,
+    direction_id: str,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    direction = get_activity_direction(actor=actor, direction_id=direction_id)
+    if direction.status != ActivityDirectionStatus.ACTIVE:
+        return _stale_message()
+    return CustomerInteractionMessage(
+        text=(
+            f"🗑 Удалить направление «{direction.title}»?\n\n"
+            "Оно исчезнет из активной работы, но связанные материалы, услуги, "
+            "вебинары и история сохранятся в архиве. Направление можно будет восстановить."
+        ),
+        rows=(
+            (
+                _button(
+                    "🗑 Да, удалить направление",
+                    f"cpm:direction-archive-ok:{direction.id}",
+                ),
+            ),
+            (_button("Отмена", f"cpm:direction:{direction.id}"),),
+            _back_row(),
+        ),
+    )
+
+
 def _direction_archive_result(
     actor: TenantContext,
     direction_id: str,
@@ -3689,8 +3720,8 @@ def _direction_archive_result(
     direction = archive_activity_direction(actor=actor, direction_id=direction_id)
     return CustomerInteractionMessage(
         text=(
-            f"✅ Направление «{direction.title}» убрано из активной работы. "
-            "Связанные данные не удалены; направление можно восстановить."
+            f"✅ Направление «{direction.title}» удалено из активной работы. "
+            "Связанные данные сохранены в архиве; направление можно восстановить."
         ),
         rows=(
             (_button("📦 Архив направлений", "cpm:directions-archived:0"),),
@@ -7225,6 +7256,10 @@ def _render(
                 parsed.args[2],
             )
         if parsed.action == "direction-archive":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _direction_archive_confirm(actor, parsed.args[0])
+        if parsed.action == "direction-archive-ok":
             if len(parsed.args) != 1:
                 return _stale_message()
             return _direction_archive_result(actor, parsed.args[0])

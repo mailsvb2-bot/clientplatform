@@ -224,7 +224,7 @@ async def open_activity_direction(callback: CallbackQuery, state: FSMContext) ->
         rows.append(
             [
                 (
-                    "📦 Убрать в архив",
+                    "🗑 Удалить направление",
                     f"cp:dirarc:{business_token}:{direction_token}",
                 )
             ]
@@ -246,7 +246,8 @@ async def open_activity_direction(callback: CallbackQuery, state: FSMContext) ->
         f"• материалов: {counts['program']}\n"
         f"• услуг и предложений: {counts['offering']}\n"
         f"• событий: {counts['event']}\n\n"
-        "Направление — это часть организации, а не отдельная организация.",
+        "Направление — это часть организации, а не отдельная организация.\n\n"
+        "Откройте направление, чтобы изменить или удалить его.",
         reply_markup=control._keyboard(rows),
     )
 
@@ -356,17 +357,54 @@ async def archive_direction(callback: CallbackQuery, state: FSMContext) -> None:
     direction_id = control._token_uuid(direction_token)
     actor = await control._actor(int(callback.from_user.id), business_id)
     direction = await asyncio.to_thread(
+        get_activity_direction,
+        actor=actor,
+        direction_id=direction_id,
+    )
+    if direction.status != ActivityDirectionStatus.ACTIVE:
+        await callback.answer("Направление уже не активно.", show_alert=True)
+        return
+    await state.clear()
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        f"🗑 Удалить направление «{direction.title}»?\n\n"
+        "Оно исчезнет из активной работы, но связанные материалы, услуги, "
+        "вебинары и история сохранятся в архиве. Направление можно будет восстановить.",
+        reply_markup=control._keyboard(
+            [
+                [
+                    (
+                        "🗑 Да, удалить направление",
+                        f"cp:dirarcok:{business_token}:{direction_token}",
+                    )
+                ],
+                [("Отмена", f"cp:diropen:{business_token}:{direction_token}")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cp:dirarcok:"))
+async def archive_direction_confirm(callback: CallbackQuery, state: FSMContext) -> None:
+    _, _, business_token, direction_token = str(callback.data).split(":", 3)
+    business_id = control._token_uuid(business_token)
+    direction_id = control._token_uuid(direction_token)
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    direction = await asyncio.to_thread(
         archive_activity_direction,
         actor=actor,
         direction_id=direction_id,
     )
     await state.clear()
-    await callback.answer("Направление архивировано")
+    await callback.answer("Направление удалено из активной работы")
     await control._callback_message(callback).answer(
-        f"Направление «{direction.title}» убрано из активной работы. "
-        "Связи и история сохранены.",
+        f"✅ Направление «{direction.title}» удалено из активной работы. "
+        "Связи и история сохранены в архиве — направление можно восстановить.",
         reply_markup=control._keyboard(
-            [[("⬅️ К направлениям", f"cp:dirs:{business_token}")]]
+            [
+                [("📦 Архив направлений", f"cp:dirarch:{business_token}")],
+                [("⬅️ К направлениям", f"cp:dirs:{business_token}")],
+            ]
         ),
     )
 

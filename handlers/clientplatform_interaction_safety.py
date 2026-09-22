@@ -223,6 +223,7 @@ _ONE_SHOT_PREFIXES = (
     "cp:offeradd:",
     "cp:diradd:",
     "cp:dirarc:",
+    "cp:dirarcok:",
     "cp:dirrestore:",
     "cp:progdir:",
     "cp:progdirnone:",

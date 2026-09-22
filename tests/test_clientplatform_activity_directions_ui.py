@@ -253,7 +253,10 @@ class ActivityDirectionsUiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(selected_business_id, business_id)
             return actor
 
+        archive_calls: list[str] = []
+
         def archive(**_kwargs: Any):
+            archive_calls.append(direction_id)
             current.status = ActivityDirectionStatus.ARCHIVED
             return current
 
@@ -263,16 +266,35 @@ class ActivityDirectionsUiTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(directions_ui.control, "_actor", fake_actor),
+            patch.object(directions_ui, "get_activity_direction", return_value=current),
             patch.object(directions_ui, "archive_activity_direction", archive),
             patch.object(directions_ui, "restore_activity_direction", restore),
         ):
             business_token = directions_ui.control._uuid_token(business_id)
             direction_token = directions_ui.control._uuid_token(direction_id)
 
-            archived = FakeCallback(
+            prompt = FakeCallback(
                 f"cp:dirarc:{business_token}:{direction_token}"
             )
-            await directions_ui.archive_direction(archived, FakeState())
+            await directions_ui.archive_direction(prompt, FakeState())
+            self.assertEqual(archive_calls, [])
+            self.assertIn("Удалить направление", prompt.message.answers[-1][0])
+            prompt_markup = prompt.message.answers[-1][1]["reply_markup"]
+            self.assertEqual(
+                prompt_markup.inline_keyboard[0][0].text,
+                "🗑 Да, удалить направление",
+            )
+            self.assertTrue(
+                str(prompt_markup.inline_keyboard[0][0].callback_data).startswith(
+                    "cp:dirarcok:"
+                )
+            )
+
+            archived = FakeCallback(
+                f"cp:dirarcok:{business_token}:{direction_token}"
+            )
+            await directions_ui.archive_direction_confirm(archived, FakeState())
+            self.assertEqual(archive_calls, [direction_id])
             self.assertIn(
                 "Связи и история сохранены",
                 archived.message.answers[-1][0],
