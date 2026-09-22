@@ -52,6 +52,55 @@ def test_app_only_keeps_full_runtime_disk_thresholds() -> None:
     assert deploy._disk_capacity_limits("app_only") == deploy._disk_capacity_limits("full_runtime")
 
 
+
+
+def test_app_only_rollback_does_not_touch_visual_gateway(monkeypatch) -> None:
+    compose = ["docker", "compose", "--env-file", "clientplatform.env"]
+    commands: list[list[str]] = []
+    restored_visual: list[str] = []
+
+    def run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(deploy, "_run", run)
+    monkeypatch.setattr(
+        deploy,
+        "_restore_visual_gateway",
+        lambda **kwargs: restored_visual.append(str(kwargs["rollback_tag"])),
+    )
+    monkeypatch.setattr(deploy, "_wait_for_baseline_readiness", lambda _: None)
+    monkeypatch.setattr(deploy, "_external_https", lambda _: None)
+
+    deploy._rollback(
+        compose=compose,
+        rollback_tag=f"{deploy.APP_IMAGE}:rollback-proof",
+        visual_gateway_rollback_tag="",
+        domain="clientplatform.example.test",
+        timeout_seconds=60,
+    )
+
+    assert restored_visual == []
+    assert commands == [
+        [
+            "docker",
+            "image",
+            "tag",
+            f"{deploy.APP_IMAGE}:rollback-proof",
+            f"{deploy.APP_IMAGE}:latest",
+        ],
+        [
+            *compose,
+            "up",
+            "-d",
+            "--no-build",
+            "--force-recreate",
+            "app",
+            "caddy",
+        ],
+    ]
+
+
 def test_app_only_deploy_rebuilds_app_without_rebuilding_visual_gateway(monkeypatch) -> None:
     compose = ["docker", "compose", "--env-file", "clientplatform.env"]
     app_image = "sha256:" + "a" * 64
