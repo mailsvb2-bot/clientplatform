@@ -120,6 +120,18 @@ def resolve_owner_input(session: OwnerInputSession, value: object) -> OwnerInput
             (direction_id, title, description),
         )
 
+    if session.action == "event_schedule":
+        event_id = str(session.context.get("event_id") or "").strip()
+        if not event_id:
+            raise ValueError("event schedule context is invalid")
+        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+        if not lines or len(lines) > 31 or any(len(line) > 80 for line in lines):
+            raise ValueError("event schedule input is invalid")
+        return OwnerInputResolution(
+            "event-edit-text",
+            (event_id, "\n".join(lines)),
+        )
+
     if session.action == "event_warmup_text":
         if not 1 <= len(raw_text) <= 3500:
             raise ValueError("event warmup text length is invalid")

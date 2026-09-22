@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import logging
 import re
 from dataclasses import dataclass
@@ -63,6 +64,16 @@ from clientplatform.application.event_warmups import get_saved_event_warmup_plan
 from clientplatform.application.event_owner_flow import (
     OnlineEventCreateRequest,
     create_and_publish_online_event,
+)
+from clientplatform.application.event_sessions import (
+    EventSessionSpec,
+    configure_event_sessions,
+    get_event_warmup_window,
+    list_event_sessions,
+)
+from clientplatform.application.event_wizard import (
+    parse_session_window,
+    validate_session_sequence,
 )
 from clientplatform.application.events import set_event_join_target
 from clientplatform.application.event_followup_settings import (
@@ -386,6 +397,8 @@ TELEGRAM_NATIVE_ACTION_EQUIVALENTS: dict[str, tuple[str, ...]] = {
     "online-event": (
         "events",
         "event-new",
+        "event-edit",
+        "event-edit-text",
         "event-wizard",
         "event-create-text",
     ),
@@ -798,6 +811,8 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "events",
             "event-settings",
             "event-content",
+            "event-edit",
+            "event-edit-text",
             "event-content-followups",
             "event-followup-edit",
             "event-followup-reset",
@@ -1058,6 +1073,7 @@ def _owner_input_invalid_message(action: str) -> CustomerInteractionMessage:
         "publication_draft": "Напишите: Заголовок | Текст публикации.",
         "booking_time": "Напишите дату и время: ДД.ММ.ГГГГ ЧЧ:ММ. При желании добавьте длительность в минутах.",
         "online_event": "Ответ не подходит текущему шагу вебинара. Используйте показанные кнопки или формат из подсказки.",
+        "event_schedule": "Пришлите новое расписание: одна строка на каждый эфир в формате ДД.ММ.ГГГГ ЧЧ:ММ-ЧЧ:ММ.",
         "event_warmup_text": "Пришлите новый текст сообщения до вебинара одним сообщением длиной до 3500 символов.",
         "event_followup_text": "Пришлите новый текст дожима одним сообщением длиной до 3500 символов.",
         "event_warmup_days": "Пришлите допустимое число дней сообщений до вебинара.",
@@ -1068,7 +1084,7 @@ def _owner_input_invalid_message(action: str) -> CustomerInteractionMessage:
     }.get(action, "Проверьте ответ и попробуйте ещё раз.")
     exit_hint = (
         "Чтобы выйти без изменений, отправьте «Отмена» или нажмите «🎥 К вебинарам»."
-        if action in {"online_event", "event_warmup_text", "event_followup_text", "event_warmup_days"}
+        if action in {"online_event", "event_schedule", "event_warmup_text", "event_followup_text", "event_warmup_days"}
         else "Чтобы выйти без изменений, отправьте «Отмена»."
     )
     return CustomerInteractionMessage(
@@ -1310,6 +1326,8 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "events": "cpm:growth",
     "event-settings": "cpm:events",
     "event-content": "cpm:events",
+    "event-edit": "cpm:events",
+    "event-edit-text": "cpm:events",
     "event-content-followups": "cpm:events",
     "event-followup-edit": "cpm:events",
     "event-followup-reset": "cpm:events",
@@ -1399,7 +1417,7 @@ def _native_parent_command(parsed: ParsedMemberInteraction) -> str | None:
     if action == "menu":
         return None
     if action in {"owner-input-invalid", "owner-input-cancelled"} and args:
-        if args[0] in {"online_event", "event_warmup_text", "event_followup_text", "event_warmup_days"}:
+        if args[0] in {"online_event", "event_schedule", "event_warmup_text", "event_followup_text", "event_warmup_days"}:
             return "cpm:events"
         if args[0] in {"activity_direction_create", "activity_direction_edit"}:
             return "cpm:directions:0"
@@ -2241,6 +2259,8 @@ def _event_action_command(action: EventHubAction) -> str:
         return f"cpm:event-conduct:{action.key}"
     if action.kind == "content" and action.key is not None:
         return f"cpm:event-content:{action.key}"
+    if action.kind == "edit" and action.key is not None:
+        return f"cpm:event-edit:{action.key}"
     if action.kind == "announce" and action.key is not None:
         return f"cpm:event-announce:{action.key}"
     if action.kind == "settings":
@@ -2282,11 +2302,6 @@ def _events_message(actor: TenantContext) -> CustomerInteractionMessage:
         )
         rows: list[tuple[CustomerInteractionButton, ...]] = []
         for action in event_hub_actions(snapshot):
-            # Schedule editing currently reuses the Telegram calendar/FSM owner
-            # surface. Keep VK/MAX on their existing supported webinar actions
-            # instead of collapsing the whole hub into projection fallback.
-            if action.kind == "edit":
-                continue
             rows.append((_button(action.label, _event_action_command(action)),))
         rows.append(_back_row())
         return CustomerInteractionMessage(text=event_hub_text(snapshot), rows=tuple(rows))
@@ -2296,6 +2311,120 @@ def _events_message(actor: TenantContext) -> CustomerInteractionMessage:
             extra={"business_id": actor.business_id, "member_user_id": actor.user_id},
         )
         return _event_projection_fallback(actor)
+
+
+def _event_edit_message(
+    actor: TenantContext,
+    event_id: str,
+    *,
+    current_platform: ConnectionPlatform,
+    input_surface: str,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    sessions = list_event_sessions(actor=actor, event_id=event_id)
+    if not sessions:
+        return _stale_message()
+    window = get_event_warmup_window(actor=actor, event_id=event_id)
+    zone = ZoneInfo(window.timezone_name)
+    current_lines = []
+    for session in sessions:
+        end = session.ends_at or (session.starts_at + timedelta(hours=2))
+        current_lines.append(
+            session.starts_at.astimezone(zone).strftime("%d.%m.%Y %H:%M")
+            + "-"
+            + end.astimezone(zone).strftime("%H:%M")
+        )
+    count = len(sessions)
+    return _begin_owner_input_message(
+        actor,
+        platform=current_platform,
+        surface=input_surface,
+        action="event_schedule",
+        context={"event_id": event_id},
+        text=(
+            "🕒 Изменить расписание вебинара\n\n"
+            f"Эфиров: {count}. Пришлите ровно {count} "
+            + ("строку" if count == 1 else "строки" if count in {2, 3, 4} else "строк")
+            + " — по одной на каждый эфир.\n"
+            "Формат: ДД.ММ.ГГГГ ЧЧ:ММ-ЧЧ:ММ\n\n"
+            "Текущее расписание:\n"
+            + "\n".join(current_lines)
+            + "\n\nКомнаты и площадки сохранятся. Напоминания клиентам будут пересчитаны автоматически."
+        ),
+        rows=((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), _back_row()),
+    )
+
+
+def _event_edit_result(
+    actor: TenantContext,
+    event_id: str,
+    raw_schedule: str,
+    *,
+    current_platform: ConnectionPlatform,
+    input_surface: str,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    existing = list_event_sessions(actor=actor, event_id=event_id)
+    if not existing:
+        return _stale_message()
+    window = get_event_warmup_window(actor=actor, event_id=event_id)
+    lines = [line.strip() for line in str(raw_schedule or "").splitlines() if line.strip()]
+    if len(lines) != len(existing):
+        return CustomerInteractionMessage(
+            text=(
+                f"Нужно {len(existing)} строк — по одной на каждый эфир. "
+                "Ничего не изменено. Пришлите расписание ещё раз."
+            ),
+            rows=((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), _back_row()),
+        )
+    specs: list[EventSessionSpec] = []
+    previous = None
+    try:
+        for position, (line, current) in enumerate(zip(lines, existing), start=1):
+            parsed = parse_session_window(
+                line,
+                timezone_name=window.timezone_name,
+                position=position,
+            )
+            validate_session_sequence(parsed, previous=previous)
+            previous = parsed
+            specs.append(
+                EventSessionSpec(
+                    starts_at=parsed.starts_at,
+                    ends_at=parsed.ends_at,
+                    join_url=current.join_url,
+                    provider_key=current.provider_key,
+                    provider_label=current.provider_label,
+                )
+            )
+        updated = configure_event_sessions(
+            actor=actor,
+            event_id=event_id,
+            sessions=tuple(specs),
+            reschedule_notifications=True,
+        )
+    except (TypeError, ValueError):
+        return CustomerInteractionMessage(
+            text=(
+                "Не удалось сохранить расписание. Ничего не изменено. "
+                "Проверьте формат, будущие даты и отсутствие пересечений, затем пришлите все строки ещё раз."
+            ),
+            rows=((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), _back_row()),
+        )
+    clear_owner_input(
+        user_id=actor.user_id,
+        platform=current_platform.value,
+        surface=input_surface,
+    )
+    zone = ZoneInfo(window.timezone_name)
+    rendered = "\n".join(
+        f"День {session.position}: {session.starts_at.astimezone(zone).strftime('%d.%m.%Y %H:%M')}"
+        for session in updated
+    )
+    return CustomerInteractionMessage(
+        text="✅ Расписание вебинара обновлено.\n\n" + rendered,
+        rows=((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), _back_row()),
+    )
 
 
 def _event_conduct_message(
@@ -6162,6 +6291,25 @@ def _render(
             return _growth_lifecycle_message(actor)
         if parsed.action == "events":
             return _events_message(actor)
+        if parsed.action == "event-edit":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _event_edit_message(
+                actor,
+                parsed.args[0],
+                current_platform=current_platform,
+                input_surface=input_surface,
+            )
+        if parsed.action == "event-edit-text":
+            if len(parsed.args) != 2:
+                return _stale_message()
+            return _event_edit_result(
+                actor,
+                parsed.args[0],
+                parsed.args[1],
+                current_platform=current_platform,
+                input_surface=input_surface,
+            )
         if parsed.action == "event-conduct":
             if len(parsed.args) not in {1, 2}:
                 return _stale_message()

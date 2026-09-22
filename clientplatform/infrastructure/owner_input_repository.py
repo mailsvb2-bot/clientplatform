@@ -19,6 +19,7 @@ _ALLOWED_ACTIONS = frozenset(
         "member_user",
         "online_event",
         "event_join_url",
+        "event_schedule",
         "offering",
         "payment",
         "price",

@@ -233,7 +233,7 @@ def test_shared_event_action_labels_fit_native_transport_limit_without_truncatio
             assert native_ui._button(action.label, "cpm:events").label == action.label
 
 
-def test_native_hub_ignores_telegram_only_schedule_edit_without_fallback() -> None:
+def test_native_hub_exposes_schedule_edit_without_fallback() -> None:
     actor = _actor()
     base = _snapshot()
     item = SimpleNamespace(
@@ -257,7 +257,10 @@ def test_native_hub_ignores_telegram_only_schedule_edit_without_fallback() -> No
         "🗓 Контент-план · Вебинар",
         "cpm:event-content:33333333-3333-4333-8333-333333333333",
     ) in commands
-    assert not any("Изменить расписание" in label for label, _ in commands)
+    assert (
+        "🕒 Изменить расписание · Вебинар",
+        "cpm:event-edit:33333333-3333-4333-8333-333333333333",
+    ) in commands
     assert (
         "▶️ Провести вебинар · Вебинар",
         "cpm:event-conduct:33333333-3333-4333-8333-333333333333",
