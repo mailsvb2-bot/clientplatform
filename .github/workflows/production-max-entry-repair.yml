@@ -1,0 +1,256 @@
+name: Production MAX entry repair
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clientplatform-production-max-entry-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      SSH_HOST: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_HOST }}
+      SSH_USER: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_KNOWN_HOSTS }}
+      SSH_PORT_SECRET: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_PORT }}
+
+    steps:
+      - name: Require dedicated ClientPlatform SSH credentials
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${SSH_HOST:?CLIENTPLATFORM_PRODUCTION_SSH_HOST is required}"
+          : "${SSH_USER:?CLIENTPLATFORM_PRODUCTION_SSH_USER is required}"
+          : "${SSH_PRIVATE_KEY:?CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY is required}"
+          : "${SSH_KNOWN_HOSTS:?CLIENTPLATFORM_PRODUCTION_SSH_KNOWN_HOSTS is required}"
+          case "$SSH_HOST" in
+            *[!A-Za-z0-9._:-]*|'') echo "invalid production SSH host" >&2; exit 2 ;;
+          esac
+          case "$SSH_USER" in
+            *[!A-Za-z0-9._-]*|'') echo "invalid production SSH user" >&2; exit 2 ;;
+          esac
+          SSH_PORT="${SSH_PORT_SECRET:-22}"
+          case "$SSH_PORT" in
+            *[!0-9]*|'') echo "invalid production SSH port" >&2; exit 2 ;;
+          esac
+          if [ "$SSH_PORT" -lt 1 ] || [ "$SSH_PORT" -gt 65535 ]; then
+            echo "production SSH port outside 1..65535" >&2
+            exit 2
+          fi
+          echo "SSH_PORT=$SSH_PORT" >> "$GITHUB_ENV"
+
+      - name: Configure pinned production SSH identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/clientplatform-production-ssh-key"
+          known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$known_hosts"
+          chmod 600 "$key" "$known_hosts"
+          ssh-keygen -y -f "$key" >/dev/null
+
+      - name: Verify, enable and register production MAX entry
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/clientplatform-production-ssh-key"
+          known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
+          ssh \
+            -p "$SSH_PORT" \
+            -i "$key" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$known_hosts" \
+            -o ConnectTimeout=10 \
+            "$SSH_USER@$SSH_HOST" "sudo -n bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          repo=/opt/clientplatform
+          env_file="$repo/deploy/clientplatform/clientplatform.env"
+          cd "$repo"
+
+          if [ "$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)" != "main" ]; then
+            echo "CLIENTPLATFORM_MAX_REPAIR_FAILED:production_not_on_main" >&2
+            exit 10
+          fi
+          if [ -n "$(git status --porcelain=v1 --untracked-files=no --ignore-submodules=none)" ]; then
+            echo "CLIENTPLATFORM_MAX_REPAIR_FAILED:tracked_worktree_dirty" >&2
+            exit 11
+          fi
+          if [ ! -f "$env_file" ]; then
+            echo "CLIENTPLATFORM_MAX_REPAIR_FAILED:production_env_missing" >&2
+            exit 12
+          fi
+
+          validation="$(python3 - "$env_file" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+          from urllib.parse import urlsplit
+
+          path = Path(sys.argv[1])
+          values = {}
+          for raw in path.read_text(encoding='utf-8').splitlines():
+              line = raw.strip()
+              if not line or line.startswith('#') or '=' not in line:
+                  continue
+              key, value = line.split('=', 1)
+              values[key.strip()] = value.strip()
+
+          missing = [
+              name
+              for name in (
+                  'MAX_BOT_TOKEN',
+                  'MAX_WEBHOOK_SECRET',
+                  'MAX_BOT_LINK_BASE',
+                  'MESSENGER_PUBLIC_BASE_URL',
+              )
+              if not values.get(name, '').strip()
+          ]
+          secret = values.get('MAX_WEBHOOK_SECRET', '').strip()
+          if secret and not re.fullmatch(r'[A-Za-z0-9_-]{5,256}', secret):
+              missing.append('MAX_WEBHOOK_SECRET_FORMAT')
+          api_base = values.get('MAX_API_BASE_URL', 'https://platform-api2.max.ru').strip() or 'https://platform-api2.max.ru'
+          if api_base.rstrip('/') != 'https://platform-api2.max.ru':
+              missing.append('MAX_API_BASE_URL_OFFICIAL')
+          link = values.get('MAX_BOT_LINK_BASE', '').strip()
+          if '{bot}' in link and not values.get('MAX_BOT_NAME', '').strip():
+              missing.append('MAX_BOT_NAME')
+          public_base = values.get('MESSENGER_PUBLIC_BASE_URL', '').strip()
+          parsed = urlsplit(public_base)
+          if public_base and (parsed.scheme != 'https' or not parsed.hostname):
+              missing.append('MESSENGER_PUBLIC_BASE_URL_HTTPS')
+          parsed_link = urlsplit(link.replace('{bot}', 'bot').replace('{payload}', 'payload'))
+          if link and (parsed_link.scheme != 'https' or parsed_link.hostname not in {'max.ru', 'www.max.ru'}):
+              missing.append('MAX_BOT_LINK_BASE_OFFICIAL_HTTPS')
+          if missing:
+              print('missing=' + ','.join(dict.fromkeys(missing)))
+              raise SystemExit(20)
+          print('ok')
+          PY
+          )" || {
+            status=$?
+            echo "CLIENTPLATFORM_MAX_REPAIR_FAILED:${validation:-configuration_invalid}" >&2
+            exit "$status"
+          }
+          echo "CLIENTPLATFORM_MAX_REPAIR_CONFIG_OK"
+
+          cd "$repo/deploy/clientplatform"
+          compose=(docker compose)
+          if [ -f .env ]; then compose+=(--env-file .env); fi
+          compose+=(--env-file clientplatform.env -f compose.production.yml)
+          "${compose[@]}" config --quiet
+          set +e
+          audit_before="$("${compose[@]}" run --rm --no-deps --entrypoint python app scripts/max_provider_audit.py 2>&1)"
+          audit_status=$?
+          set -e
+          printf '%s\n' "$audit_before"
+          if [ "$audit_status" -ne 0 ] && [ "$audit_status" -ne 7 ]; then
+            echo "CLIENTPLATFORM_MAX_REPAIR_FAILED:provider_precheck" >&2
+            exit 21
+          fi
+          echo "CLIENTPLATFORM_MAX_PROVIDER_AUTH_OK"
+          cd "$repo"
+
+          backup="$env_file.before-max-entry-repair-$(date -u +%Y%m%dT%H%M%SZ)"
+          cp -p "$env_file" "$backup"
+          rollback_needed=1
+          rollback() {
+            if [ "$rollback_needed" = "1" ] && [ -f "$backup" ]; then
+              cp -p "$backup" "$env_file"
+              cd "$repo/deploy/clientplatform"
+              compose=(docker compose)
+              if [ -f .env ]; then compose+=(--env-file .env); fi
+              compose+=(--env-file clientplatform.env -f compose.production.yml)
+              "${compose[@]}" up -d --no-deps --force-recreate app >/dev/null
+              echo "CLIENTPLATFORM_MAX_REPAIR_ROLLED_BACK" >&2
+            fi
+          }
+          trap rollback EXIT
+
+          python3 - "$env_file" <<'PY'
+          from pathlib import Path
+          import os
+          import sys
+          import tempfile
+
+          path = Path(sys.argv[1])
+          original = path.read_text(encoding='utf-8').splitlines()
+          out = []
+          found = False
+          for line in original:
+              if line.strip().startswith('MAX_WEBHOOK_ENABLED='):
+                  out.append('MAX_WEBHOOK_ENABLED=1')
+                  found = True
+              else:
+                  out.append(line)
+          if not found:
+              out.append('MAX_WEBHOOK_ENABLED=1')
+          fd, tmp_name = tempfile.mkstemp(prefix=path.name + '.', dir=str(path.parent))
+          try:
+              with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+                  handle.write('\n'.join(out) + '\n')
+                  handle.flush()
+                  os.fsync(handle.fileno())
+              os.chmod(tmp_name, 0o600)
+              os.replace(tmp_name, path)
+          finally:
+              if os.path.exists(tmp_name):
+                  os.unlink(tmp_name)
+          PY
+
+          cd "$repo/deploy/clientplatform"
+          compose=(docker compose)
+          if [ -f .env ]; then compose+=(--env-file .env); fi
+          compose+=(--env-file clientplatform.env -f compose.production.yml)
+          "${compose[@]}" config --quiet
+          "${compose[@]}" up -d --no-deps --force-recreate app
+
+          ready=0
+          for _ in $(seq 1 45); do
+            headers="$(mktemp)"
+            code="$(curl --max-time 5 -sS -o /dev/null -D "$headers" -w '%{http_code}' https://app.clientplatform.ru/clientplatform/open/max || true)"
+            location="$(awk 'BEGIN{IGNORECASE=1} /^location:/ {sub(/^[^:]*:[[:space:]]*/, ""); sub(/\r$/, ""); print; exit}' "$headers")"
+            rm -f "$headers"
+            if [ "$code" = "302" ] && printf '%s' "$location" | grep -Eq '^https://(www\.)?max\.ru(/|\?|$)'; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" != "1" ]; then
+            echo "CLIENTPLATFORM_MAX_REPAIR_FAILED:owner_entry_not_ready" >&2
+            exit 30
+          fi
+
+          rollback_needed=0
+          rm -f "$backup"
+          trap - EXIT
+          echo "CLIENTPLATFORM_MAX_OWNER_ENTRY_OK"
+
+          "${compose[@]}" run --rm --no-deps --entrypoint python app \
+            scripts/register_max_webhook.py --apply --timeout-sec 20
+          "${compose[@]}" run --rm --no-deps --entrypoint python app \
+            scripts/max_provider_audit.py
+          echo "CLIENTPLATFORM_MAX_PROVIDER_OK"
+          REMOTE
+
+      - name: Verify public MAX owner entry
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          headers="$RUNNER_TEMP/clientplatform-max-entry.headers"
+          code="$(curl --max-time 10 -sS -o /dev/null -D "$headers" -w '%{http_code}' https://app.clientplatform.ru/clientplatform/open/max)"
+          location="$(awk 'BEGIN{IGNORECASE=1} /^location:/ {sub(/^[^:]*:[[:space:]]*/, ""); sub(/\r$/, ""); print; exit}' "$headers")"
+          test "$code" = "302"
+          printf '%s' "$location" | grep -Eq '^https://(www\.)?max\.ru(/|\?|$)'
+          echo "CLIENTPLATFORM_MAX_PUBLIC_ENTRY_OK"
