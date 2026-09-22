@@ -651,6 +651,10 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             "cp:editact:business-1",
         )
         self.assertEqual(
+            owner_buttons["➕ Создать организацию"],
+            "cps:start",
+        )
+        self.assertEqual(
             owner_buttons["🗑 Удалить организацию"],
             "cps:archive-prompt:business-1",
         )
