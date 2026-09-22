@@ -877,6 +877,8 @@ def _settings_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], list
         rows.append([(nav.ACTIVITY.label, f"cp:editact:{token}")])
         help_lines.append(f"• {nav.ACTIVITY.need} → «{nav.ACTIVITY.label}»")
     if actor.role == PlatformRole.OWNER:
+        rows.append([("➕ Создать организацию", "cps:start")])
+        help_lines.append("• создать ещё одну организацию → «➕ Создать организацию»")
         rows.append([(nav.DELETE_BUSINESS.label, f"cps:archive-prompt:{token}")])
         help_lines.append(f"• {nav.DELETE_BUSINESS.need} → «{nav.DELETE_BUSINESS.label}»")
     if actor.role in _SETTINGS_TEAM_ROLES:
