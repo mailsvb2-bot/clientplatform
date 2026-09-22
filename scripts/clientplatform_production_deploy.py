@@ -50,7 +50,8 @@ _VISUAL_GATEWAY_CAPABILITIES = {
     "render_formats": ["square", "feed", "story", "landscape"],
 }
 _SALES_SMOKE_CONTRACT_VERSION = "u008-u009-sales-operations-v2"
-_HOST_ONLY_ALLOWED_PREFIXES = ("docs/", "tests/")
+_HOST_ONLY_ALLOWED_PREFIXES = (".github/", "docs/", "tests/")
+_APP_ONLY_ALLOWED_PREFIXES = ("clientplatform/",)
 _HOST_ONLY_ALLOWED_FILES = frozenset(
     {
         "scripts/clientplatform_production_deploy.py",
@@ -317,6 +318,12 @@ def _host_only_path(path: str) -> bool:
     )
 
 
+def _app_only_path(path: str) -> bool:
+    return _host_only_path(path) or any(
+        path.startswith(prefix) for prefix in _APP_ONLY_ALLOWED_PREFIXES
+    )
+
+
 def _deployment_change_contract(
     target_sha: str,
     *,
@@ -344,15 +351,22 @@ def _deployment_change_contract(
         full_runtime["reason"] = "deploy_diff_unavailable_or_too_large"
         return full_runtime
     full_runtime["changed_files"] = list(changed_files)
-    if any(not _host_only_path(path) for path in changed_files):
-        full_runtime["reason"] = "runtime_paths_changed"
-        return full_runtime
-    return {
-        "mode": "host_only_noop",
-        "previous_successful_deploy_sha": previous_sha,
-        "changed_files": list(changed_files),
-        "reason": "host_only_diff_proven",
-    }
+    if all(_host_only_path(path) for path in changed_files):
+        return {
+            "mode": "host_only_noop",
+            "previous_successful_deploy_sha": previous_sha,
+            "changed_files": list(changed_files),
+            "reason": "host_only_diff_proven",
+        }
+    if all(_app_only_path(path) for path in changed_files):
+        return {
+            "mode": "app_only",
+            "previous_successful_deploy_sha": previous_sha,
+            "changed_files": list(changed_files),
+            "reason": "app_only_diff_proven",
+        }
+    full_runtime["reason"] = "runtime_paths_changed"
+    return full_runtime
 
 
 def _image_metadata(image_id: str) -> tuple[dict[str, str], tuple[str, ...]] | None:
@@ -1252,10 +1266,10 @@ def deploy(
     )
     visual_gateway_rollback_tag = (
         f"{VISUAL_GATEWAY_IMAGE}:rollback-{rollback_stamp}"
-        if previous_visual_gateway_image
+        if previous_visual_gateway_image and runtime_rollout_mode == "full_runtime"
         else ""
     )
-    if previous_visual_gateway_image:
+    if visual_gateway_rollback_tag:
         _run(
             [
                 "docker",
@@ -1308,11 +1322,17 @@ def deploy(
                 target_sha, rollout_mode=runtime_rollout_mode
             )
         else:
-            _run([*compose, "build", "visual-gateway"])
-            _run([*compose, "build", "app"])
-            _run([*compose, "up", "-d", "--force-recreate", "visual-gateway"])
-            visual_gateway_changed = True
-            _wait_for_visual_gateway(timeout_seconds)
+            if runtime_rollout_mode == "full_runtime":
+                _run([*compose, "build", "visual-gateway"])
+                _run([*compose, "build", "app"])
+                _run([*compose, "up", "-d", "--force-recreate", "visual-gateway"])
+                visual_gateway_changed = True
+                _wait_for_visual_gateway(timeout_seconds)
+            elif runtime_rollout_mode == "app_only":
+                _wait_for_visual_gateway(timeout_seconds)
+                _run([*compose, "build", "app"])
+            else:
+                raise DeploymentError("unsupported_runtime_rollout_mode")
             _run([*compose, "up", "-d", "--force-recreate", "app", "caddy"])
             app_changed = True
             _wait_for_readiness(timeout_seconds)
@@ -1321,15 +1341,16 @@ def deploy(
                 _external_omnichannel_method_guards(domain)
             sales_operations_smoke = _sales_operations_smoke()
             visual_gateway_image = _container_image(VISUAL_GATEWAY_CONTAINER)
-            _run(
-                [
-                    "docker",
-                    "image",
-                    "tag",
-                    visual_gateway_image,
-                    f"{VISUAL_GATEWAY_IMAGE}:release-{target_sha}",
-                ]
-            )
+            if runtime_rollout_mode == "full_runtime":
+                _run(
+                    [
+                        "docker",
+                        "image",
+                        "tag",
+                        visual_gateway_image,
+                        f"{VISUAL_GATEWAY_IMAGE}:release-{target_sha}",
+                    ]
+                )
             post_deploy_retention = _post_deploy_retention(
                 target_sha, rollout_mode=runtime_rollout_mode
             )
