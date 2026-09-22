@@ -110,6 +110,21 @@ class OwnerInputRepositoryTests(unittest.TestCase):
             edited,
         )
 
+    def test_event_schedule_action_is_durable(self) -> None:
+        event_id = "11111111-1111-4111-8111-111111111111"
+        session = self.repo.set(
+            user_id=101,
+            platform="vk",
+            business_id=self.first.business.id,
+            action="event_schedule",
+            context={"event_id": event_id},
+            now="2026-09-22T00:02:00+00:00",
+        )
+
+        self.assertEqual(session.action, "event_schedule")
+        self.assertEqual(session.context["event_id"], event_id)
+        self.assertEqual(self.repo.get(user_id=101, platform="vk"), session)
+
     def test_session_is_removed_by_membership_cascade(self) -> None:
         owner = self.tenancy.resolve_context(user_id=101, business_id=self.first.business.id)
         self.tenancy.grant_member(actor=owner, user_id=303, role="manager")
