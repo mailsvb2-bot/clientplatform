@@ -1190,7 +1190,7 @@ def _rollback(
     timeout_seconds: int,
     visual_gateway_rollback_tag: str | None = None,
 ) -> None:
-    if visual_gateway_rollback_tag is not None:
+    if visual_gateway_rollback_tag:
         _restore_visual_gateway(
             compose=compose,
             rollback_tag=visual_gateway_rollback_tag,
