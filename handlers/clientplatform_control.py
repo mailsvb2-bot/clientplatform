@@ -224,17 +224,17 @@ async def _touch_customer_callback(callback: CallbackQuery, *, business_id: str)
 
 
 def _business_choice_keyboard(accesses: list[object]) -> InlineKeyboardMarkup:
-    return _keyboard(
+    rows = [
         [
-            [
-                (
-                    access.business.name,
-                    f"cp:business:{_uuid_token(access.business.id)}",
-                )
-            ]
-            for access in accesses
+            (
+                access.business.name,
+                f"cp:business:{_uuid_token(access.business.id)}",
+            )
         ]
-    )
+        for access in accesses
+    ]
+    rows.append([("➕ Создать организацию", "cps:start")])
+    return _keyboard(rows)
 
 
 def _capability_setup_keyboard(business_id: str, active_keys: set[str]) -> InlineKeyboardMarkup:
