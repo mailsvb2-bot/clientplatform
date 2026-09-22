@@ -173,7 +173,16 @@ def test_app_only_deploy_rebuilds_app_without_rebuilding_visual_gateway(monkeypa
     assert result == Path("/evidence/app-only.json")
     assert [*compose, "build", "app"] in commands
     assert [*compose, "build", "visual-gateway"] not in commands
-    assert [*compose, "up", "-d", "--force-recreate", "app", "caddy"] in commands
+    assert [
+        *compose,
+        "up",
+        "-d",
+        "--no-deps",
+        "--force-recreate",
+        "app",
+        "caddy",
+    ] in commands
+    assert [*compose, "up", "-d", "--force-recreate", "app", "caddy"] not in commands
     assert [*compose, "up", "-d", "--force-recreate", "visual-gateway"] not in commands
     assert events == ["baseline", "root", "gateway", "runtime", "https"]
     visual_release = f"{deploy.VISUAL_GATEWAY_IMAGE}:release-{target_sha}"
