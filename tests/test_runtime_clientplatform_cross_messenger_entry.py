@@ -229,7 +229,7 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         restored = CustomerInteractionMessage.from_json(replies[0].meta["interaction"])
         self.assertEqual(
             [row[0].command for row in restored.rows],
-            [f"cpw:open:{uuid_token(B1)}", f"cpw:open:{uuid_token(B2)}"],
+            [f"cpw:open:{uuid_token(B1)}", f"cpw:open:{uuid_token(B2)}", "business"],
         )
 
     def test_multi_business_start_returns_server_resolved_selector(self) -> None:
@@ -257,7 +257,7 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         restored = CustomerInteractionMessage.from_json(replies[0].meta["interaction"])
         self.assertEqual(
             [row[0].command for row in restored.rows],
-            [f"cpw:open:{uuid_token(B1)}", f"cpw:open:{uuid_token(B2)}"],
+            [f"cpw:open:{uuid_token(B1)}", f"cpw:open:{uuid_token(B2)}", "business"],
         )
 
     def test_multi_business_selection_revalidates_access_and_opens_selected_tenant(self) -> None:
