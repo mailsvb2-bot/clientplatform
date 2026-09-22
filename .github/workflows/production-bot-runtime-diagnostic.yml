@@ -84,7 +84,7 @@ jobs:
             exit 20
           fi
           echo "CLIENTPLATFORM_BOT_RUNTIME_CONTAINER_OK head_sha=$(git rev-parse HEAD)"
-          privileged docker exec -e CLIENTPLATFORM_PROBE_BUSINESS_NAME="$business_name" "$app_id" python - <<'PY'
+          privileged docker exec -i -e CLIENTPLATFORM_PROBE_BUSINESS_NAME="$business_name" "$app_id" python - <<'PY'
           from __future__ import annotations
 
           import inspect
