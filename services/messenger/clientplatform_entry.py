@@ -495,7 +495,7 @@ def _with_official_owner_account_actions(
 ) -> CustomerInteractionMessage:
     """Expose account-level organization actions on official owner channels only."""
 
-    if actor.role != PlatformRole.OWNER:
+    if getattr(actor, "role", None) != PlatformRole.OWNER:
         return interaction
     if " ".join(str(raw_text or "").strip().split()).casefold() != "cpm:manage":
         return interaction
