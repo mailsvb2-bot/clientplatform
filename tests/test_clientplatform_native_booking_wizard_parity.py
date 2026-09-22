@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
@@ -13,7 +15,6 @@ from clientplatform.presentation.booking_schedule_picker import (
     BOOKING_DURATIONS,
     BOOKING_START_TIMES,
 )
-from handlers import clientplatform_booking_wizard_ux as telegram_booking
 
 
 def _actor() -> TenantContext:
@@ -51,8 +52,28 @@ def _button_count(message) -> int:
 
 
 def test_telegram_and_native_share_booking_time_and_duration_contract() -> None:
-    assert telegram_booking._BOOKING_START_TIMES == BOOKING_START_TIMES
-    assert telegram_booking._QUICK_DURATIONS == BOOKING_DURATIONS
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "handlers"
+        / "clientplatform_booking_wizard_ux.py"
+    )
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.module != "clientplatform.presentation.booking_schedule_picker":
+            continue
+        aliases.update(
+            {
+                item.name: item.asname or item.name
+                for item in node.names
+            }
+        )
+
+    assert aliases["BOOKING_START_TIMES"] == "_BOOKING_START_TIMES"
+    assert aliases["BOOKING_DURATIONS"] == "_QUICK_DURATIONS"
+    assert aliases["BOOKING_DURATION_LABELS"] == "BOOKING_DURATION_LABELS"
     assert BOOKING_START_TIMES[0] == "08:00"
     assert BOOKING_START_TIMES[-1] == "22:00"
     assert BOOKING_DURATIONS == (15, 30, 45, 60, 75, 90, 120, 180)
