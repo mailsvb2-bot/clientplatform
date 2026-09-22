@@ -200,6 +200,23 @@ from clientplatform.domain.tenancy import (
 )
 from clientplatform.infrastructure import DispatchOutboxRepository, TenancyRepository
 from clientplatform.presentation import owner_navigation as nav
+from clientplatform.presentation.booking_schedule_picker import (
+    BOOKING_DURATIONS,
+    BOOKING_DURATION_LABELS,
+    BOOKING_MONTHS_RU_FULL,
+    BOOKING_START_TIMES,
+    parse_booking_duration,
+    parse_booking_start_time,
+)
+from clientplatform.presentation.event_schedule_picker import (
+    MAX_CALENDAR_MONTHS,
+    calendar_days,
+    local_today,
+    month_key,
+    parse_calendar_date,
+    parse_month_key,
+    shift_month,
+)
 from clientplatform.presentation.owner_quick_menu import (
     build_owner_quick_actions,
     quick_menu_intro,
@@ -431,7 +448,17 @@ SIMPLE_OWNER_NATIVE_INTENT_EQUIVALENTS: dict[str, tuple[str, ...]] = {
         "program-publish",
         "program-deliver",
     ),
-    "booking": ("bookings", "booking-open"),
+    "booking": (
+        "bookings",
+        "booking-open",
+        "booking-open-for",
+        "booking-months",
+        "booking-dates",
+        "booking-date",
+        "booking-times",
+        "booking-time",
+        "booking-duration",
+    ),
     "results": ("today",),
     "customer-invite": ("invites", "invite-new"),
     "offerings": ("offers", "offering-new"),
@@ -840,6 +867,12 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "bookings",
             "booking-open",
             "booking-open-for",
+            "booking-months",
+            "booking-dates",
+            "booking-date",
+            "booking-times",
+            "booking-time",
+            "booking-duration",
             "programs",
             "behavior",
             "attention",
@@ -1310,6 +1343,7 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "customers": "cpm:work",
     "bookings": "cpm:work",
     "booking-open": "cpm:bookings",
+    "booking-duration": "cpm:bookings",
     "programs": "cpm:work",
     "behavior": "cpm:work-more",
     "attention": "cpm:work-more",
@@ -1427,8 +1461,21 @@ def _native_parent_command(parsed: ParsedMemberInteraction) -> str | None:
             return "cpm:offers"
     if action == "customer":
         return "cpm:customers:0"
-    if action == "booking-open-for":
+    if action in {"booking-open-for", "booking-months"} and args:
         return "cpm:booking-open:0"
+    if action == "booking-dates" and len(args) >= 1:
+        return f"cpm:booking-months:{args[0]}:0"
+    if action == "booking-date" and len(args) == 2:
+        try:
+            selected_month = args[1][:7].replace("-", "")
+        except (AttributeError, IndexError):
+            return "cpm:booking-open:0"
+        return f"cpm:booking-dates:{args[0]}:{selected_month}:0"
+    if action == "booking-times" and len(args) >= 2:
+        selected_month = args[1][:7].replace("-", "")
+        return f"cpm:booking-dates:{args[0]}:{selected_month}:0"
+    if action == "booking-time" and len(args) == 3:
+        return f"cpm:booking-times:{args[0]}:{args[1]}:0"
     if action == "booking-open-text":
         return "cpm:bookings"
     if action == "sales-lead":
@@ -5213,6 +5260,275 @@ def _booking_open_message(actor: TenantContext, page: int = 0) -> CustomerIntera
     )
 
 
+_NATIVE_BOOKING_MONTH_PAGE_SIZE = 6
+_NATIVE_BOOKING_DATE_PAGE_SIZE = 6
+_NATIVE_BOOKING_TIME_PAGE_SIZE = 6
+
+
+def _booking_offering_exact(actor: TenantContext, offering_id: str) -> Any:
+    offering = next(
+        (
+            item
+            for item in _active_booking_offerings(actor)
+            if str(item.id) == str(offering_id)
+        ),
+        None,
+    )
+    if offering is None:
+        raise ValueError("booking offering is stale")
+    return offering
+
+
+def _booking_minimum_date(actor: TenantContext):
+    profile = get_business_profile(actor=actor)
+    return local_today(profile.timezone)
+
+
+def _booking_months_message(
+    actor: TenantContext,
+    offering_id: str,
+    page: int = 0,
+) -> CustomerInteractionMessage:
+    if actor.role not in _BOOKING_MANAGEMENT_ROLES:
+        return _permission_message()
+    offering = _booking_offering_exact(actor, offering_id)
+    minimum = _booking_minimum_date(actor)
+    months: list[tuple[int, int]] = []
+    year, month = minimum.year, minimum.month
+    for offset in range(MAX_CALENDAR_MONTHS + 1):
+        if offset:
+            year, month = shift_month(year, month, 1)
+        months.append((year, month))
+    page = max(0, int(page))
+    start = page * _NATIVE_BOOKING_MONTH_PAGE_SIZE
+    if start >= len(months):
+        return _stale_message()
+    shown = months[start : start + _NATIVE_BOOKING_MONTH_PAGE_SIZE]
+    rows: list[tuple[CustomerInteractionButton, ...]] = [
+        (
+            _button(
+                f"{BOOKING_MONTHS_RU_FULL[current_month]} {current_year}",
+                f"cpm:booking-dates:{offering.id}:{month_key(current_year, current_month)}:0",
+            ),
+        )
+        for current_year, current_month in shown
+    ]
+    paging: list[CustomerInteractionButton] = []
+    if page:
+        paging.append(
+            _button(
+                "⬅️ Раньше",
+                f"cpm:booking-months:{offering.id}:{page - 1}",
+            )
+        )
+    if start + _NATIVE_BOOKING_MONTH_PAGE_SIZE < len(months):
+        paging.append(
+            _button(
+                "Позже ➡️",
+                f"cpm:booking-months:{offering.id}:{page + 1}",
+            )
+        )
+    if paging:
+        rows.append(tuple(paging))
+    rows.append(_back_row())
+    return CustomerInteractionMessage(
+        text=(
+            f"🕒 Свободное время · {offering.title}\n\n"
+            "Выберите месяц. Затем выберите дату, время и длительность кнопками."
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _booking_dates_message(
+    actor: TenantContext,
+    offering_id: str,
+    selected_month: str,
+    page: int = 0,
+) -> CustomerInteractionMessage:
+    if actor.role not in _BOOKING_MANAGEMENT_ROLES:
+        return _permission_message()
+    offering = _booking_offering_exact(actor, offering_id)
+    minimum = _booking_minimum_date(actor)
+    year, month = parse_month_key(selected_month)
+    weeks = calendar_days(
+        year=year,
+        month=month,
+        minimum=minimum,
+        max_months=MAX_CALENDAR_MONTHS,
+    )
+    dates = [
+        cell.value
+        for week in weeks
+        for cell in week
+        if cell.enabled and cell.value
+    ]
+    page = max(0, int(page))
+    start = page * _NATIVE_BOOKING_DATE_PAGE_SIZE
+    if start >= len(dates):
+        return _stale_message()
+    shown = dates[start : start + _NATIVE_BOOKING_DATE_PAGE_SIZE]
+    rows: list[tuple[CustomerInteractionButton, ...]] = [
+        (
+            _button(
+                datetime.strptime(value, "%Y-%m-%d").strftime("%d.%m"),
+                f"cpm:booking-date:{offering.id}:{value}",
+            ),
+        )
+        for value in shown
+    ]
+    paging: list[CustomerInteractionButton] = []
+    if page:
+        paging.append(
+            _button(
+                "⬅️ Раньше",
+                f"cpm:booking-dates:{offering.id}:{selected_month}:{page - 1}",
+            )
+        )
+    if start + _NATIVE_BOOKING_DATE_PAGE_SIZE < len(dates):
+        paging.append(
+            _button(
+                "Позже ➡️",
+                f"cpm:booking-dates:{offering.id}:{selected_month}:{page + 1}",
+            )
+        )
+    if paging:
+        rows.append(tuple(paging))
+    rows.append(_back_row())
+    return CustomerInteractionMessage(
+        text=(
+            f"📅 {BOOKING_MONTHS_RU_FULL[month]} {year} · {offering.title}\n\n"
+            "Выберите дату свободного времени."
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _booking_times_message(
+    actor: TenantContext,
+    offering_id: str,
+    selected_date: str,
+    page: int = 0,
+) -> CustomerInteractionMessage:
+    if actor.role not in _BOOKING_MANAGEMENT_ROLES:
+        return _permission_message()
+    offering = _booking_offering_exact(actor, offering_id)
+    minimum = _booking_minimum_date(actor)
+    selected = parse_calendar_date(
+        selected_date,
+        minimum=minimum,
+        max_months=MAX_CALENDAR_MONTHS,
+    )
+    page = max(0, int(page))
+    start = page * _NATIVE_BOOKING_TIME_PAGE_SIZE
+    if start >= len(BOOKING_START_TIMES):
+        return _stale_message()
+    shown = BOOKING_START_TIMES[start : start + _NATIVE_BOOKING_TIME_PAGE_SIZE]
+    rows: list[tuple[CustomerInteractionButton, ...]] = [
+        (
+            _button(
+                value,
+                f"cpm:booking-time:{offering.id}:{selected.isoformat()}:{value.replace(':', '')}",
+            ),
+        )
+        for value in shown
+    ]
+    paging: list[CustomerInteractionButton] = []
+    if page:
+        paging.append(
+            _button(
+                "⬅️ Раньше",
+                f"cpm:booking-times:{offering.id}:{selected.isoformat()}:{page - 1}",
+            )
+        )
+    if start + _NATIVE_BOOKING_TIME_PAGE_SIZE < len(BOOKING_START_TIMES):
+        paging.append(
+            _button(
+                "Позже ➡️",
+                f"cpm:booking-times:{offering.id}:{selected.isoformat()}:{page + 1}",
+            )
+        )
+    if paging:
+        rows.append(tuple(paging))
+    rows.append(_back_row())
+    return CustomerInteractionMessage(
+        text=(
+            f"🕒 {selected.strftime('%d.%m.%Y')} · {offering.title}\n\n"
+            "Во сколько начинается свободное время?"
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _booking_durations_message(
+    actor: TenantContext,
+    offering_id: str,
+    selected_date: str,
+    compact_time: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _BOOKING_MANAGEMENT_ROLES:
+        return _permission_message()
+    offering = _booking_offering_exact(actor, offering_id)
+    minimum = _booking_minimum_date(actor)
+    selected = parse_calendar_date(
+        selected_date,
+        minimum=minimum,
+        max_months=MAX_CALENDAR_MONTHS,
+    )
+    if len(compact_time) != 4 or not compact_time.isdigit():
+        raise ValueError("booking time is invalid")
+    start_time = parse_booking_start_time(
+        f"{compact_time[:2]}:{compact_time[2:]}"
+    )
+    rows = [
+        (
+            _button(
+                BOOKING_DURATION_LABELS[duration],
+                f"cpm:booking-duration:{offering.id}:{selected.isoformat()}:{compact_time}:{duration}",
+            ),
+        )
+        for duration in BOOKING_DURATIONS
+    ]
+    rows.append(_back_row())
+    return CustomerInteractionMessage(
+        text=(
+            f"⏱ {selected.strftime('%d.%m.%Y')} {start_time} · {offering.title}\n\n"
+            "Выберите длительность."
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _booking_create_from_selection(
+    actor: TenantContext,
+    offering_id: str,
+    selected_date: str,
+    compact_time: str,
+    duration_text: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _BOOKING_MANAGEMENT_ROLES:
+        return _permission_message()
+    offering = _booking_offering_exact(actor, offering_id)
+    minimum = _booking_minimum_date(actor)
+    selected = parse_calendar_date(
+        selected_date,
+        minimum=minimum,
+        max_months=MAX_CALENDAR_MONTHS,
+    )
+    if len(compact_time) != 4 or not compact_time.isdigit():
+        raise ValueError("booking time is invalid")
+    start_time = parse_booking_start_time(
+        f"{compact_time[:2]}:{compact_time[2:]}"
+    )
+    duration = parse_booking_duration(duration_text)
+    return _booking_open_create_message(
+        actor,
+        str(offering.id),
+        f"{selected.strftime('%d.%m.%Y')} {start_time}",
+        str(duration),
+    )
+
+
 def _booking_open_for_message(
     actor: TenantContext,
     offering_id: str,
@@ -5220,28 +5536,8 @@ def _booking_open_for_message(
     current_platform: ConnectionPlatform,
     input_surface: str = "official",
 ) -> CustomerInteractionMessage:
-    if actor.role not in _BOOKING_MANAGEMENT_ROLES:
-        return _permission_message()
-    offering = next(
-        (item for item in _active_booking_offerings(actor) if str(item.id) == str(offering_id)),
-        None,
-    )
-    if offering is None:
-        return _stale_message()
-    return _begin_owner_input_message(
-        actor,
-        platform=current_platform,
-        surface=input_surface,
-        action="booking_time",
-        context={"offering_id": str(offering.id)},
-        text=(
-            f"🕒 Свободное время · {offering.title}\n\n"
-            "Напишите дату и время: ДД.ММ.ГГГГ ЧЧ:ММ.\n"
-            "Например: 05.09.2026 15:00\n\n"
-            "Если длительность не 60 минут, добавьте её в конце: 05.09.2026 15:00 90."
-        ),
-        rows=((_button(nav.BOOKINGS.label, "cpm:bookings"),), _back_row()),
-    )
+    del current_platform, input_surface
+    return _booking_months_message(actor, offering_id, 0)
 
 
 def _booking_open_failure_message() -> CustomerInteractionMessage:
@@ -6534,6 +6830,55 @@ def _render(
                 parsed.args[0],
                 current_platform=current_platform,
                 input_surface=input_surface,
+            )
+        if parsed.action == "booking-months":
+            if len(parsed.args) != 2 or not parsed.args[1].isdigit():
+                return _stale_message()
+            return _booking_months_message(
+                actor,
+                parsed.args[0],
+                int(parsed.args[1]),
+            )
+        if parsed.action == "booking-dates":
+            if len(parsed.args) != 3 or not parsed.args[2].isdigit():
+                return _stale_message()
+            return _booking_dates_message(
+                actor,
+                parsed.args[0],
+                parsed.args[1],
+                int(parsed.args[2]),
+            )
+        if parsed.action == "booking-date":
+            if len(parsed.args) != 2:
+                return _stale_message()
+            return _booking_times_message(actor, parsed.args[0], parsed.args[1], 0)
+        if parsed.action == "booking-times":
+            if len(parsed.args) != 3 or not parsed.args[2].isdigit():
+                return _stale_message()
+            return _booking_times_message(
+                actor,
+                parsed.args[0],
+                parsed.args[1],
+                int(parsed.args[2]),
+            )
+        if parsed.action == "booking-time":
+            if len(parsed.args) != 3:
+                return _stale_message()
+            return _booking_durations_message(
+                actor,
+                parsed.args[0],
+                parsed.args[1],
+                parsed.args[2],
+            )
+        if parsed.action == "booking-duration":
+            if len(parsed.args) != 4:
+                return _stale_message()
+            return _booking_create_from_selection(
+                actor,
+                parsed.args[0],
+                parsed.args[1],
+                parsed.args[2],
+                parsed.args[3],
             )
         if parsed.action == "booking-open-text":
             if len(parsed.args) != 3:
