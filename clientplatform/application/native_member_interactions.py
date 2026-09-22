@@ -976,6 +976,7 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "direction-edit",
             "direction-edit-text",
             "direction-archive",
+            "direction-archive-ok",
             "direction-restore",
             "program-create",
             "program-create-dirs",
