@@ -375,13 +375,17 @@ def begin_native_event_wizard(
     *,
     platform: ConnectionPlatform,
     surface: str,
+    direction_id: str | None = None,
 ) -> CustomerInteractionMessage:
     actor.assert_can_manage_business()
+    context: dict[str, object] = {"step": "title"}
+    if direction_id:
+        context["direction_id"] = direction_id
     _save(
         actor,
         platform=platform,
         surface=surface,
-        context={"step": "title"},
+        context=context,
     )
     return CustomerInteractionMessage(
         text="🎥 Создаём вебинар\n\nКак называется мероприятие?",
@@ -637,6 +641,7 @@ def _accept_room(
                 timezone_name=context["timezone"],
                 description=_event_description(context),
                 sessions=(session,),
+                direction_id=(context.get("direction_id") or None),
             ),
         )
         event_id = draft.event_id

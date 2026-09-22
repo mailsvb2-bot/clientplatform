@@ -60,7 +60,9 @@ def resolve_owner_input(session: OwnerInputSession, value: object) -> OwnerInput
     if session.action == "program_title":
         if len(compact) > 200:
             raise ValueError("program title is too long")
-        return OwnerInputResolution("program-create-text", (compact,))
+        direction_id = str(session.context.get("direction_id") or "").strip()
+        args = (compact,) if not direction_id else (compact, direction_id)
+        return OwnerInputResolution("program-create-text", args)
 
     if session.action in {"publication_draft", "offering", "program_lesson"}:
         parts = [part.strip() for part in raw_text.split("|", 1)]
@@ -79,10 +81,11 @@ def resolve_owner_input(session: OwnerInputSession, value: object) -> OwnerInput
         if session.action == "offering":
             if len(second) > 1000:
                 raise ValueError("offering description is too long")
-            return OwnerInputResolution(
-                "offering-new-text",
-                (session.context["connector_key"], first, second),
-            )
+            direction_id = str(session.context.get("direction_id") or "").strip()
+            args = (session.context["connector_key"], first, second)
+            if direction_id:
+                args += (direction_id,)
+            return OwnerInputResolution("offering-new-text", args)
         if len(second) > 2048:
             raise ValueError("lesson material is too long")
         return OwnerInputResolution(
@@ -93,6 +96,28 @@ def resolve_owner_input(session: OwnerInputSession, value: object) -> OwnerInput
                 first,
                 second,
             ),
+        )
+
+    if session.action in {"activity_direction_create", "activity_direction_edit"}:
+        parts = [part.strip() for part in raw_text.split("|", 1)]
+        if len(parts) != 2 or not all(parts):
+            raise ValueError("activity direction title and description are required")
+        title, description = parts
+        if len(title) > 160:
+            raise ValueError("activity direction title is too long")
+        if len(description) > 2000:
+            raise ValueError("activity direction description is too long")
+        if session.action == "activity_direction_create":
+            return OwnerInputResolution(
+                "direction-create-text",
+                (title, description),
+            )
+        direction_id = str(session.context.get("direction_id") or "").strip()
+        if not direction_id:
+            raise ValueError("activity direction edit context is invalid")
+        return OwnerInputResolution(
+            "direction-edit-text",
+            (direction_id, title, description),
         )
 
     if session.action == "event_warmup_text":

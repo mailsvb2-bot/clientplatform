@@ -13,6 +13,8 @@ _ALLOWED_PLATFORMS = frozenset({"telegram", "vk", "max"})
 _ALLOWED_ACTIONS = frozenset(
     {
         "activity_description",
+        "activity_direction_create",
+        "activity_direction_edit",
         "booking_time",
         "member_user",
         "online_event",

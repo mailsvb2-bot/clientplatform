@@ -80,6 +80,36 @@ class OwnerInputRepositoryTests(unittest.TestCase):
         )
         self.assertEqual(self.repo.get(user_id=101, platform="vk"), official)
 
+    def test_direction_actions_start_durable_vk_and_max_sessions(self) -> None:
+        direction_id = "11111111-1111-4111-8111-111111111111"
+        created = self.repo.set(
+            user_id=101,
+            platform="vk",
+            business_id=self.first.business.id,
+            action="activity_direction_create",
+            now="2026-09-22T00:00:00+00:00",
+        )
+        edited = self.repo.set(
+            user_id=101,
+            platform="max",
+            business_id=self.first.business.id,
+            action="activity_direction_edit",
+            context={"direction_id": direction_id},
+            now="2026-09-22T00:01:00+00:00",
+        )
+
+        self.assertEqual(created.action, "activity_direction_create")
+        self.assertEqual(
+            self.repo.get(user_id=101, platform="vk"),
+            created,
+        )
+        self.assertEqual(edited.action, "activity_direction_edit")
+        self.assertEqual(edited.context["direction_id"], direction_id)
+        self.assertEqual(
+            self.repo.get(user_id=101, platform="max"),
+            edited,
+        )
+
     def test_session_is_removed_by_membership_cascade(self) -> None:
         owner = self.tenancy.resolve_context(user_id=101, business_id=self.first.business.id)
         self.tenancy.grant_member(actor=owner, user_id=303, role="manager")
