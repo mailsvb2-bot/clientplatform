@@ -125,6 +125,33 @@ class OwnerInputRepositoryTests(unittest.TestCase):
         self.assertEqual(session.context["event_id"], event_id)
         self.assertEqual(self.repo.get(user_id=101, platform="vk"), session)
 
+    def test_program_editor_actions_are_durable_for_vk_and_max(self) -> None:
+        lesson_title_input = self.repo.set(
+            user_id=101,
+            platform="vk",
+            business_id=self.first.business.id,
+            action="program_lesson_title_edit",
+            context={"lesson_id": "lesson-1"},
+        )
+        self.assertEqual(lesson_title_input.action, "program_lesson_title_edit")
+        self.assertEqual(
+            self.repo.get(user_id=101, platform="vk"),
+            lesson_title_input,
+        )
+
+        lesson_content_input = self.repo.set(
+            user_id=101,
+            platform="max",
+            business_id=self.first.business.id,
+            action="program_lesson_content_edit",
+            context={"lesson_id": "lesson-1", "content_kind": "text"},
+        )
+        self.assertEqual(lesson_content_input.action, "program_lesson_content_edit")
+        self.assertEqual(
+            self.repo.get(user_id=101, platform="max"),
+            lesson_content_input,
+        )
+
     def test_session_is_removed_by_membership_cascade(self) -> None:
         owner = self.tenancy.resolve_context(user_id=101, business_id=self.first.business.id)
         self.tenancy.grant_member(actor=owner, user_id=303, role="manager")

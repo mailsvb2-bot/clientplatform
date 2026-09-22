@@ -130,10 +130,16 @@ from clientplatform.application.native_event_wizard import (
 )
 from clientplatform.application.programs import (
     add_program_lesson,
+    archive_program_draft,
+    archive_program_draft_lesson,
     create_program,
     get_program_draft,
+    get_program_draft_lesson,
     list_programs,
+    move_program_draft_lesson,
     publish_program,
+    replace_program_draft_lesson_content,
+    update_program_draft_lesson_title,
 )
 from clientplatform.application.retention import (
     RetentionCandidateUnavailable,
@@ -444,7 +450,15 @@ SIMPLE_OWNER_NATIVE_INTENT_EQUIVALENTS: dict[str, tuple[str, ...]] = {
     "programs": (
         "programs",
         "program-create",
+        "program-draft",
+        "program-lessons",
         "program-lesson",
+        "program-lesson-detail",
+        "program-lesson-title-edit",
+        "program-lesson-content-edit",
+        "program-lesson-move",
+        "program-lesson-archive",
+        "program-draft-archive",
         "program-publish",
         "program-deliver",
     ),
@@ -966,9 +980,22 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "program-create-dirs",
             "program-create-dir",
             "program-create-text",
+            "program-draft",
+            "program-draft-archive",
+            "program-draft-archive-ok",
+            "program-lessons",
             "program-lesson",
             "program-lesson-kind",
             "program-lesson-text",
+            "program-lesson-detail",
+            "program-lesson-title-edit",
+            "program-lesson-title-text",
+            "program-lesson-content-edit",
+            "program-lesson-content-kind",
+            "program-lesson-content-text",
+            "program-lesson-move",
+            "program-lesson-archive",
+            "program-lesson-archive-ok",
             "program-publish",
             "program-deliver",
             "program-deliver-to",
@@ -1103,6 +1130,8 @@ def _owner_input_invalid_message(action: str) -> CustomerInteractionMessage:
         "activity_direction_edit": "Напишите: Новое название | Новое описание направления.",
         "program_title": "Напишите только название материала или программы.",
         "program_lesson": "Напишите: Название | Материал.",
+        "program_lesson_title_edit": "Напишите новое название урока.",
+        "program_lesson_content_edit": "Пришлите новый материал урока.",
         "publication_draft": "Напишите: Заголовок | Текст публикации.",
         "booking_time": "Напишите дату и время: ДД.ММ.ГГГГ ЧЧ:ММ. При желании добавьте длительность в минутах.",
         "online_event": "Ответ не подходит текущему шагу вебинара. Используйте показанные кнопки или формат из подсказки.",
@@ -1532,7 +1561,30 @@ def _native_parent_command(parsed: ParsedMemberInteraction) -> str | None:
         return "cpm:formats:0"
     if action == "activity-edit-text":
         return "cpm:manage"
-    if action in {"program-create-text", "program-publish", "program-deliver", "program-deliver-to", "program-deliver-text"}:
+    if action in {
+        "program-create-text",
+        "program-publish",
+        "program-deliver",
+        "program-deliver-to",
+        "program-deliver-text",
+        "program-draft",
+        "program-draft-archive",
+        "program-draft-archive-ok",
+    }:
+        return "cpm:programs:0"
+    if action == "program-lessons" and args:
+        return f"cpm:program-draft:{args[0]}"
+    if action in {
+        "program-lesson-detail",
+        "program-lesson-title-edit",
+        "program-lesson-title-text",
+        "program-lesson-content-edit",
+        "program-lesson-content-kind",
+        "program-lesson-content-text",
+        "program-lesson-move",
+        "program-lesson-archive",
+        "program-lesson-archive-ok",
+    }:
         return "cpm:programs:0"
     if action == "program-lesson" and args:
         return "cpm:programs:0"
@@ -5643,10 +5695,7 @@ def _programs_message(actor: TenantContext, page: int = 0) -> CustomerInteractio
     for item in current:
         if item.status.value == "draft" and actor.role in _PROGRAM_MANAGEMENT_ROLES:
             rows.append(
-                (
-                    _button("➕ Добавить урок", f"cpm:program-lesson:{item.id}"),
-                    _button("✅ Сделать доступной", f"cpm:program-publish:{item.id}"),
-                )
+                (_button("✏️ Открыть черновик", f"cpm:program-draft:{item.id}"),)
             )
         elif item.status.value == "active" and actor.role in _SUPPORT_ROLES:
             rows.append((_button("📤 Выдать клиенту", f"cpm:program-deliver:{item.id}"),))
@@ -5673,6 +5722,389 @@ def _program_reference(programs: list[Any], reference: str) -> str:
     if resolved is None:
         raise ValueError("program reference is required")
     return resolved
+
+
+_PROGRAM_LESSON_PAGE_SIZE = 5
+
+
+def _program_kind_label(value: object) -> str:
+    raw = str(getattr(value, "value", value) or "").strip().casefold()
+    return {
+        "text": "текст",
+        "link": "ссылка",
+        "audio": "аудио",
+        "video": "видео",
+        "document": "документ",
+        "image": "изображение",
+        "task": "задание",
+        "mixed": "смешанный материал",
+    }.get(raw, raw or "материал")
+
+
+def _program_draft_message(
+    actor: TenantContext,
+    program_id: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
+        return _permission_message()
+    record = get_program_draft(actor=actor, program_id=program_id)
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    if record.lessons:
+        rows.append(
+            (_button(f"📚 Уроки · {len(record.lessons)}", f"cpm:program-lessons:{program_id}:0"),)
+        )
+    rows.extend(
+        [
+            (_button("➕ Добавить урок", f"cpm:program-lesson:{program_id}"),),
+            (_button("✅ Опубликовать", f"cpm:program-publish:{program_id}"),),
+            (_button("🗑 Удалить черновик", f"cpm:program-draft-archive:{program_id}"),),
+            (_button("📚 К программам", "cpm:programs:0"),),
+            _back_row(),
+        ]
+    )
+    preview = chr(10).join(
+        f"• {lesson.position}. {lesson.title} — {_program_kind_label(lesson.content_kind)}"
+        for lesson in record.lessons[:5]
+    )
+    if not preview:
+        preview = "Уроков пока нет."
+    elif len(record.lessons) > 5:
+        preview += chr(10) + f"…и ещё {len(record.lessons) - 5}."
+    return CustomerInteractionMessage(
+        text=f"""📝 Черновик «{record.program.title}»
+
+Уроков: {len(record.lessons)}.
+{preview}
+
+Черновик сохранён. Его можно продолжить позже из раздела «Программы».""",
+        rows=tuple(rows),
+    )
+
+
+def _program_draft_archive_confirm(
+    actor: TenantContext,
+    program_id: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
+        return _permission_message()
+    record = get_program_draft(actor=actor, program_id=program_id)
+    return CustomerInteractionMessage(
+        text=f"""Удалить черновик «{record.program.title}»?
+
+Опубликованные программы эта операция не затрагивает.""",
+        rows=(
+            (_button("🗑 Да, удалить черновик", f"cpm:program-draft-archive-ok:{program_id}"),),
+            (_button("Нет, вернуться", f"cpm:program-draft:{program_id}"),),
+            _back_row(),
+        ),
+    )
+
+
+def _program_draft_archive_result(
+    actor: TenantContext,
+    program_id: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
+        return _permission_message()
+    program = archive_program_draft(actor=actor, program_id=program_id)
+    return CustomerInteractionMessage(
+        text=f"✅ Черновик «{program.title}» удалён.",
+        rows=((_button("📚 Программы", "cpm:programs:0"),), _back_row()),
+    )
+
+
+def _program_lessons_message(
+    actor: TenantContext,
+    program_id: str,
+    page: int = 0,
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
+        return _permission_message()
+    record = get_program_draft(actor=actor, program_id=program_id)
+    page = max(0, int(page))
+    page_count = max(
+        1,
+        (len(record.lessons) + _PROGRAM_LESSON_PAGE_SIZE - 1)
+        // _PROGRAM_LESSON_PAGE_SIZE,
+    )
+    if page >= page_count:
+        return _stale_message()
+    start = page * _PROGRAM_LESSON_PAGE_SIZE
+    visible = record.lessons[start : start + _PROGRAM_LESSON_PAGE_SIZE]
+    rows: list[tuple[CustomerInteractionButton, ...]] = [
+        (
+            _button(
+                f"{lesson.position}. {lesson.title[:34]}",
+                f"cpm:program-lesson-detail:{lesson.id}",
+            ),
+        )
+        for lesson in visible
+    ]
+    navigation: list[CustomerInteractionButton] = []
+    if page:
+        navigation.append(
+            _button("⬅️ Назад", f"cpm:program-lessons:{program_id}:{page - 1}")
+        )
+    if page + 1 < page_count:
+        navigation.append(
+            _button("Вперёд ➡️", f"cpm:program-lessons:{program_id}:{page + 1}")
+        )
+    if navigation:
+        rows.append(tuple(navigation))
+    rows.append((_button("➕ Добавить урок", f"cpm:program-lesson:{program_id}"),))
+    rows.append((_button("📝 К черновику", f"cpm:program-draft:{program_id}"),))
+    rows.append(_back_row())
+    suffix = chr(10) + chr(10) + "Уроков пока нет." if not record.lessons else ""
+    return CustomerInteractionMessage(
+        text=(
+            f"📚 Уроки черновика «{record.program.title}»"
+            + chr(10) + chr(10)
+            + f"Всего: {len(record.lessons)}. Страница {page + 1}/{page_count}."
+            + suffix
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _program_lesson_detail_message(
+    actor: TenantContext,
+    lesson_id: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
+        return _permission_message()
+    record, lesson = get_program_draft_lesson(actor=actor, lesson_id=lesson_id)
+    movement: list[CustomerInteractionButton] = []
+    if lesson.position > 1:
+        movement.append(
+            _button("⬆️ Выше", f"cpm:program-lesson-move:{lesson.id}:up")
+        )
+    if lesson.position < len(record.lessons):
+        movement.append(
+            _button("⬇️ Ниже", f"cpm:program-lesson-move:{lesson.id}:down")
+        )
+    rows: list[tuple[CustomerInteractionButton, ...]] = [
+        (_button("✏️ Переименовать", f"cpm:program-lesson-title-edit:{lesson.id}"),),
+        (_button("🔄 Заменить материал", f"cpm:program-lesson-content-edit:{lesson.id}"),),
+    ]
+    if movement:
+        rows.append(tuple(movement))
+    rows.extend(
+        [
+            (_button("🗑 Удалить урок", f"cpm:program-lesson-archive:{lesson.id}"),),
+            (
+                _button(
+                    "📚 К списку уроков",
+                    f"cpm:program-lessons:{record.program.id}:{max(0, (lesson.position - 1) // _PROGRAM_LESSON_PAGE_SIZE)}",
+                ),
+            ),
+            (_button("📝 К черновику", f"cpm:program-draft:{record.program.id}"),),
+            _back_row(),
+        ]
+    )
+    content_text = str(lesson.content_ref or "")
+    preview = ""
+    if str(getattr(lesson.content_kind, "value", lesson.content_kind)) in {"text", "task", "link"}:
+        visible = content_text[:500]
+        if visible:
+            preview = chr(10) + chr(10) + "Материал:" + chr(10) + visible
+            if len(content_text) > len(visible):
+                preview += "…"
+    return CustomerInteractionMessage(
+        text=(
+            f"📝 Черновик «{record.program.title}»"
+            + chr(10) + chr(10)
+            + f"Урок {lesson.position} из {len(record.lessons)}"
+            + chr(10)
+            + f"Название: {lesson.title}"
+            + chr(10)
+            + f"Тип материала: {_program_kind_label(lesson.content_kind)}"
+            + preview
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _program_lesson_title_edit_message(
+    actor: TenantContext,
+    lesson_id: str,
+    *,
+    current_platform: ConnectionPlatform,
+    input_surface: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
+        return _permission_message()
+    _record, lesson = get_program_draft_lesson(actor=actor, lesson_id=lesson_id)
+    return _begin_owner_input_message(
+        actor,
+        platform=current_platform,
+        surface=input_surface,
+        action="program_lesson_title_edit",
+        context={"lesson_id": lesson.id},
+        text=f"""✏️ Переименовать урок
+
+Сейчас: «{lesson.title}».
+
+Напишите новое название урока.""",
+        rows=((_button("↩️ К уроку", f"cpm:program-lesson-detail:{lesson.id}"),), _back_row()),
+    )
+
+
+def _program_lesson_title_result(
+    actor: TenantContext,
+    lesson_id: str,
+    title: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
+        return _permission_message()
+    _record, lesson = update_program_draft_lesson_title(
+        actor=actor,
+        lesson_id=lesson_id,
+        title=title,
+    )
+    return CustomerInteractionMessage(
+        text=f"✅ Название урока сохранено: «{lesson.title}».",
+        rows=((_button("📝 Открыть урок", f"cpm:program-lesson-detail:{lesson.id}"),), _back_row()),
+    )
+
+
+def _program_lesson_content_kinds_message(
+    actor: TenantContext,
+    lesson_id: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
+        return _permission_message()
+    _record, lesson = get_program_draft_lesson(actor=actor, lesson_id=lesson_id)
+    kinds = (
+        ("📝 Текст", "text"),
+        ("🔗 Ссылка", "link"),
+        ("🎧 Аудио", "audio"),
+        ("🎬 Видео", "video"),
+        ("📎 Документ", "document"),
+        ("🖼 Изображение", "image"),
+        ("✅ Задание", "task"),
+    )
+    return CustomerInteractionMessage(
+        text=f"""🔄 Заменить материал · {lesson.title}
+
+Какой тип материала будет использоваться?""",
+        rows=tuple(
+            [(_button(label, f"cpm:program-lesson-content-kind:{lesson.id}:{kind}"),) for label, kind in kinds]
+            + [(_button("↩️ К уроку", f"cpm:program-lesson-detail:{lesson.id}"),), _back_row()]
+        ),
+    )
+
+
+def _program_lesson_content_edit_message(
+    actor: TenantContext,
+    lesson_id: str,
+    content_kind: str,
+    *,
+    current_platform: ConnectionPlatform,
+    input_surface: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
+        return _permission_message()
+    _record, lesson = get_program_draft_lesson(actor=actor, lesson_id=lesson_id)
+    if content_kind not in {"text", "link", "audio", "video", "document", "image", "task"}:
+        return _stale_message()
+    return _begin_owner_input_message(
+        actor,
+        platform=current_platform,
+        surface=input_surface,
+        action="program_lesson_content_edit",
+        context={"lesson_id": lesson.id, "content_kind": content_kind},
+        text=f"""🔄 Новый материал · {lesson.title}
+
+Пришлите новый материал одним сообщением.
+Для текста или задания — сам текст; для ссылки — https-ссылку. Для аудио, видео, документа или изображения пока можно указать сохранённую ссылку или идентификатор материала.""",
+        rows=((_button("↩️ К уроку", f"cpm:program-lesson-detail:{lesson.id}"),), _back_row()),
+    )
+
+
+def _program_lesson_content_result(
+    actor: TenantContext,
+    lesson_id: str,
+    content_kind: str,
+    content_ref: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
+        return _permission_message()
+    _record, lesson = replace_program_draft_lesson_content(
+        actor=actor,
+        lesson_id=lesson_id,
+        content_kind=content_kind,
+        content_ref=content_ref,
+    )
+    return CustomerInteractionMessage(
+        text=f"✅ Материал урока «{lesson.title}» заменён.",
+        rows=((_button("📝 Открыть урок", f"cpm:program-lesson-detail:{lesson.id}"),), _back_row()),
+    )
+
+
+def _program_lesson_move_result(
+    actor: TenantContext,
+    lesson_id: str,
+    direction: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
+        return _permission_message()
+    if direction not in {"up", "down"}:
+        return _stale_message()
+    record = move_program_draft_lesson(
+        actor=actor,
+        lesson_id=lesson_id,
+        direction=direction,
+    )
+    lesson = next((item for item in record.lessons if item.id == lesson_id), None)
+    if lesson is None:
+        return _stale_message()
+    return CustomerInteractionMessage(
+        text=f"✅ Порядок обновлён. «{lesson.title}» теперь урок {lesson.position}.",
+        rows=((_button("📝 Открыть урок", f"cpm:program-lesson-detail:{lesson.id}"),), _back_row()),
+    )
+
+
+def _program_lesson_archive_confirm(
+    actor: TenantContext,
+    lesson_id: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
+        return _permission_message()
+    record, lesson = get_program_draft_lesson(actor=actor, lesson_id=lesson_id)
+    return CustomerInteractionMessage(
+        text=(
+            f"Удалить урок {lesson.position} «{lesson.title}»?"
+            + chr(10) + chr(10)
+            + "Остальные уроки будут автоматически перенумерованы."
+        ),
+        rows=(
+            (_button("🗑 Да, удалить урок", f"cpm:program-lesson-archive-ok:{lesson.id}"),),
+            (_button("Нет, вернуться", f"cpm:program-lesson-detail:{lesson.id}"),),
+            (_button("📝 К черновику", f"cpm:program-draft:{record.program.id}"),),
+            _back_row(),
+        ),
+    )
+
+
+def _program_lesson_archive_result(
+    actor: TenantContext,
+    lesson_id: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
+        return _permission_message()
+    before, lesson = get_program_draft_lesson(actor=actor, lesson_id=lesson_id)
+    page = max(0, (lesson.position - 1) // _PROGRAM_LESSON_PAGE_SIZE)
+    record = archive_program_draft_lesson(actor=actor, lesson_id=lesson_id)
+    if page and page * _PROGRAM_LESSON_PAGE_SIZE >= len(record.lessons):
+        page -= 1
+    return CustomerInteractionMessage(
+        text=f"✅ Урок «{lesson.title}» удалён.",
+        rows=(
+            (_button("📚 К урокам", f"cpm:program-lessons:{before.program.id}:{page}"),),
+            (_button("📝 К черновику", f"cpm:program-draft:{before.program.id}"),),
+            _back_row(),
+        ),
+    )
 
 
 def _program_direction_message(
@@ -6895,6 +7327,77 @@ def _render(
             return _bookings_message(actor)
         if parsed.action == "programs":
             return _programs_message(actor, _page_number(parsed.args))
+        if parsed.action == "program-draft":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _program_draft_message(actor, parsed.args[0])
+        if parsed.action == "program-draft-archive":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _program_draft_archive_confirm(actor, parsed.args[0])
+        if parsed.action == "program-draft-archive-ok":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _program_draft_archive_result(actor, parsed.args[0])
+        if parsed.action == "program-lessons":
+            if len(parsed.args) not in {1, 2}:
+                return _stale_message()
+            page = int(parsed.args[1]) if len(parsed.args) == 2 and parsed.args[1].isdigit() else 0
+            if len(parsed.args) == 2 and not parsed.args[1].isdigit():
+                return _stale_message()
+            return _program_lessons_message(actor, parsed.args[0], page)
+        if parsed.action == "program-lesson-detail":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _program_lesson_detail_message(actor, parsed.args[0])
+        if parsed.action == "program-lesson-title-edit":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _program_lesson_title_edit_message(
+                actor,
+                parsed.args[0],
+                current_platform=current_platform,
+                input_surface=input_surface,
+            )
+        if parsed.action == "program-lesson-title-text":
+            if len(parsed.args) != 2:
+                return _stale_message()
+            return _program_lesson_title_result(actor, parsed.args[0], parsed.args[1])
+        if parsed.action == "program-lesson-content-edit":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _program_lesson_content_kinds_message(actor, parsed.args[0])
+        if parsed.action == "program-lesson-content-kind":
+            if len(parsed.args) != 2:
+                return _stale_message()
+            return _program_lesson_content_edit_message(
+                actor,
+                parsed.args[0],
+                parsed.args[1],
+                current_platform=current_platform,
+                input_surface=input_surface,
+            )
+        if parsed.action == "program-lesson-content-text":
+            if len(parsed.args) != 3:
+                return _stale_message()
+            return _program_lesson_content_result(
+                actor,
+                parsed.args[0],
+                parsed.args[1],
+                parsed.args[2],
+            )
+        if parsed.action == "program-lesson-move":
+            if len(parsed.args) != 2:
+                return _stale_message()
+            return _program_lesson_move_result(actor, parsed.args[0], parsed.args[1])
+        if parsed.action == "program-lesson-archive":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _program_lesson_archive_confirm(actor, parsed.args[0])
+        if parsed.action == "program-lesson-archive-ok":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _program_lesson_archive_result(actor, parsed.args[0])
         if parsed.action == "program-create":
             return _program_create_help(
                 actor, current_platform=current_platform, input_surface=input_surface

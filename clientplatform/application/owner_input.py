@@ -64,6 +64,25 @@ def resolve_owner_input(session: OwnerInputSession, value: object) -> OwnerInput
         args = (compact,) if not direction_id else (compact, direction_id)
         return OwnerInputResolution("program-create-text", args)
 
+    if session.action == "program_lesson_title_edit":
+        lesson_id = str(session.context.get("lesson_id") or "").strip()
+        if not lesson_id or not compact or len(compact) > 200:
+            raise ValueError("lesson title edit is invalid")
+        return OwnerInputResolution(
+            "program-lesson-title-text",
+            (lesson_id, compact),
+        )
+
+    if session.action == "program_lesson_content_edit":
+        lesson_id = str(session.context.get("lesson_id") or "").strip()
+        content_kind = str(session.context.get("content_kind") or "").strip()
+        if not lesson_id or not content_kind or not raw_text or len(raw_text) > 2048:
+            raise ValueError("lesson content edit is invalid")
+        return OwnerInputResolution(
+            "program-lesson-content-text",
+            (lesson_id, content_kind, raw_text),
+        )
+
     if session.action in {"publication_draft", "offering", "program_lesson"}:
         parts = [part.strip() for part in raw_text.split("|", 1)]
         if len(parts) != 2 or not all(parts):
