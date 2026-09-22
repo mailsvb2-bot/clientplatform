@@ -47,6 +47,22 @@ def test_business_selector_exposes_create_organization() -> None:
     assert "создать ещё одну организацию" in rendered.text.casefold()
 
 
+def test_business_selector_dense_middle_page_stays_within_button_contract() -> None:
+    accesses = [
+        _access(str(uuid4()), f"Организация {index}")
+        for index in range(15)
+    ]
+
+    rendered = _interaction(entry._business_selector_reply(accesses, page=1))
+
+    buttons = [button for row in rendered.rows for button in row]
+    assert len(buttons) == 10
+    commands = {button.command for button in buttons}
+    assert "cpw:list:0" in commands
+    assert "cpw:list:2" in commands
+    assert "business" in commands
+
+
 @pytest.mark.parametrize("platform", ["vk", "max"])
 def test_official_owner_settings_expose_create_organization(platform: str) -> None:
     business_id = str(uuid4())
