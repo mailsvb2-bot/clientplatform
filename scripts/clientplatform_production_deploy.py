@@ -1328,14 +1328,7 @@ def deploy(
                 _run([*compose, "up", "-d", "--force-recreate", "visual-gateway"])
                 visual_gateway_changed = True
                 _wait_for_visual_gateway(timeout_seconds)
-                app_recreate = [
-                    *compose,
-                    "up",
-                    "-d",
-                    "--force-recreate",
-                    "app",
-                    "caddy",
-                ]
+                app_recreate = [*compose, "up", "-d", "--force-recreate", "app", "caddy"]
             elif runtime_rollout_mode == "app_only":
                 _wait_for_visual_gateway(timeout_seconds)
                 _run([*compose, "build", "app"])
