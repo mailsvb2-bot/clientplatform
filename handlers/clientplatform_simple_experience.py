@@ -16,7 +16,6 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
-    WebAppInfo,
 )
 
 from clientplatform.application.capability_parity import (
@@ -34,7 +33,6 @@ from clientplatform.presentation.owner_quick_menu import (
     build_owner_quick_actions,
     quick_menu_intro,
 )
-from clientplatform.runtime.cockpit_links import cockpit_web_app_url
 
 control = importlib.import_module(".clientplatform_control", __package__)
 builder = importlib.import_module(".clientplatform_program_builder", __package__)
@@ -109,7 +107,7 @@ def _simple_keyboard(
                 [(nav.PROGRAMS.label, f"cps:programs:{token}")],
                 [(nav.BOOKINGS.label, f"cps:booking:{token}")],
                 [(nav.TODAY.label, f"cp:results:{token}")],
-                [(nav.ALL.label, f"cps:advanced:{token}")],
+                [(nav.ALL.label, f"cpo:more:{token}")],
             ]
         )
     actions = build_owner_quick_actions(
@@ -125,21 +123,10 @@ def _simple_keyboard(
         "acquire": f"cpo:start:{token}",
         "sales": f"cps:s:{token}",
         "results": f"cp:results:{token}",
-        "all": f"cps:advanced:{token}",
+        "all": f"cpo:more:{token}",
     }
     rows: list[list[InlineKeyboardButton]] = []
-    cockpit_url = cockpit_web_app_url()
     for action in actions:
-        if action.key == "all" and cockpit_url is not None:
-            rows.append(
-                [
-                    InlineKeyboardButton(
-                        text=action.label,
-                        web_app=WebAppInfo(url=cockpit_url),
-                    )
-                ]
-            )
-            continue
         rows.append(
             [
                 InlineKeyboardButton(

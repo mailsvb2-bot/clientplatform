@@ -57,6 +57,9 @@ def test_webinar_hub_remains_visible_if_event_access_outlives_promotion_manageme
 
 
 def test_event_hub_is_repeatable_navigation_but_creation_remains_a_mutation() -> None:
+    assert "cpev:" in safety._CLIENTPLATFORM_CALLBACK_PREFIXES
+    assert "cpev:home:" in safety._STATE_ESCAPE_PREFIXES
+    assert "cpev:home:" in safety._REPEATABLE_NAVIGATION_PREFIXES
     surface_contract.install_button_surface_contract(safety)
     assert safety._is_clientplatform_callback(f"cpev:home:{_TOKEN}")
     assert safety._is_repeatable_navigation(f"cpev:home:{_TOKEN}")

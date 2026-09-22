@@ -12,7 +12,7 @@ import handlers.clientplatform_simple_experience as simple
 
 
 class TelegramPersonalizedMessengerHomeTests(unittest.TestCase):
-    def test_telegram_uses_business_aware_quick_actions_and_mini_app_escape(self) -> None:
+    def test_telegram_uses_business_aware_quick_actions_and_native_all_menu(self) -> None:
         business_id = str(uuid4())
         capabilities = [
             SimpleNamespace(
@@ -24,19 +24,14 @@ class TelegramPersonalizedMessengerHomeTests(unittest.TestCase):
                 status=CapabilityStatus.ACTIVE,
             ),
         ]
-        with patch.object(
-            simple,
-            "cockpit_web_app_url",
-            return_value="https://app.clientplatform.test/clientplatform/cockpit",
-        ):
-            markup = simple._simple_keyboard(
-                business_id,
-                activity_description=(
-                    "Я психолог. Провожу консультации, вебинары и обучающие программы."
-                ),
-                capabilities=capabilities,
-                role=PlatformRole.OWNER,
-            )
+        markup = simple._simple_keyboard(
+            business_id,
+            activity_description=(
+                "Я психолог. Провожу консультации, вебинары и обучающие программы."
+            ),
+            capabilities=capabilities,
+            role=PlatformRole.OWNER,
+        )
 
         labels = [button.text for row in markup.inline_keyboard for button in row]
         self.assertEqual(
@@ -52,11 +47,8 @@ class TelegramPersonalizedMessengerHomeTests(unittest.TestCase):
             ],
         )
         last = markup.inline_keyboard[-1][0]
-        self.assertIsNone(last.callback_data)
-        self.assertEqual(
-            last.web_app.url,
-            "https://app.clientplatform.test/clientplatform/cockpit",
-        )
+        self.assertTrue(str(last.callback_data).startswith("cpo:more:"))
+        self.assertIsNone(last.web_app)
 
 
 if __name__ == "__main__":
