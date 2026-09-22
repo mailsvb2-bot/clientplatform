@@ -392,6 +392,7 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
         previous = "a" * 40
         target = "b" * 40
         allowed = (
+            ".github/workflows/clientplatform-proof.yml",
             "docs/CLIENTPLATFORM_UNICORN_ROADMAP.md",
             "scripts/clientplatform_production_deploy.py",
             "scripts/critical_static_gate.py",
@@ -419,7 +420,7 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
         self.assertEqual(result["previous_successful_deploy_sha"], previous)
         self.assertEqual(result["changed_files"], list(allowed))
 
-    def test_change_contract_fails_closed_for_runtime_path_or_unproven_ancestry(self) -> None:
+    def test_change_contract_scopes_app_only_and_fails_closed_for_other_runtime_paths(self) -> None:
         previous = "a" * 40
         target = "b" * 40
         with (
@@ -435,12 +436,38 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
                 return_value=("clientplatform/application/control.py",),
             ),
         ):
-            runtime = production_deploy._deployment_change_contract(
+            app_only = production_deploy._deployment_change_contract(
                 target,
                 baseline_ready=True,
             )
-        self.assertEqual(runtime["mode"], "full_runtime")
-        self.assertEqual(runtime["reason"], "runtime_paths_changed")
+        self.assertEqual(app_only["mode"], "app_only")
+        self.assertEqual(app_only["reason"], "app_only_diff_proven")
+
+        for runtime_path in ("visual_gateway/server.py", "requirements.txt"):
+            with (
+                self.subTest(runtime_path=runtime_path),
+                mock.patch.object(
+                    production_deploy,
+                    "_latest_successful_deploy_sha",
+                    return_value=previous,
+                ),
+                mock.patch.object(
+                    production_deploy,
+                    "_git_is_ancestor",
+                    return_value=True,
+                ),
+                mock.patch.object(
+                    production_deploy,
+                    "_changed_files_between",
+                    return_value=(runtime_path,),
+                ),
+            ):
+                runtime = production_deploy._deployment_change_contract(
+                    target,
+                    baseline_ready=True,
+                )
+            self.assertEqual(runtime["mode"], "full_runtime")
+            self.assertEqual(runtime["reason"], "runtime_paths_changed")
 
         with (
             mock.patch.object(
