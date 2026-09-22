@@ -93,6 +93,7 @@ jobs:
 
           validation="$(python3 - "$env_file" <<'PY'
           from pathlib import Path
+          import re
           import sys
           from urllib.parse import urlsplit
 
@@ -115,6 +116,12 @@ jobs:
               )
               if not values.get(name, '').strip()
           ]
+          secret = values.get('MAX_WEBHOOK_SECRET', '').strip()
+          if secret and not re.fullmatch(r'[A-Za-z0-9_-]{5,256}', secret):
+              missing.append('MAX_WEBHOOK_SECRET_FORMAT')
+          api_base = values.get('MAX_API_BASE_URL', 'https://platform-api2.max.ru').strip() or 'https://platform-api2.max.ru'
+          if api_base.rstrip('/') != 'https://platform-api2.max.ru':
+              missing.append('MAX_API_BASE_URL_OFFICIAL')
           link = values.get('MAX_BOT_LINK_BASE', '').strip()
           if '{bot}' in link and not values.get('MAX_BOT_NAME', '').strip():
               missing.append('MAX_BOT_NAME')
@@ -136,6 +143,23 @@ jobs:
             exit "$status"
           }
           echo "CLIENTPLATFORM_MAX_REPAIR_CONFIG_OK"
+
+          cd "$repo/deploy/clientplatform"
+          compose=(docker compose)
+          if [ -f .env ]; then compose+=(--env-file .env); fi
+          compose+=(--env-file clientplatform.env -f compose.production.yml)
+          "${compose[@]}" config --quiet
+          set +e
+          audit_before="$("${compose[@]}" run --rm --no-deps --entrypoint python app scripts/max_provider_audit.py 2>&1)"
+          audit_status=$?
+          set -e
+          printf '%s\n' "$audit_before"
+          if [ "$audit_status" -ne 0 ] && [ "$audit_status" -ne 7 ]; then
+            echo "CLIENTPLATFORM_MAX_REPAIR_FAILED:provider_precheck" >&2
+            exit 21
+          fi
+          echo "CLIENTPLATFORM_MAX_PROVIDER_AUTH_OK"
+          cd "$repo"
 
           backup="$env_file.before-max-entry-repair-$(date -u +%Y%m%dT%H%M%SZ)"
           cp -p "$env_file" "$backup"
