@@ -251,7 +251,12 @@ def _keyboard(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
 
 def _back_keyboard(ctx: AdminContext, *extra: tuple[str, str]) -> InlineKeyboardMarkup:
     rows = [[item] for item in extra]
-    rows.append([("⬅️ Назад", _callback(ctx, "back"))])
+    rows.append(
+        [
+            (nav.BACK.label, _callback(ctx, "back")),
+            (nav.HOME.label, _callback(ctx, "leave")),
+        ]
+    )
     return _keyboard(rows)
 
 
