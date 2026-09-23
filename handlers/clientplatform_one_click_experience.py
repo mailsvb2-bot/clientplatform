@@ -141,6 +141,17 @@ def _indexed_choice(data: dict, key: str, callback_data: str | None):
     return values[index]
 
 
+def _notice_navigation_rows(
+    business_token: str,
+    *,
+    back_callback: str | None = None,
+) -> list[list[tuple[str, str]]]:
+    return [
+        [(nav.BACK.label, back_callback or f"cpo:ads:{business_token}")],
+        [("🏠 В главное меню", f"cpj:home:{business_token}")],
+    ]
+
+
 def _acquisition_link(source_token: str) -> str:
     """Build the canonical public destination independently from owner transport."""
 
@@ -173,9 +184,7 @@ async def _fallback_failure(
     await state.clear()
     await control._callback_message(callback).answer(
         f"{reason}\n\nНе удалось собрать запасной вариант автоматически.",
-        reply_markup=control._keyboard(
-            [[("🏠 В кабинет", f"cpj:home:{business_token}")]]
-        ),
+        reply_markup=control._keyboard(_notice_navigation_rows(business_token)),
     )
 
 
@@ -193,7 +202,10 @@ async def _fallback(
         await control._callback_message(callback).answer(
             "Свободное время уже изменилось. Проверю всё заново по одной кнопке.",
             reply_markup=control._keyboard(
-                [[("🔄 Проверить снова", goal_contract.ACQUIRE_CLIENTS.callback(business_token))]]
+                [
+                    [("🔄 Проверить снова", goal_contract.ACQUIRE_CLIENTS.callback(business_token))],
+                    *_notice_navigation_rows(business_token),
+                ]
             ),
         )
         return
@@ -243,7 +255,13 @@ async def _fallback(
                 ],
                 [
                     InlineKeyboardButton(
-                        text="🏠 В кабинет",
+                        text=nav.BACK.label,
+                        callback_data=f"cpo:ads:{business_token}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🏠 В главное меню",
                         callback_data=f"cpj:home:{business_token}",
                     )
                 ],
@@ -265,7 +283,7 @@ async def _draft_failure(
         reply_markup=control._keyboard(
             [
                 [("🔄 Попробовать снова", goal_contract.ACQUIRE_CLIENTS.callback(business_token))],
-                [("🏠 В кабинет", f"cpj:home:{business_token}")],
+                *_notice_navigation_rows(business_token),
             ]
         ),
     )
@@ -344,7 +362,10 @@ async def _prepare_draft(
                 ],
                 [(ad._CONFIRM_DRAFT_LABEL, "cpa:confirm")],
                 [("✏️ Изменить вручную", f"cpa:promote:{data['business_token']}")],
-                [("🏠 В кабинет", f"cpj:home:{data['business_token']}")],
+                *_notice_navigation_rows(
+                    str(data["business_token"]),
+                    back_callback=f"cpa:home:{data['business_token']}",
+                ),
             ]
         ),
     )
@@ -379,7 +400,10 @@ async def _choose_connection(
                 [("Нижний Новгород", "cpo:region:47"), ("Москва", "cpo:region:213")],
                 [("Санкт-Петербург", "cpo:region:2")],
                 [("Другой регион", "cpo:region:other")],
-                [("🏠 Отмена", f"cpj:home:{data['business_token']}")],
+                *_notice_navigation_rows(
+                    str(data["business_token"]),
+                    back_callback=f"cpa:home:{data['business_token']}",
+                ),
             ]
         ),
     )
@@ -710,7 +734,13 @@ async def choose_one_click_region(callback: CallbackQuery, state: FSMContext) ->
         await callback.answer()
         await control._callback_message(callback).answer(
             "Напишите город: Москва, Нижний Новгород, Санкт-Петербург. "
-            "Для другого города можно указать ID региона Яндекс Директа."
+            "Для другого города можно указать ID региона Яндекс Директа.",
+            reply_markup=control._keyboard(
+                _notice_navigation_rows(
+                    str(data["business_token"]),
+                    back_callback=f"cpa:home:{data['business_token']}",
+                )
+            ),
         )
         return
     regions = _REGIONS.get(raw)
@@ -734,7 +764,15 @@ async def receive_one_click_region(message: Message, state: FSMContext) -> None:
             if not regions or any(item <= 0 for item in regions):
                 raise ValueError
         except ValueError:
-            await message.answer("Напишите город или ID региона Яндекс Директа.")
+            await message.answer(
+                "Напишите город или ID региона Яндекс Директа.",
+                reply_markup=control._keyboard(
+                    _notice_navigation_rows(
+                        str(data["business_token"]),
+                        back_callback=f"cpa:home:{data['business_token']}",
+                    )
+                ),
+            )
             return
     await _prepare_draft(message, state, data=data, region_ids=regions)
 
