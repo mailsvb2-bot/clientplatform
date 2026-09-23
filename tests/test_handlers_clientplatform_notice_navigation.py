@@ -19,9 +19,10 @@ def _flatten(markup) -> dict[str, str | None]:
     }
 
 
-def test_owner_home_label_is_explicit_main_menu() -> None:
+def test_notice_main_menu_label_is_explicit_without_renaming_existing_home() -> None:
     assert nav.BACK.label == "⬅️ Назад"
-    assert nav.HOME.label == "🏠 В главное меню"
+    assert nav.HOME.label == "🏠 Главная"
+    assert nav.MAIN_MENU_LABEL == "🏠 В главное меню"
 
 
 def test_ad_notice_navigation_has_back_and_main_menu() -> None:
@@ -31,7 +32,7 @@ def test_ad_notice_navigation_has_back_and_main_menu() -> None:
     )
     assert rows == [
         [(nav.BACK.label, "cpa:home:business-token")],
-        [(nav.HOME.label, "cpj:home:business-token")],
+        [(nav.MAIN_MENU_LABEL, "cpj:home:business-token")],
     ]
 
 
@@ -42,7 +43,7 @@ def test_creative_studio_menu_and_result_keep_two_escape_routes() -> None:
     ):
         buttons = _flatten(markup)
         assert buttons[nav.BACK.label] == "cpo:content:business-token"
-        assert buttons[nav.HOME.label] == "cpj:home:business-token"
+        assert buttons[nav.MAIN_MENU_LABEL] == "cpj:home:business-token"
 
 
 def test_one_click_notice_navigation_has_parent_and_home() -> None:
@@ -52,7 +53,7 @@ def test_one_click_notice_navigation_has_parent_and_home() -> None:
     )
     assert rows == [
         [(nav.BACK.label, "cpa:home:business-token")],
-        [(nav.HOME.label, "cpj:home:business-token")],
+        [(nav.MAIN_MENU_LABEL, "cpj:home:business-token")],
     ]
 
 
@@ -75,5 +76,5 @@ def test_native_direct_child_has_explicit_back_and_main_menu() -> None:
     labels = [button.label for row in normalized.rows for button in row]
     commands = [button.command for row in normalized.rows for button in row]
 
-    assert labels[-2:] == [nav.BACK.label, nav.HOME.label]
+    assert labels[-2:] == [nav.BACK.label, nav.MAIN_MENU_LABEL]
     assert commands[-2:] == ["cpm:menu", "cpm:menu"]
