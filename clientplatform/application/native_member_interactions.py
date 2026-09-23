@@ -1680,7 +1680,7 @@ def _with_parent_navigation(
     else:
         back_label = nav.BACK.label
     navigation = [_button(back_label, parent_command)]
-    if parent_command != "cpm:menu" and total + 2 <= 10:
+    if total + 2 <= 10:
         navigation.append(_button(nav.HOME.label, "cpm:menu"))
     rows.append(tuple(navigation))
     return CustomerInteractionMessage(text=message.text, rows=tuple(rows))
