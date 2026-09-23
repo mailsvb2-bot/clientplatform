@@ -20,6 +20,7 @@ jobs:
       SSH_PRIVATE_KEY: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY }}
       SSH_KNOWN_HOSTS: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_KNOWN_HOSTS }}
       SSH_PORT_SECRET: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_PORT }}
+      MAX_BOT_TOKEN_FALLBACK: ${{ secrets.CLIENTPLATFORM_MAX_BOT_TOKEN }}
 
     steps:
       - name: Require dedicated ClientPlatform SSH credentials
@@ -64,6 +65,20 @@ jobs:
           set -Eeuo pipefail
           key="$RUNNER_TEMP/clientplatform-production-ssh-key"
           known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
+          token_file=""
+          if [ -n "${MAX_BOT_TOKEN_FALLBACK:-}" ]; then
+            token_file="/run/clientplatform-max-token-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            printf '%s' "$MAX_BOT_TOKEN_FALLBACK" | ssh \
+              -p "$SSH_PORT" \
+              -i "$key" \
+              -o BatchMode=yes \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$known_hosts" \
+              -o ConnectTimeout=10 \
+              "$SSH_USER@$SSH_HOST" \
+              "sudo -n sh -c 'umask 077; cat > \"$token_file\"'"
+          fi
           ssh \
             -p "$SSH_PORT" \
             -i "$key" \
@@ -72,8 +87,9 @@ jobs:
             -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$known_hosts" \
             -o ConnectTimeout=10 \
-            "$SSH_USER@$SSH_HOST" "sudo -n bash -s" <<'REMOTE'
+            "$SSH_USER@$SSH_HOST" "sudo -n bash -s -- '$token_file'" <<'REMOTE'
           set -Eeuo pipefail
+          token_file="${1:-}"
           repo=/opt/clientplatform
           env_file="$repo/deploy/clientplatform/clientplatform.env"
           cd "$repo"
@@ -94,6 +110,11 @@ jobs:
           backup="$env_file.before-max-entry-repair-$(date -u +%Y%m%dT%H%M%SZ)"
           cp -p "$env_file" "$backup"
           rollback_needed=1
+          cleanup_token() {
+            if [ -n "$token_file" ]; then
+              rm -f "$token_file"
+            fi
+          }
           rollback() {
             if [ "$rollback_needed" = "1" ] && [ -f "$backup" ]; then
               cp -p "$backup" "$env_file"
@@ -105,7 +126,68 @@ jobs:
               echo "CLIENTPLATFORM_MAX_REPAIR_ROLLED_BACK" >&2
             fi
           }
-          trap rollback EXIT
+          trap 'cleanup_token; rollback' EXIT
+
+          if [ -n "$token_file" ]; then
+            case "$token_file" in
+              /run/clientplatform-max-token-[0-9]*-[0-9]*) ;;
+              *)
+                echo "CLIENTPLATFORM_MAX_REPAIR_FAILED:token_file_invalid" >&2
+                exit 13
+                ;;
+            esac
+            if [ ! -f "$token_file" ] || [ -L "$token_file" ]; then
+              echo "CLIENTPLATFORM_MAX_REPAIR_FAILED:token_file_missing" >&2
+              exit 14
+            fi
+            python3 - "$env_file" "$token_file" <<'PY'
+          from pathlib import Path
+          import os
+          import sys
+          import tempfile
+
+          env_file = Path(sys.argv[1])
+          token_file = Path(sys.argv[2])
+          token = token_file.read_text(encoding="utf-8").strip()
+          if not token or len(token) > 4096 or any(ch.isspace() for ch in token):
+              raise SystemExit("invalid MAX bot token material")
+
+          lines = env_file.read_text(encoding="utf-8").splitlines()
+          rendered = []
+          replaced = False
+          for raw in lines:
+              stripped = raw.strip()
+              if stripped and not stripped.startswith("#") and "=" in stripped:
+                  key = stripped.split("=", 1)[0].strip()
+                  if key == "MAX_BOT_TOKEN":
+                      rendered.append("MAX_BOT_TOKEN=" + token)
+                      replaced = True
+                      continue
+              rendered.append(raw)
+          if not replaced:
+              rendered.append("MAX_BOT_TOKEN=" + token)
+
+          stat = env_file.stat()
+          fd, temp_name = tempfile.mkstemp(
+              prefix=env_file.name + ".",
+              dir=str(env_file.parent),
+          )
+          try:
+              with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                  handle.write("\n".join(rendered) + "\n")
+                  handle.flush()
+                  os.fsync(handle.fileno())
+              os.chmod(temp_name, stat.st_mode & 0o777)
+              os.chown(temp_name, stat.st_uid, stat.st_gid)
+              os.replace(temp_name, env_file)
+          finally:
+              if os.path.exists(temp_name):
+                  os.unlink(temp_name)
+          PY
+            rm -f "$token_file"
+            token_file=""
+            echo "CLIENTPLATFORM_MAX_REPAIR_TOKEN_STAGED"
+          fi
 
           recovery_report="$(
             python3 scripts/clientplatform_recover_max_production_env.py \
@@ -160,6 +242,25 @@ jobs:
           rm -f "$backup"
           echo "CLIENTPLATFORM_MAX_REPAIR_OK"
           REMOTE
+
+      - name: Remove temporary MAX token material
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/clientplatform-production-ssh-key"
+          known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
+          token_file="/run/clientplatform-max-token-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ssh \
+            -p "$SSH_PORT" \
+            -i "$key" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$known_hosts" \
+            -o ConnectTimeout=10 \
+            "$SSH_USER@$SSH_HOST" \
+            "sudo -n rm -f '$token_file'" || true
 
       - name: Verify public MAX owner entry
         shell: bash
