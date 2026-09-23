@@ -270,6 +270,37 @@ def release_delivery_lease(item: ClaimedDelivery, *, reason: str = "worker_shutd
             )
 
 
+def mark_delivery_rejected(item: ClaimedDelivery, error: str) -> None:
+    """Settle an explicitly rejected provider write without retrying it.
+
+    Rejected is terminal evidence: the provider proved that this attempt did
+    not create a message. It must not be replayed, and unlike an ambiguous dead
+    letter it must not make the whole messenger runtime unready.
+    """
+
+    attempts = int(item.attempts) + 1
+    now = utc_now_iso()
+    safe_error = str(error or "")[:500]
+    with db() as conn:
+        with tx(conn):
+            conn.execute(
+                "UPDATE messenger_delivery_outbox "
+                "SET status='rejected',attempts=?,updated_at=?,locked_at=NULL,"
+                "lock_token=NULL,last_error=? "
+                "WHERE id=? AND lock_token=?",
+                (attempts, now, safe_error, int(item.id), item.lock_token),
+            )
+    log_event(
+        item.canonical_user_id,
+        f"{item.platform}_delivery_rejected",
+        {
+            "event_key": item.event_key,
+            "attempts": attempts,
+            "error": safe_error[:180],
+        },
+    )
+
+
 def reschedule_delivery(item: ClaimedDelivery, error: str) -> None:
     attempts = int(item.attempts) + 1
     max_attempts = _positive_int("MESSENGER_OUTBOX_MAX_ATTEMPTS", 8, minimum=1, maximum=100)
@@ -389,5 +420,6 @@ def outbox_snapshot() -> dict[str, int]:
         "retry": counts.get("retry", 0),
         "sending": counts.get("sending", 0),
         "sent": counts.get("sent", 0),
+        "rejected": counts.get("rejected", 0),
         "dead": counts.get("dead", 0),
     }

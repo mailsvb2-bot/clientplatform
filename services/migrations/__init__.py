@@ -15,6 +15,7 @@ from services.migrations.account_merge_log_legacy_cleanup_v1 import apply as _ap
 from services.migrations.user_privacy_export_tokens_v1 import apply as _apply_privacy_export_tokens
 from services.migrations.user_messenger_runtime_v3 import apply as _apply_messenger_runtime
 from services.migrations.messenger_delivery_outbox_v1 import apply as _apply_delivery_outbox
+from services.migrations.messenger_delivery_permanent_rejection_v8 import apply as _apply_delivery_permanent_rejection
 from services.migrations.messenger_delivery_reply_progress_v2 import apply as _apply_delivery_progress
 from services.migrations.messenger_media_assets_v5 import apply as _apply_media_assets_v5
 from services.migrations.messenger_media_assets_v6 import apply as _apply_media_assets_v6
@@ -54,6 +55,7 @@ def apply_all_migrations(conn: sqlite3.Connection) -> None:
     _apply_privacy_export_tokens(conn)
     _apply_messenger_runtime(conn)
     _apply_delivery_outbox(conn)
+    _apply_delivery_permanent_rejection(conn)
     _apply_delivery_progress(conn)
     _apply_media_assets_v5(conn)
     _apply_media_assets_v6(conn)

@@ -204,7 +204,9 @@ def _process_and_persist(
         )
         persist_reply_bundle(
             platform=platform,
-            external_user_id=extracted["external_user_id"],
+            external_user_id=str(
+                extracted.get("delivery_target") or extracted["external_user_id"]
+            ),
             canonical_user_id=int(canonical_user_id),
             event_key=event_key,
             replies=list(replies),

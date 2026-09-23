@@ -8,6 +8,7 @@ import pytest
 from core.time_utils import utc_now, utc_now_iso
 from services.bg import tm
 from services.db import db
+from runtime.messenger_max_sender import MaxProviderRejectedError
 from services.messenger import delivery_outbox, delivery_pool
 
 
@@ -236,3 +237,34 @@ def test_retention_deletes_only_expired_terminal_evidence() -> None:
     assert fresh_dead in ids
     assert "pool-old-webhook-884031" not in webhooks
     assert "pool-fresh-webhook-884032" in webhooks
+
+@pytest.mark.asyncio
+async def test_permanent_provider_rejection_is_not_retried(monkeypatch) -> None:
+    item_id = _insert_outbox(
+        platform="max",
+        user_id=884041,
+        event_key="pool-max-permanent-rejection-884041",
+    )
+    claimed = delivery_pool.claim_stream_head(platform="max", lock_ttl_sec=900)
+    assert claimed is not None
+    assert claimed.id == item_id
+
+    async def reject(_item: delivery_outbox.ClaimedDelivery) -> None:
+        raise MaxProviderRejectedError(
+            "MAX provider send_text HTTP 403",
+            code="max.send_text.http_403",
+        )
+
+    monkeypatch.setattr(delivery_outbox, "_deliver_one", reject)
+    await delivery_pool._process_item(claimed)  # noqa: SLF001
+
+    with db() as conn:
+        row = conn.execute(
+            "SELECT status,attempts,last_error FROM messenger_delivery_outbox WHERE id=?",
+            (item_id,),
+        ).fetchone()
+
+    assert row["status"] == "rejected"
+    assert int(row["attempts"]) == 1
+    assert row["last_error"] == "MaxProviderRejectedError:max.send_text.http_403"
+    assert delivery_pool.claim_stream_head(platform="max", lock_ttl_sec=900) is None

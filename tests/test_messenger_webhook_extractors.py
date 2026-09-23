@@ -41,3 +41,20 @@ def test_extract_max_message():
     assert extracted is not None
     assert extracted['user_id'] == 77
     assert extracted['text'] == '/platform vk'
+
+def test_extract_max_message_preserves_user_identity_and_chat_delivery_target():
+    payload = {
+        "update_type": "message_created",
+        "message": {
+            "sender": {"user_id": 77},
+            "recipient": {"chat_id": -99001, "chat_type": "dialog", "user_id": 77},
+            "body": {"text": "start"},
+        },
+    }
+
+    extracted = extract_max_message(payload)
+
+    assert extracted is not None
+    assert extracted["user_id"] == 77
+    assert extracted["external_user_id"] == "77"
+    assert extracted["delivery_target"] == "chat:-99001"

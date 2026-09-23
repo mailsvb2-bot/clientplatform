@@ -230,10 +230,13 @@ def check_delivery_outbox_preflight() -> MessengerPreflightStatus:
     if not bool(snapshot.get("worker_running")):
         missing.append("delivery_worker(running)")
     dead = int(snapshot.get("dead") or 0)
+    rejected = int(snapshot.get("rejected") or 0)
     pending = int(snapshot.get("pending") or 0)
     retry = int(snapshot.get("retry") or 0)
     if dead > 0:
         missing.append(f"dead_letters={dead}")
+    if rejected > 0:
+        warnings.append(f"permanent provider rejections retained: {rejected}")
     if retry > 0:
         warnings.append(f"delivery retries pending: {retry}")
 

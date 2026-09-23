@@ -10,6 +10,7 @@ def _snapshot(**overrides):
         "retry": 0,
         "sending": 0,
         "sent": 0,
+        "rejected": 0,
         "dead": 0,
         "oldest_pending_age_sec": 0,
         "oldest_retry_age_sec": 0,
@@ -102,3 +103,23 @@ def test_delivery_preflight_only_warns_about_lag_before_worker_start(monkeypatch
     assert status.ok is True
     assert status.missing == ()
     assert "prestart delivery lag: oldest_pending_age_sec=301" in status.warnings
+
+def test_delivery_preflight_warns_but_stays_ready_on_permanent_rejections(monkeypatch):
+    monkeypatch.setattr(preflight, "vk_webhook_enabled", lambda: False)
+    monkeypatch.setattr(preflight, "max_webhook_enabled", lambda: True)
+    monkeypatch.setattr(
+        preflight,
+        "delivery_health_snapshot",
+        lambda: _snapshot(
+            worker_expected=True,
+            worker_active=True,
+            worker_running=True,
+            rejected=10,
+        ),
+    )
+
+    status = preflight.check_delivery_outbox_preflight()
+
+    assert status.ok is True
+    assert status.missing == ()
+    assert "permanent provider rejections retained: 10" in status.warnings

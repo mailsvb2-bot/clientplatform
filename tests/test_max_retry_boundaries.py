@@ -209,3 +209,42 @@ def test_canonical_max_text_never_accepts_provider_error_message_as_id(monkeypat
                 idempotency_key="dispatch:max:text:strict-response",
             )
         )
+
+def test_max_http_403_is_explicit_permanent_rejection(monkeypatch) -> None:
+    def fake_json_request(*args, **kwargs):
+        raise ProviderPermanentHTTPError(403)
+
+    monkeypatch.setattr("runtime.messenger_max_sender.json_request", fake_json_request)
+
+    with pytest.raises(MaxProviderRejectedError) as raised:
+        asyncio.run(
+            MaxBotSender(token="bot-token").send_text(
+                "123",
+                "hello",
+                legacy_ui=False,
+            )
+        )
+
+    assert raised.value.safe_code == "max.send_text.http_403"
+    assert raised.value.retryable is False
+    assert raised.value.provider_write_definitely_rejected is True
+
+def test_max_send_text_uses_chat_id_for_chat_delivery_target(monkeypatch) -> None:
+    observed: dict[str, str] = {}
+
+    def fake_json_request(url, **kwargs):
+        observed["url"] = str(url)
+        return {"message": {"id": "max-message-1"}}
+
+    monkeypatch.setattr("runtime.messenger_max_sender.json_request", fake_json_request)
+
+    result = asyncio.run(
+        MaxBotSender(token="bot-token").send_text(
+            "chat:-99001",
+            "hello",
+            legacy_ui=False,
+        )
+    )
+
+    assert result["id"] == "max-message-1"
+    assert observed["url"].endswith("/messages?chat_id=-99001")
