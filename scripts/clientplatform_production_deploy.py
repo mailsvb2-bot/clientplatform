@@ -922,6 +922,161 @@ def _http_probe(path: str) -> bool:
     return completed.returncode == 0 and completed.stdout.strip() == "1"
 
 
+_READINESS_DIAGNOSTIC_SCALAR_FIELDS = frozenset(
+    {
+        "db_ready",
+        "schema_ready",
+        "clientplatform_dispatch_ready",
+        "messenger_ready",
+        "ingress_ready",
+        "webhook_ready",
+        "clientplatform_dispatch_configured",
+        "clientplatform_runtime_health_available",
+        "clientplatform_runtime_composed",
+        "clientplatform_dispatch_enabled",
+        "clientplatform_dispatch_running",
+        "clientplatform_dispatch_iterations",
+        "clientplatform_dispatch_errors",
+        "clientplatform_dispatch_last_tick_age_seconds",
+        "clientplatform_dispatch_outbox_checked",
+        "clientplatform_dispatch_outbox_available",
+        "clientplatform_dispatch_outbox_due",
+        "clientplatform_dispatch_outbox_stale_sending",
+        "clientplatform_dispatch_outbox_recent_dead",
+        "clientplatform_dispatch_outbox_oldest_due_age_seconds",
+        "clientplatform_dispatch_runtime_ready",
+        "clientplatform_dispatch_recent_error",
+        "clientplatform_dispatch_stale",
+        "clientplatform_dispatch_runtime_degraded",
+        "clientplatform_dispatch_outbox_ready",
+        "clientplatform_dispatch_outbox_due_backlog",
+        "clientplatform_dispatch_outbox_oldest_due",
+        "clientplatform_dispatch_outbox_stale_leases",
+        "clientplatform_dispatch_outbox_recent_dead_exceeded",
+        "clientplatform_dispatch_outbox_degraded",
+        "clientplatform_ad_runtime_health_available",
+        "clientplatform_ad_runtime_configured",
+        "clientplatform_ad_runtime_configuration_ok",
+        "clientplatform_ad_runtime_running",
+        "clientplatform_ad_runtime_iterations",
+        "clientplatform_ad_runtime_errors",
+        "clientplatform_ad_runtime_last_tick_age_seconds",
+        "clientplatform_ad_runtime_ready",
+        "clientplatform_ad_runtime_recent_error",
+        "clientplatform_ad_runtime_stale",
+        "clientplatform_ad_runtime_degraded",
+        "clientplatform_ad_spend_outbox_checked",
+        "clientplatform_ad_spend_outbox_available",
+        "clientplatform_ad_spend_outbox_due",
+        "clientplatform_ad_spend_outbox_stale_processing",
+        "clientplatform_ad_spend_outbox_recent_failed",
+        "clientplatform_ad_spend_outbox_oldest_due_age_seconds",
+        "clientplatform_ad_spend_outbox_due_backlog",
+        "clientplatform_ad_spend_outbox_oldest_due",
+        "clientplatform_ad_spend_outbox_stale_processing",
+        "clientplatform_ad_spend_outbox_recent_failed_exceeded",
+        "telegram_preflight_enabled",
+        "telegram_preflight_ok",
+        "max_preflight_enabled",
+        "max_preflight_ok",
+        "vk_preflight_enabled",
+        "vk_preflight_ok",
+        "delivery_outbox_preflight_enabled",
+        "delivery_outbox_preflight_ok",
+    }
+)
+_READINESS_DIAGNOSTIC_LIST_FIELDS = frozenset(
+    {
+        "telegram_preflight_missing",
+        "max_preflight_missing",
+        "vk_preflight_missing",
+        "delivery_outbox_preflight_missing",
+    }
+)
+
+
+def _readiness_diagnostic() -> dict[str, object]:
+    """Return a strict allow-listed readiness snapshot without secret values."""
+
+    scalar_fields = sorted(_READINESS_DIAGNOSTIC_SCALAR_FIELDS)
+    list_fields = sorted(_READINESS_DIAGNOSTIC_LIST_FIELDS)
+    script = (
+        "import json,os,urllib.error,urllib.request;"
+        f"scalar={scalar_fields!r};"
+        f"lists={list_fields!r};"
+        "token=os.environ.get('HEALTHCHECK_DIAGNOSTICS_TOKEN','').strip();"
+        "safe={'available':False};"
+        "\nif token:"
+        "\n req=urllib.request.Request("
+        "'http://127.0.0.1:8182/readyz',"
+        "headers={'X-ClientPlatform-Diagnostics-Token':token})"
+        "\n try:"
+        "\n  response=urllib.request.urlopen(req,timeout=3);"
+        " status=int(getattr(response,'status',200)); body=response.read()"
+        "\n except urllib.error.HTTPError as exc:"
+        "\n  status=int(exc.code); body=exc.read()"
+        "\n except Exception:"
+        "\n  status=0; body=b''"
+        "\n try:"
+        "\n  payload=json.loads(body.decode('utf-8')) if body else {}"
+        "\n except Exception:"
+        "\n  payload={}"
+        "\n if isinstance(payload,dict):"
+        "\n  safe={'available':True,'http_status':status}"
+        "\n  for key in scalar:"
+        "\n   value=payload.get(key)"
+        "\n   if isinstance(value,bool) or (isinstance(value,int) and not isinstance(value,bool)):"
+        "\n    safe[key]=value"
+        "\n  for key in lists:"
+        "\n   value=payload.get(key)"
+        "\n   if isinstance(value,list):"
+        "\n    safe[key]=[item for item in value if isinstance(item,str) and len(item)<=120][:32]"
+        "\nprint(json.dumps(safe,sort_keys=True,separators=(',',':')))"
+    )
+    completed = _run(
+        ["docker", "exec", APP_CONTAINER, "python", "-c", script],
+        capture=True,
+        check=False,
+    )
+    fallback: dict[str, object] = {"available": False}
+    if completed.returncode != 0:
+        return fallback
+    try:
+        payload = json.loads(completed.stdout.strip())
+    except (TypeError, ValueError):
+        return fallback
+    if not isinstance(payload, dict):
+        return fallback
+
+    safe: dict[str, object] = {"available": bool(payload.get("available"))}
+    status = payload.get("http_status")
+    if isinstance(status, int) and not isinstance(status, bool) and 0 <= status <= 599:
+        safe["http_status"] = status
+    for key in _READINESS_DIAGNOSTIC_SCALAR_FIELDS:
+        value = payload.get(key)
+        if isinstance(value, bool) or (isinstance(value, int) and not isinstance(value, bool)):
+            safe[key] = value
+    for key in _READINESS_DIAGNOSTIC_LIST_FIELDS:
+        value = payload.get(key)
+        if not isinstance(value, list):
+            continue
+        safe[key] = [
+            item
+            for item in value
+            if isinstance(item, str) and len(item) <= 120
+        ][:32]
+    return safe
+
+
+def _emit_readiness_diagnostic(stage: str) -> None:
+    safe_stage = stage if stage in {"baseline_timeout", "startup_timeout", "readiness_timeout"} else "unknown"
+    payload = {"stage": safe_stage, **_readiness_diagnostic()}
+    print(
+        "CLIENTPLATFORM_PRODUCTION_READINESS_DIAGNOSTIC:"
+        + json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    )
+
+
 def _healthy() -> bool:
     return _http_probe("/healthz")
 
@@ -950,6 +1105,7 @@ def _wait_for_startup(timeout_seconds: int) -> None:
         if _container_running() and _healthy() and _runtime_markers():
             return
         time.sleep(3)
+    _emit_readiness_diagnostic("startup_timeout")
     raise DeploymentError("production_startup_timeout")
 
 
@@ -961,6 +1117,7 @@ def _wait_for_baseline_readiness(timeout_seconds: int) -> None:
         if _container_running() and _ready():
             return
         time.sleep(3)
+    _emit_readiness_diagnostic("baseline_timeout")
     raise DeploymentError("production_baseline_readiness_timeout")
 
 
@@ -970,6 +1127,7 @@ def _wait_for_readiness(timeout_seconds: int) -> None:
         if _container_running() and _ready() and _runtime_markers():
             return
         time.sleep(3)
+    _emit_readiness_diagnostic("readiness_timeout")
     raise DeploymentError("production_readiness_timeout")
 
 
