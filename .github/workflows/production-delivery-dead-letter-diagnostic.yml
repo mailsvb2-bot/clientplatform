@@ -2,6 +2,9 @@ name: ClientPlatform Production Delivery Dead Letter Diagnostic
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -12,6 +15,7 @@ concurrency:
 
 jobs:
   diagnose:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[probe-delivery-dead-letters]')
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     env:
