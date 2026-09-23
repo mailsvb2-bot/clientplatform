@@ -196,10 +196,10 @@ def get_event_acquisition_breakdown_in_transaction(
                ) THEN 1 ELSE 0 END) AS paid
         FROM clientplatform_event_registrations r
         WHERE r.business_id=? AND r.event_id=? AND r.status='registered'
-        GROUP BY COALESCE(NULLIF(r.source,''), ?), NULLIF(r.campaign_ref,'')
+        GROUP BY 1, 2
         ORDER BY registered DESC, source, campaign_ref
         """,
-        (_DIRECT_SOURCE, event.business_id, event.id, _DIRECT_SOURCE),
+        (_DIRECT_SOURCE, event.business_id, event.id),
     ).fetchall()
     revenue_rows = conn.execute(  # type: ignore[attr-defined]
         """
@@ -215,10 +215,10 @@ def get_event_acquisition_breakdown_in_transaction(
         WHERE c.business_id=? AND c.event_id=?
           AND r.status='registered'
           AND c.amount_minor IS NOT NULL AND c.currency IS NOT NULL
-        GROUP BY COALESCE(NULLIF(r.source,''), ?), NULLIF(r.campaign_ref,''), c.currency
+        GROUP BY 1, 2, 3
         ORDER BY source, campaign_ref, c.currency
         """,
-        (_DIRECT_SOURCE, event.business_id, event.id, _DIRECT_SOURCE),
+        (_DIRECT_SOURCE, event.business_id, event.id),
     ).fetchall()
 
     revenue_by_key: dict[tuple[str, str | None], list[CurrencyRevenue]] = {}
