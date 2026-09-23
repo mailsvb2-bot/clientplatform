@@ -72,3 +72,24 @@ def test_prepared_video_can_switch_to_image(monkeypatch) -> None:
     rows = _labels_and_callbacks(studio._menu_rows("business-token", active))
     assert ("✨ Вместо этого картинка", "cpc:new:business-token") in rows
 
+
+
+def test_creative_menu_shows_unavailable_generation_truthfully() -> None:
+    rows = _labels_and_callbacks(
+        studio._menu_rows(
+            "business-token",
+            None,
+            image_ready=False,
+            video_ready=False,
+        )
+    )
+    assert (
+        "⚠️ Картинки недоступны",
+        "cpc:status:business-token:image",
+    ) in rows
+    assert (
+        "⚠️ Видео недоступно",
+        "cpc:status:business-token:video",
+    ) in rows
+    assert ("✨ Создать картинку", "cpc:new:business-token") not in rows
+    assert ("🎬 Создать видео", "cpc:video:business-token") not in rows

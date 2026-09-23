@@ -29,6 +29,8 @@ from clientplatform.application.activity_directions import (
     restore_activity_direction,
     update_activity_direction,
 )
+from clientplatform.application.ad_channel_directory import advertising_channel, advertising_channels
+from clientplatform.application.ad_connections import list_ad_connections
 from clientplatform.application.ad_spend_consent import list_ad_spend_authorizations
 from clientplatform.application.ad_spend_operations import (
     ad_spend_mutations_enabled,
@@ -86,6 +88,7 @@ from clientplatform.application.capability_parity import (
     project_messenger_capabilities,
 )
 from clientplatform.application.creative_growth_optimizer import CreativeOptimizationMetric
+from clientplatform.application.visual_creatives import VisualCreativeError, visual_generation_ready
 from clientplatform.application.creative_winner import (
     CreativeWinnerApplyError,
     apply_creative_winner,
@@ -181,6 +184,7 @@ from clientplatform.domain.activity_directions import (
     ActivityDirectionError,
     ActivityDirectionStatus,
 )
+from clientplatform.domain.ad_connections import AdConnectionStatus
 from clientplatform.domain.automation_policy import AutomationPolicyError
 from clientplatform.domain.ad_spend import AdSpendAuthorizationStatus, AdSpendError
 from clientplatform.domain.bookings import BookingError, BookingSlotStatus, parse_local_booking_start
@@ -924,6 +928,10 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "reactivate-approve",
             "ad-spend",
             "ad-spend-launch",
+            "ad-channels",
+            "ad-channel",
+            "ad-console",
+            "ai-visuals",
             "sales-recent",
             "sales-lead",
             "sales-actions",
@@ -1383,6 +1391,10 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "sales-handoffs": "cpm:sales",
     "reactivate": "cpm:growth-lifecycle",
     "ad-spend": "cpm:growth-sales",
+    "ad-channels": "cpm:growth",
+    "ad-channel": "cpm:ad-channels",
+    "ad-console": "cpm:ad-channels",
+    "ai-visuals": "cpm:growth",
     "growth": "cpm:menu-all",
     "growth-sales": "cpm:growth",
     "growth-analysis": "cpm:growth-sales",
@@ -3179,6 +3191,149 @@ def _growth_lifecycle_message(actor: TenantContext) -> CustomerInteractionMessag
         rows=tuple(rows),
     )
 
+def _active_yandex_connection(actor: TenantContext):
+    try:
+        return next(
+            (
+                item
+                for item in list_ad_connections(actor=actor)
+                if item.status == AdConnectionStatus.ACTIVE
+            ),
+            None,
+        )
+    except (RuntimeError, ValueError):
+        return None
+
+
+def _ad_channels_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _ACQUISITION_ROLES:
+        return _permission_message()
+    active = _active_yandex_connection(actor)
+    channels = advertising_channels()
+    yandex = next(item for item in channels if item.key == "yandex_direct")
+    lines = ["📣 Рекламные каналы", ""]
+    if active is not None:
+        lines.append(f"• Яндекс Директ — ✅ подключён · {active.external_login}")
+    elif yandex.managed_ready:
+        lines.append("• Яндекс Директ — ➕ можно подключить")
+    else:
+        lines.append("• Яндекс Директ — ⚪ подключение ClientPlatform пока не активировано")
+    lines.extend(
+        [
+            "• VK Реклама — отдельный рекламный кабинет",
+            "• Telegram Ads — официальный внешний кабинет",
+            "• Другой рекламный сервис — через отдельное подключение",
+            "",
+            "Мессенджер и рекламный кабинет — разные подключения. "
+            "ClientPlatform не показывает «подключено» без подтверждённой связи с кабинетом.",
+        ]
+    )
+    rows = tuple(
+        (_button(channel.label, f"cpm:ad-channel:{channel.key}"),)
+        for channel in channels
+    )
+    return CustomerInteractionMessage(
+        text="\n".join(lines),
+        rows=(*rows, (_button(nav.GROWTH.label, "cpm:growth"),)),
+    )
+
+
+def _ad_channel_message(
+    actor: TenantContext,
+    key: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _ACQUISITION_ROLES:
+        return _permission_message()
+    try:
+        channel = advertising_channel(key)
+    except ValueError:
+        return _stale_message()
+    active = _active_yandex_connection(actor)
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    if channel.key == "yandex_direct":
+        if active is not None:
+            status = f"✅ подключён · {active.external_login}"
+        elif channel.managed_ready:
+            status = "➕ управляемое OAuth-подключение доступно"
+            try:
+                if ConnectionPlatform.TELEGRAM in available_staff_messenger_switches(actor):
+                    rows.append(
+                        (
+                            _button(
+                                "🔐 Подключить в Telegram",
+                                build_staff_switch_command(actor, ConnectionPlatform.TELEGRAM),
+                            ),
+                        )
+                    )
+            except (RuntimeError, ValueError):
+                pass
+        else:
+            status = "⚪ подключение ClientPlatform пока не активировано"
+        rows.append((_button("Открыть Яндекс Директ", "cpm:ad-console:yandex_direct"),))
+    else:
+        status = (
+            "↗️ внешний рекламный кабинет; связь с ClientPlatform пока не подтверждена"
+            if channel.public_url
+            else "⚪ безопасное подключение ещё не настроено"
+        )
+        if channel.public_url:
+            rows.append((_button(f"Открыть {channel.label}", f"cpm:ad-console:{channel.key}"),))
+    rows.append((_button("📣 Рекламные каналы", "cpm:ad-channels"),))
+    return CustomerInteractionMessage(
+        text=f"📣 {channel.label}\n\nСтатус: {status}.\n\n{channel.description}",
+        rows=tuple(rows),
+    )
+
+
+def _ai_visuals_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in (_MARKETING_ROLES | _CONTENT_ROLES):
+        return _permission_message()
+    country_code = str(getattr(settings, "VISUAL_DEPLOYMENT_COUNTRY", "") or "")
+    try:
+        image_ready = visual_generation_ready(kind="image", country_code=country_code)
+    except VisualCreativeError:
+        image_ready = False
+    try:
+        video_ready = visual_generation_ready(kind="video", country_code=country_code)
+    except VisualCreativeError:
+        video_ready = False
+    lines = [
+        "🎨 AI-картинки и видео",
+        "",
+        f"Картинки — {'✅ генератор подключён' if image_ready else '⚠️ генератор недоступен'}",
+        f"Видео — {'✅ генератор подключён' if video_ready else '⚠️ генератор недоступен'}",
+        "",
+        "ClientPlatform сам выбирает доступный production-провайдер. "
+        "Пользователю не нужно выбирать модель или передавать API-ключ в чат.",
+    ]
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    try:
+        if ConnectionPlatform.TELEGRAM in available_staff_messenger_switches(actor):
+            rows.append(
+                (
+                    _button(
+                        "🎨 Создать в Telegram",
+                        build_staff_switch_command(actor, ConnectionPlatform.TELEGRAM),
+                    ),
+                )
+            )
+    except (RuntimeError, ValueError):
+        pass
+    rows.append((_button(nav.GROWTH.label, "cpm:growth"),))
+    return CustomerInteractionMessage(text="\n".join(lines), rows=tuple(rows))
+
+
+def _acquisition_tool_rows(
+    actor: TenantContext,
+) -> tuple[tuple[CustomerInteractionButton, ...], ...]:
+    rows: list[tuple[CustomerInteractionButton, ...]] = [
+        (_button(nav.AD_CHANNELS.label, "cpm:ad-channels"),),
+    ]
+    if actor.role in (_CONTENT_ROLES | _MARKETING_ROLES):
+        rows.append((_button(nav.AI_VISUALS.label, "cpm:ai-visuals"),))
+    return tuple(rows)
+
+
 def _acquisition_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role not in _ACQUISITION_ROLES:
         return _permission_message()
@@ -3189,7 +3344,7 @@ def _acquisition_message(actor: TenantContext) -> CustomerInteractionMessage:
                 "Найти новых клиентов\n\nПубличная ссылка ClientPlatform пока не настроена. "
                 "Ничего не опубликовано и расходы не запущены."
             ),
-            rows=((_button("📈 Рост", "cpm:growth"),), _back_row()),
+            rows=(*_acquisition_tool_rows(actor), (_button("📈 Рост", "cpm:growth"),), _back_row()),
         )
     try:
         prepared = prepare_nearest_acquisition_destination(
@@ -3203,7 +3358,7 @@ def _acquisition_message(actor: TenantContext) -> CustomerInteractionMessage:
                 "Найти новых клиентов\n\nНе удалось безопасно подготовить ссылку. "
                 "Ничего не опубликовано и расходы не запущены."
             ),
-            rows=((_button("🔄 Проверить снова", "cpm:acquire"),), (_button("📈 Рост", "cpm:growth"),), _back_row()),
+            rows=((_button("🔄 Проверить снова", "cpm:acquire"),), *_acquisition_tool_rows(actor), (_button("📈 Рост", "cpm:growth"),), _back_row()),
         )
     if prepared is None:
         first_row = (
@@ -3216,7 +3371,7 @@ def _acquisition_message(actor: TenantContext) -> CustomerInteractionMessage:
                 "🚀 Новые клиенты\n\nЧтобы приглашать клиентов на запись, сначала "
                 "добавьте хотя бы одно свободное время."
             ),
-            rows=(first_row, (_button("📈 Рост", "cpm:growth"),), _back_row()),
+            rows=(first_row, *_acquisition_tool_rows(actor), (_button("📈 Рост", "cpm:growth"),), _back_row()),
         )
     destination = prepared.destination
     if not destination.has_native_messenger_destination:
@@ -3226,7 +3381,7 @@ def _acquisition_message(actor: TenantContext) -> CustomerInteractionMessage:
                 "нет публичного Telegram, ВКонтакте или MAX. Ссылку не публикую, "
                 "чтобы не вести клиента в тупик."
             ),
-            rows=((_button("💬 Мессенджеры", "cpm:messengers"),), (_button("📈 Рост", "cpm:growth"),), _back_row()),
+            rows=((_button("💬 Мессенджеры", "cpm:messengers"),), *_acquisition_tool_rows(actor), (_button("📈 Рост", "cpm:growth"),), _back_row()),
         )
     names = {ConnectionPlatform.TELEGRAM: "Telegram", ConnectionPlatform.VK: "ВКонтакте", ConnectionPlatform.MAX: "MAX"}
     channels = ", ".join(names[item.platform] for item in destination.messenger_destinations)
@@ -3241,7 +3396,7 @@ def _acquisition_message(actor: TenantContext) -> CustomerInteractionMessage:
             "Источник сохранится независимо от выбранного мессенджера. Это только "
             "готовый материал и измеряемая ссылка — платная реклама не запускается."
         ),
-        rows=((_button("🔄 Обновить", "cpm:acquire"),), (_button("📈 Рост", "cpm:growth"),), _back_row()),
+        rows=((_button("🔄 Обновить", "cpm:acquire"),), *_acquisition_tool_rows(actor), (_button("📈 Рост", "cpm:growth"),), _back_row()),
     )
 
 
@@ -7197,6 +7352,14 @@ def _render(
             return _event_join_result(actor, parsed.args[0], parsed.args[1])
         if parsed.action == "acquire":
             return _acquisition_message(actor)
+        if parsed.action == "ad-channels":
+            return _ad_channels_message(actor)
+        if parsed.action == "ad-channel":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _ad_channel_message(actor, parsed.args[0])
+        if parsed.action == "ai-visuals":
+            return _ai_visuals_message(actor)
         if parsed.action == "experiments":
             return _experiments_message(actor, _page_number(parsed.args))
         if parsed.action == "experiment":

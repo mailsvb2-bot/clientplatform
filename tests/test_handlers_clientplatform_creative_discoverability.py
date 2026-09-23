@@ -289,6 +289,54 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
             await creative.open_creative_studio(denied, FakeState())
         self.assertTrue(denied.answer.await_args.kwargs["show_alert"])
 
+    async def test_creative_provider_status_reports_ready_unavailable_and_errors(self) -> None:
+        cases = [
+            ("image", True, "✅ Генератор картинок подключён и доступен."),
+            ("video", False, "⚠️ Генератор видео сейчас не подключён"),
+        ]
+        for kind, ready, expected in cases:
+            with self.subTest(kind=kind, ready=ready):
+                target = outbound()
+                cb = callback(f"cpc:status:{_TOKEN}:{kind}", target)
+                with (
+                    patch.object(
+                        creative,
+                        "_actor_for_callback",
+                        new=AsyncMock(return_value=actor()),
+                    ),
+                    patch.object(creative, "visual_generation_ready", return_value=ready),
+                    patch.object(creative.control, "_callback_message", return_value=target),
+                ):
+                    await creative.creative_provider_status(cb)
+
+                cb.answer.assert_awaited_once_with()
+                self.assertIn(expected, target.answer.await_args.args[0])
+                markup = target.answer.await_args.kwargs["reply_markup"]
+                self.assertEqual(
+                    markup.inline_keyboard[0][0].callback_data,
+                    f"cpc:open:{_TOKEN}",
+                )
+
+        for error in (
+            TenantPermissionDenied("denied"),
+            creative.VisualCreativeError("provider failed"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                target = outbound()
+                cb = callback(f"cpc:status:{_TOKEN}:image", target)
+                with patch.object(
+                    creative,
+                    "_actor_for_callback",
+                    new=AsyncMock(side_effect=error),
+                ):
+                    await creative.creative_provider_status(cb)
+
+                cb.answer.assert_awaited_once_with(
+                    "Не удалось проверить генератор",
+                    show_alert=True,
+                )
+                target.answer.assert_not_awaited()
+
     async def test_new_prompt_blocks_running_generation_and_opens_when_safe(self) -> None:
         target = outbound()
         running = receipt(

@@ -33,7 +33,7 @@ def _owner_keyboard(control: ModuleType, business_id: str) -> InlineKeyboardMark
             ],
             [("📣 Партнёрские материалы", f"cpg:materials:{token}")],
             [
-                ("📣 Рекламные кабинеты", f"cpa:home:{token}"),
+                ("📣 Рекламные каналы", f"cpa:home:{token}"),
                 ("📊 Яндекс", f"cpy:a:{token}:30"),
             ],
             [("🔌 Отключить кабинет", f"cpa:disconnects:{token}")],

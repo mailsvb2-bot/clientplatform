@@ -1079,7 +1079,7 @@ async def open_ad_tools(callback: CallbackQuery) -> None:
         reply_markup=control._keyboard(
             [
                 [(goal_contract.ACQUIRE_CLIENTS.label, goal_contract.ACQUIRE_CLIENTS.callback(token))],
-                [("📣 Яндекс Директ", f"cpa:home:{token}")],
+                [("📣 Рекламные каналы", f"cpa:home:{token}")],
                 [("📊 Результаты Яндекс", f"cpy:a:{token}:30")],
                 [("📣 Партнёрские материалы", f"cpg:materials:{token}")],
                 [(nav.BACK.label, f"cpo:more:{token}")],

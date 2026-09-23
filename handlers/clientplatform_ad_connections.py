@@ -15,6 +15,7 @@ from aiogram.types import (
     Message,
 )
 
+from clientplatform.application.ad_channel_directory import advertising_channel
 from clientplatform.application.ad_connections import (
     ad_connections_enabled,
     confirm_ad_publication,
@@ -115,28 +116,30 @@ def _visual_wait_seconds() -> int:
 async def _workspace(callback: CallbackQuery, *, business_token: str) -> None:
     business_id = control._token_uuid(business_token)
     actor = await control._actor(int(callback.from_user.id), business_id)
-    if not ad_connections_enabled() or not yandex_direct_provider_configured():
-        await callback.answer()
-        await _message(callback).answer(
-            "📣 Личные рекламные кабинеты\n\n"
-            "Интеграция подготовлена, но OAuth-приложение Яндекс Директа ещё не "
-            "включено владельцем ClientPlatform. До включения реклама продолжает "
-            "работать через готовые тексты и измеряемые ссылки.",
-            reply_markup=control._keyboard(
-                [[("⬅️ К клиентам", f"cpj:promote:{business_token}")]]
-            ),
-        )
-        return
+    yandex_ready = ad_connections_enabled() and yandex_direct_provider_configured()
 
-    connections, jobs = await asyncio.gather(
-        asyncio.to_thread(list_ad_connections, actor=actor),
-        asyncio.to_thread(list_ad_publications, actor=actor),
-    )
+    if yandex_ready:
+        connections, jobs = await asyncio.gather(
+            asyncio.to_thread(list_ad_connections, actor=actor),
+            asyncio.to_thread(list_ad_publications, actor=actor),
+        )
+    else:
+        connections, jobs = [], []
     active = _active_connections(connections)
     connection_lines = [
         f"• Яндекс Директ · {item.external_login} · {_STATUS_LABELS[item.status]}"
         for item in connections
-    ] or ["• рекламный кабинет пока не подключён"]
+    ] or [
+        "• Яндекс Директ · рекламный кабинет пока не подключён · "
+        + ("можно подключить" if yandex_ready else "подключение ClientPlatform пока не активировано")
+    ]
+    connection_lines.extend(
+        [
+            "• VK Реклама · отдельный экран подключения",
+            "• Telegram Ads · официальный внешний кабинет",
+            "• Другой рекламный сервис · через отдельное подключение",
+        ]
+    )
     job_lines = [
         f"• {item.external_campaign_name or item.external_campaign_id}: "
         f"{_JOB_LABELS[item.status]}"
@@ -148,37 +151,73 @@ async def _workspace(callback: CallbackQuery, *, business_token: str) -> None:
         rows.extend(
             [
                 [("🎯 Создать рекламу", f"cpa:promote:{business_token}")],
-                [("🔌 Отключить кабинет", f"cpa:disconnects:{business_token}")],
+                [
+                    (
+                        "🔌 Отключить кабинет Яндекс Директа",
+                        f"cpa:disconnects:{business_token}",
+                    )
+                ],
             ]
         )
-    else:
+    elif yandex_ready:
         rows.append(
             [("➕ Подключить Яндекс Директ", f"cpa:connect:{business_token}")]
         )
+    else:
+        rows.append(
+            [("ℹ️ Яндекс Директ", f"cpa:provider:yandex_direct:{business_token}")]
+        )
     rows.extend(
         [
+            [
+                (
+                    "➕ Подключить VK Рекламу",
+                    f"cpa:provider:vk_ads:{business_token}",
+                )
+            ],
+            [
+                (
+                    "➕ Подключить Telegram Ads",
+                    f"cpa:provider:telegram_ads:{business_token}",
+                )
+            ],
+            [
+                (
+                    "➕ Другой рекламный сервис",
+                    f"cpa:provider:other:{business_token}",
+                )
+            ],
             [("🔄 Обновить", f"cpa:home:{business_token}")],
             [("⬅️ Получить клиентов", f"cpj:promote:{business_token}")],
         ]
     )
 
-    next_step = (
-        "\n\nКабинет готов. Нажмите «🎯 Создать рекламу». Экран «Выберите свободное время» "
-        "откроется отдельным шагом."
-        if active
-        else (
-            "\n\nПодключите Яндекс Директ, чтобы создавать рекламные черновики. "
-            "Сначала опубликуйте свободное время в разделе «Запись», если хотите "
-            "рекламировать конкретное окно."
+    if active:
+        next_step = (
+            "\n\nЯндекс Директ подключён. Нажмите «🎯 Создать рекламу», чтобы "
+            "подготовить рекламный черновик без автоматического расхода. "
+            "Экран «Выберите свободное время» откроется отдельным шагом."
         )
-    )
+    elif yandex_ready:
+        next_step = (
+            "\n\nВыберите рекламный канал отдельной кнопкой. "
+            "Сначала опубликуйте свободное время в разделе «Запись», если хотите "
+            "рекламировать конкретное окно. ClientPlatform не будет показывать "
+            "«подключено», пока связь с конкретным кабинетом не подтверждена."
+        )
+    else:
+        next_step = (
+            "\n\nOAuth-приложение Яндекс Директа ещё не включено владельцем "
+            "ClientPlatform. Остальные рекламные каналы остаются видимыми, но "
+            "ClientPlatform не будет выдавать внешний кабинет за подключённый."
+        )
     await callback.answer()
     await _message(callback).answer(
-        "📣 Личные рекламные кабинеты\n\n"
-        "Здесь только управление подключением к Яндекс Директу. ClientPlatform не "
-        "получает доступ к кабинетам других пользователей. "
+        "📣 Рекламные каналы\n\n"
+        "Здесь только управление подключением рекламных каналов и кабинетов. "
+        "Они отделены от Telegram, ВКонтакте и MAX как каналов общения. "
         "Показы и расходы автоматически не запускаются.\n\n"
-        "Подключения:\n"
+        "Каналы:\n"
         + "\n".join(connection_lines)
         + "\n\nПоследние рекламные черновики:\n"
         + "\n".join(job_lines)
@@ -192,6 +231,58 @@ async def open_ad_connections(callback: CallbackQuery) -> None:
     await _workspace(
         callback,
         business_token=str(callback.data).split(":", 2)[2],
+    )
+
+
+@simple.router.callback_query(F.data.startswith("cpa:provider:"))
+async def open_ad_provider(callback: CallbackQuery) -> None:
+    _, _, provider_key, business_token = str(callback.data).split(":", 3)
+    control._token_uuid(business_token)
+    try:
+        channel = advertising_channel(provider_key)
+    except ValueError:
+        await callback.answer("Рекламный канал не найден", show_alert=True)
+        return
+
+    rows: list[list[InlineKeyboardButton]] = []
+    if channel.key == "yandex_direct" and channel.managed_ready:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🔐 Подключить Яндекс Директ",
+                    callback_data=f"cpa:connect:{business_token}",
+                )
+            ]
+        )
+    elif channel.public_url:
+        action = "Открыть официальный кабинет"
+        if channel.key == "vk_ads":
+            action = "Открыть VK Рекламу"
+        elif channel.key == "telegram_ads":
+            action = "Открыть Telegram Ads"
+        rows.append([InlineKeyboardButton(text=action, url=channel.public_url)])
+
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="⬅️ Рекламные каналы",
+                callback_data=f"cpa:home:{business_token}",
+            )
+        ]
+    )
+    state = (
+        "✅ управляемое подключение доступно"
+        if channel.managed_ready
+        else (
+            "↗️ внешний кабинет; связь с ClientPlatform пока не подтверждена"
+            if channel.public_url
+            else "⚪ безопасное подключение ещё не настроено"
+        )
+    )
+    await callback.answer()
+    await _message(callback).answer(
+        f"📣 {channel.label}\n\nСтатус: {state}.\n\n{channel.description}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
 
 
