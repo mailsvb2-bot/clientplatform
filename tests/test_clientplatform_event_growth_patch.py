@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from clientplatform.application.event_analytics import CurrencyRevenue
 from clientplatform.application.event_growth import (
@@ -8,6 +10,7 @@ from clientplatform.application.event_growth import (
     build_event_registration_url,
     build_yandex_event_registration_url,
     event_roas,
+    get_event_acquisition_breakdown_in_transaction,
 )
 from clientplatform.domain.events import EventValidationError
 
@@ -83,3 +86,44 @@ def test_event_registration_url_rejects_unicode_slug_even_if_isalnum() -> None:
             public_base_url="https://clientplatform.example",
             public_slug="я" * 24,
         )
+
+
+
+class _Rows:
+    def fetchall(self):
+        return []
+
+
+class _RecordingConnection:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+    def execute(self, sql: str, params: tuple[object, ...]):
+        self.calls.append((" ".join(sql.split()), tuple(params)))
+        return _Rows()
+
+
+def test_event_acquisition_grouping_reuses_selected_dimensions_on_postgres() -> None:
+    conn = _RecordingConnection()
+    actor = object()
+    event = SimpleNamespace(business_id="business-1", id="event-1")
+
+    with patch(
+        "clientplatform.application.event_growth.EventRepository"
+    ) as repository:
+        repository.return_value.get.return_value = event
+        result = get_event_acquisition_breakdown_in_transaction(
+            conn,
+            actor=actor,  # type: ignore[arg-type]
+            event_id=event.id,
+        )
+
+    assert result == ()
+    assert len(conn.calls) == 2
+
+    metric_sql, metric_params = conn.calls[0]
+    revenue_sql, revenue_params = conn.calls[1]
+    assert "GROUP BY 1, 2" in metric_sql
+    assert "GROUP BY 1, 2, 3" in revenue_sql
+    assert metric_params == ("direct", event.business_id, event.id)
+    assert revenue_params == ("direct", event.business_id, event.id)
