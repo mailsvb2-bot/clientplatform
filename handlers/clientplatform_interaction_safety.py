@@ -622,13 +622,30 @@ class ClientPlatformInteractionSafetyMiddleware(BaseMiddleware):
             self._release_lock_reference(lock_key, lock)
 
 
+def _safety_navigation_rows(
+    business_token: str,
+    *,
+    back_callback: str,
+) -> list[list[tuple[str, str]]]:
+    return [[
+        ("⬅️ Назад", back_callback),
+        ("🏠 В главное меню", f"cpj:home:{business_token}"),
+    ]]
+
+
 def _rename_keyboard(business_id: str) -> InlineKeyboardMarkup:
     try:
         business_token = control._uuid_token(business_id)
     except (TypeError, ValueError):
         return InlineKeyboardMarkup(inline_keyboard=[])
     return control._keyboard(
-        [[("Отменить", f"cps:cancel:{business_token}")]]
+        [
+            [("Отменить", f"cps:cancel:{business_token}")],
+            *_safety_navigation_rows(
+                business_token,
+                back_callback=f"cpo:settings:{business_token}",
+            ),
+        ]
     )
 
 
@@ -732,6 +749,10 @@ async def confirm_business_archive(callback: CallbackQuery, state: FSMContext) -
             [
                 [("🗑 Да, удалить организацию", f"cps:archive-confirm:{token}")],
                 [("Отмена", f"cps:archive-cancel:{token}")],
+                *_safety_navigation_rows(
+                    token,
+                    back_callback=f"cpo:settings:{token}",
+                ),
             ]
         ),
     )
@@ -746,7 +767,13 @@ async def cancel_business_archive(callback: CallbackQuery, state: FSMContext) ->
     await control._callback_message(callback).answer(
         "Удаление организации отменено.",
         reply_markup=control._keyboard(
-            [[("⚙️ Настройки организации", f"cpo:settings:{token}")]]
+            [
+                [("⚙️ Настройки организации", f"cpo:settings:{token}")],
+                *_safety_navigation_rows(
+                    token,
+                    back_callback=f"cpo:settings:{token}",
+                ),
+            ]
         ),
     )
 
