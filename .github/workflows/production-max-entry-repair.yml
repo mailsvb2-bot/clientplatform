@@ -107,6 +107,20 @@ jobs:
             exit 12
           fi
 
+          echo "CLIENTPLATFORM_MAX_REPAIR_TRUST_BEGIN"
+          bash scripts/install_max_trust.sh
+          managed_secret_dir="/var/lib/clientplatform/managed-bot-secrets"
+          install -d -m 0700 "$managed_secret_dir"
+          ca_tmp="$(mktemp "$managed_secret_dir/max-ca.pem.XXXXXX")"
+          cat \
+            "$repo/deploy/certs/russian_trusted_root_ca.crt" \
+            "$repo/deploy/certs/russian_trusted_sub_ca.crt" \
+            > "$ca_tmp"
+          chmod 0644 "$ca_tmp"
+          chown root:root "$ca_tmp"
+          mv -f "$ca_tmp" "$managed_secret_dir/max-ca.pem"
+          echo "CLIENTPLATFORM_MAX_REPAIR_TRUST_OK"
+
           backup="$env_file.before-max-entry-repair-$(date -u +%Y%m%dT%H%M%SZ)"
           cp -p "$env_file" "$backup"
           rollback_needed=1
@@ -153,19 +167,24 @@ jobs:
               raise SystemExit("invalid MAX bot token material")
 
           lines = env_file.read_text(encoding="utf-8").splitlines()
+          updates = {
+              "MAX_BOT_TOKEN": token,
+              "MAX_CA_BUNDLE": "/run/secrets/clientplatform-managed-bot/max-ca.pem",
+          }
           rendered = []
-          replaced = False
+          seen = set()
           for raw in lines:
               stripped = raw.strip()
               if stripped and not stripped.startswith("#") and "=" in stripped:
                   key = stripped.split("=", 1)[0].strip()
-                  if key == "MAX_BOT_TOKEN":
-                      rendered.append("MAX_BOT_TOKEN=" + token)
-                      replaced = True
+                  if key in updates:
+                      rendered.append(key + "=" + updates[key])
+                      seen.add(key)
                       continue
               rendered.append(raw)
-          if not replaced:
-              rendered.append("MAX_BOT_TOKEN=" + token)
+          for key, value in updates.items():
+              if key not in seen:
+                  rendered.append(key + "=" + value)
 
           stat = env_file.stat()
           fd, temp_name = tempfile.mkstemp(
