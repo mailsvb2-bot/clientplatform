@@ -254,7 +254,7 @@ def _back_keyboard(ctx: AdminContext, *extra: tuple[str, str]) -> InlineKeyboard
     rows.append(
         [
             (nav.BACK.label, _callback(ctx, "back")),
-            (nav.HOME.label, _callback(ctx, "leave")),
+            (nav.MAIN_MENU_LABEL, _callback(ctx, "leave")),
         ]
     )
     return _keyboard(rows)
@@ -376,12 +376,7 @@ def _menu_keyboard(ctx: AdminContext) -> InlineKeyboardMarkup:
         for group_action, (title, _items) in _ADMIN_MENU_GROUPS.items()
         if _admin_group_items(ctx, group_action)
     ]
-    rows.append(
-        [
-            (nav.BACK.label, _callback(ctx, "leave")),
-            (nav.HOME.label, _callback(ctx, "leave")),
-        ]
-    )
+    rows.append([("⬅️ Назад", _callback(ctx, "leave"))])
     return _keyboard(rows)
 
 
