@@ -26,6 +26,7 @@ _metrics: dict[str, int | str] = {
     "delivered": 0,
     "retried": 0,
     "dead": 0,
+    "rejected": 0,
     "leases_released": 0,
     "sent_deleted": 0,
     "dead_deleted": 0,
@@ -276,7 +277,7 @@ def cleanup_delivery_history(
             dead_rows = conn.execute(
                 """
                 SELECT id FROM messenger_delivery_outbox
-                WHERE status='dead' AND updated_at<?
+                WHERE (status='dead' OR status='rejected') AND updated_at<?
                 ORDER BY id ASC LIMIT ?
                 """.strip(),
                 (dead_before, limit),
@@ -331,12 +332,30 @@ async def _process_item(item: delivery_outbox.ClaimedDelivery) -> None:
             int(item.attempts) + 1,
             safe_error,
         )
+        permanent_rejection = bool(
+            getattr(exc, "provider_write_definitely_rejected", False)
+            and getattr(exc, "retryable", None) is False
+        )
+        if permanent_rejection:
+            await asyncio.to_thread(
+                delivery_outbox.mark_delivery_rejected,
+                item,
+                safe_error,
+            )
+            _metric_add("rejected", 1)
+            return
+
         await asyncio.to_thread(
             delivery_outbox.reschedule_delivery,
             item,
             safe_error,
         )
-        max_attempts = _bounded_int("MESSENGER_OUTBOX_MAX_ATTEMPTS", 8, minimum=1, maximum=100)
+        max_attempts = _bounded_int(
+            "MESSENGER_OUTBOX_MAX_ATTEMPTS",
+            8,
+            minimum=1,
+            maximum=100,
+        )
         if int(item.attempts) + 1 >= max_attempts:
             _metric_add("dead", 1)
         else:

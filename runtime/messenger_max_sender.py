@@ -187,6 +187,23 @@ class MaxBotSender:
             raise MessengerTransportError("MAX_BOT_TOKEN is empty", code="max.config.token_empty")
         return token
 
+    def _message_url(self, target: str) -> str:
+        raw = str(target or "").strip()
+        parameter = "user_id"
+        value = raw
+        if raw.startswith("chat:"):
+            parameter = "chat_id"
+            value = raw.removeprefix("chat:").strip()
+            if re.fullmatch(r"-?[0-9]+", value) is None:
+                raise MessengerTransportError(
+                    "MAX chat delivery target is invalid",
+                    code="max.target.chat_id_invalid",
+                )
+        return (
+            f"{self._api_base()}/messages?"
+            f"{parameter}={urllib.parse.quote(value)}"
+        )
+
     def _api_base(self) -> str:
         base = (
             self.api_base_url
@@ -232,10 +249,21 @@ class MaxBotSender:
             ) from exc
 
     @staticmethod
-    def _permanent_http_error(exc: ProviderPermanentHTTPError) -> MessengerTransportError:
+    def _permanent_http_error(
+        exc: ProviderPermanentHTTPError,
+        *,
+        operation: str = "http",
+    ) -> MessengerTransportError:
+        status = int(exc.status_code)
+        code = f"max.{operation}.http_{status}"
+        if 400 <= status <= 499:
+            return MaxProviderRejectedError(
+                f"MAX provider {operation} HTTP {status}",
+                code=code,
+            )
         return MessengerTransportError(
-            f"MAX provider HTTP {exc.status_code}",
-            code=f"max.http.{exc.status_code}",
+            f"MAX provider {operation} HTTP {status}",
+            code=code,
         )
 
     @staticmethod
@@ -406,7 +434,7 @@ class MaxBotSender:
 
     async def send_text(self, external_user_id: str, text: str, **kwargs: Any):
         token = self._token()
-        url = f"{self._api_base()}/messages?user_id={urllib.parse.quote(str(external_user_id))}"
+        url = self._message_url(str(external_user_id))
         attachments = list(kwargs.get("attachments") or [])
         payload: dict[str, Any] = {"text": str(text or "")}
         if attachments:
@@ -428,7 +456,7 @@ class MaxBotSender:
                 ssl_context=self._ssl_context(),
             )
         except ProviderPermanentHTTPError as exc:
-            raise self._permanent_http_error(exc) from exc
+            raise self._permanent_http_error(exc, operation="send_text") from exc
         except OSError as exc:
             rate_limited = _max_retryable_http_error("send_text", exc)
             if rate_limited is not None:
@@ -485,7 +513,7 @@ class MaxBotSender:
         notify: bool | None = None,
     ) -> Any:
         token = self._token()
-        url = f"{self._api_base()}/messages?user_id={urllib.parse.quote(str(external_user_id))}"
+        url = self._message_url(str(external_user_id))
         payload: dict[str, Any] = {
             "text": text,
             "attachments": [{"type": media_type, "payload": {"token": media_token}}],
@@ -509,7 +537,9 @@ class MaxBotSender:
                     ssl_context=ssl_context,
                 )
             except ProviderPermanentHTTPError as exc:
-                raise self._permanent_http_error(exc) from exc
+                raise self._permanent_http_error(
+                    exc, operation=f"send_{media_type}"
+                ) from exc
             except OSError as exc:
                 rate_limited = _max_retryable_http_error(
                     f"send_{media_type}",

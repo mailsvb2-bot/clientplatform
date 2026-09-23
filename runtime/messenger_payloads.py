@@ -298,7 +298,12 @@ def extract_max_message(payload: dict[str, Any]) -> dict[str, Any] | None:
     )
     text = command_text or text or "start"
     text = normalise_messenger_text(text)
-    return {
+    recipient = _dict_or_empty(message.get("recipient"))
+    recipient_chat_id = safe_int(
+        recipient.get("chat_id")
+        or payload.get("chat_id")
+    )
+    result = {
         "user_id": int(user_id),
         "external_user_id": str(user_id),
         "username": None,
@@ -306,3 +311,6 @@ def extract_max_message(payload: dict[str, Any]) -> dict[str, Any] | None:
         "first_name": None,
         "text": text or "start",
     }
+    if recipient_chat_id is not None:
+        result["delivery_target"] = f"chat:{recipient_chat_id}"
+    return result

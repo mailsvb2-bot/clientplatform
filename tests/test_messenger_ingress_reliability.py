@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 import json
 
 import pytest
@@ -129,3 +130,45 @@ async def test_valid_vk_payload_uses_canonical_clientplatform_entry(monkeypatch)
     assert response.text == "ok"
     assert captured and captured[0]["platform"] == "vk"
     assert captured[0]["text"] == "start"
+
+def test_max_entry_persists_recipient_chat_as_delivery_target(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(reliability, "claim_inbound_event", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(reliability, "atomic_db", lambda: nullcontext())
+    monkeypatch.setattr(
+        reliability,
+        "handle_clientplatform_entry",
+        lambda *_args, **_kwargs: (77, []),
+    )
+    monkeypatch.setattr(
+        reliability,
+        "parse_clientplatform_entry_command",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        reliability,
+        "persist_reply_bundle",
+        lambda **kwargs: captured.update(kwargs),
+    )
+    monkeypatch.setattr(reliability, "log_event", lambda *_args, **_kwargs: None)
+
+    processed = reliability._process_clientplatform_entry_and_persist(
+        platform="max",
+        event_key="max-chat-target-1",
+        event_type="message_created",
+        payload={"update_id": "max-chat-target-1"},
+        extracted={
+            "user_id": 77,
+            "external_user_id": "77",
+            "delivery_target": "chat:-99001",
+            "username": None,
+            "display_name": None,
+            "first_name": None,
+            "text": "start",
+        },
+        text="start",
+    )
+
+    assert processed is True
+    assert captured["external_user_id"] == "chat:-99001"
+    assert captured["canonical_user_id"] == 77
