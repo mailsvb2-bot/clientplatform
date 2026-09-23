@@ -109,12 +109,18 @@ def _owner_navigation_rows(
     business_token: str,
     *,
     back_callback: str | None = None,
+    back_label: str | None = None,
 ) -> list[list[tuple[str, str]]]:
     """Return the canonical Telegram owner escape footer for notice/result screens."""
 
     return [
-        [(nav.BACK.label, back_callback or f"cpa:home:{business_token}")],
-        [(nav.HOME.label, f"cpj:home:{business_token}")],
+        [
+            (
+                back_label or nav.BACK.label,
+                back_callback or f"cpa:home:{business_token}",
+            )
+        ],
+        [(nav.MAIN_MENU_LABEL, f"cpj:home:{business_token}")],
     ]
 
 
@@ -286,13 +292,13 @@ async def open_ad_provider(callback: CallbackQuery) -> None:
         [
             [
                 InlineKeyboardButton(
-                    text=nav.BACK.label,
+                    text="⬅️ Рекламные каналы",
                     callback_data=f"cpa:home:{business_token}",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text=nav.HOME.label,
+                    text=nav.MAIN_MENU_LABEL,
                     callback_data=f"cpj:home:{business_token}",
                 )
             ],
@@ -340,7 +346,12 @@ async def open_ad_promotion_slots(callback: CallbackQuery) -> None:
         ]
         for slot in open_slots[:10]
     ]
-    rows.extend(_owner_navigation_rows(business_token))
+    rows.extend(
+        _owner_navigation_rows(
+            business_token,
+            back_label="⬅️ К рекламному кабинету",
+        )
+    )
 
     await callback.answer()
     if not open_slots:
@@ -390,13 +401,13 @@ async def connect_yandex_direct(callback: CallbackQuery) -> None:
                 ],
                 [
                     InlineKeyboardButton(
-                        text=nav.BACK.label,
+                        text="Вернуться",
                         callback_data=f"cpa:home:{business_token}",
                     )
                 ],
                 [
                     InlineKeyboardButton(
-                        text=nav.HOME.label,
+                        text=nav.MAIN_MENU_LABEL,
                         callback_data=f"cpj:home:{business_token}",
                     )
                 ],
