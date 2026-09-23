@@ -81,7 +81,13 @@ def _receipt_noun(receipt: CreativeGenerationReceipt | None) -> str:
     return "видео" if _receipt_kind(receipt) == "video" else "картинка"
 
 
-def _menu_rows(token: str, active: CreativeGenerationReceipt | None = None):
+def _menu_rows(
+    token: str,
+    active: CreativeGenerationReceipt | None = None,
+    *,
+    image_ready: bool = True,
+    video_ready: bool = True,
+):
     rows: list[list[tuple[str, str]]] = []
     if active is not None:
         label = (
@@ -122,8 +128,18 @@ def _menu_rows(token: str, active: CreativeGenerationReceipt | None = None):
             rows.append([("✏️ Изменить описание", edit_callback)])
             rows.append([(alternate_label, alternate_callback)])
     else:
-        rows.append([("✨ Создать картинку", f"cpc:new:{token}")])
-        rows.append([("🎬 Создать видео", f"cpc:video:{token}")])
+        rows.append([
+            (
+                "✨ Создать картинку" if image_ready else "⚠️ Картинки недоступны",
+                f"cpc:new:{token}" if image_ready else f"cpc:status:{token}:image",
+            )
+        ])
+        rows.append([
+            (
+                "🎬 Создать видео" if video_ready else "⚠️ Видео недоступно",
+                f"cpc:video:{token}" if video_ready else f"cpc:status:{token}:video",
+            )
+        ])
     rows.extend(
         [
             [("🚀 Картинка для рекламы", f"cpo:start:{token}")],
@@ -186,12 +202,35 @@ async def send_creative_studio_menu(
     actor.assert_can_manage_promotions()
     active = await _active(actor)
     token = control._uuid_token(business_id)
+    country_code = os.getenv("VISUAL_DEPLOYMENT_COUNTRY", "")
+    try:
+        image_ready, video_ready = await asyncio.gather(
+            asyncio.to_thread(
+                visual_generation_ready,
+                kind="image",
+                country_code=country_code,
+            ),
+            asyncio.to_thread(
+                visual_generation_ready,
+                kind="video",
+                country_code=country_code,
+            ),
+        )
+    except VisualCreativeError:
+        image_ready = False
+        video_ready = False
+    status_lines = (
+        f"Картинки: {'✅ генератор подключён' if image_ready else '⚠️ генератор недоступен'}\n"
+        f"Видео: {'✅ генератор подключён' if video_ready else '⚠️ генератор недоступен'}"
+    )
     if active is None:
         body = (
             "🎨 Картинки и видео\n\n"
-            "Выберите, что хотите создать — картинку или короткое видео. "
-            "Опишите результат обычными словами: ClientPlatform использует уже "
-            "подключённый генератор и сохранённый фирменный стиль бизнеса."
+            + status_lines
+            + "\n\nВыберите, что хотите создать — картинку или короткое видео. "
+            "Опишите результат обычными словами: "
+            "ClientPlatform сам использует доступный генератор и сохранённый "
+            "фирменный стиль бизнеса — выбирать модель вручную не нужно."
         )
     elif active.status == CreativeGenerationReceiptStatus.PREPARED:
         body = (
@@ -212,7 +251,47 @@ async def send_creative_studio_menu(
             "У Вас уже есть незавершённая генерация. ClientPlatform продолжит именно "
             "её — новый платный job автоматически не создаётся."
         )
-    await message.answer(body, reply_markup=_menu_rows(token, active))
+    await message.answer(
+        body,
+        reply_markup=_menu_rows(
+            token,
+            active,
+            image_ready=image_ready,
+            video_ready=video_ready,
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpc:status:"))
+async def creative_provider_status(callback: CallbackQuery) -> None:
+    _, _, token, kind = str(callback.data).split(":", 3)
+    try:
+        await _actor_for_callback(callback, token)
+        country_code = os.getenv("VISUAL_DEPLOYMENT_COUNTRY", "")
+        ready = await asyncio.to_thread(
+            visual_generation_ready,
+            kind=kind,
+            country_code=country_code,
+        )
+    except (TypeError, ValueError, TenantPermissionDenied):
+        await callback.answer("Не удалось проверить генератор", show_alert=True)
+        return
+    except VisualCreativeError:
+        await callback.answer("Не удалось проверить генератор", show_alert=True)
+        return
+    noun = "видео" if kind == "video" else "картинок"
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        (
+            f"✅ Генератор {noun} подключён и доступен."
+            if ready
+            else f"⚠️ Генератор {noun} сейчас не подключён к production-шлюзу. "
+            "Платный AI-вызов не будет запущен."
+        ),
+        reply_markup=control._keyboard(
+            [[("⬅️ К картинкам и видео", f"cpc:open:{token}")]]
+        ),
+    )
 
 
 @router.callback_query(F.data.startswith("cpc:open:"))

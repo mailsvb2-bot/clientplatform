@@ -524,7 +524,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         ad_labels = await labels_for(one_click.open_ad_tools, "cpo:ads:business-1")
         self.assertIn("🚀 Найти новых клиентов", ad_labels)
         self.assertNotIn("🚀 Получить клиентов", ad_labels)
-        self.assertIn("📣 Яндекс Директ", ad_labels)
+        self.assertIn("📣 Рекламные каналы", ad_labels)
 
     def test_more_menu_filters_groups_by_canonical_permissions(self):
         def labels(role: PlatformRole) -> list[str]:
