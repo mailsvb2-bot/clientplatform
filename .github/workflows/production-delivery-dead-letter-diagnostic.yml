@@ -1,0 +1,144 @@
+name: ClientPlatform Production Delivery Dead Letter Diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clientplatform-production-delivery-dead-letter-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    env:
+      SSH_HOST: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_HOST }}
+      SSH_USER: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_KNOWN_HOSTS }}
+      SSH_PORT_SECRET: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_PORT }}
+
+    steps:
+      - name: Require dedicated ClientPlatform SSH credentials
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${SSH_HOST:?CLIENTPLATFORM_PRODUCTION_SSH_HOST is required}"
+          : "${SSH_USER:?CLIENTPLATFORM_PRODUCTION_SSH_USER is required}"
+          : "${SSH_PRIVATE_KEY:?CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY is required}"
+          : "${SSH_KNOWN_HOSTS:?CLIENTPLATFORM_PRODUCTION_SSH_KNOWN_HOSTS is required}"
+          SSH_PORT="${SSH_PORT_SECRET:-22}"
+          case "$SSH_PORT" in ''|*[!0-9]*) exit 2 ;; esac
+          if [ "$SSH_PORT" -lt 1 ] || [ "$SSH_PORT" -gt 65535 ]; then exit 2; fi
+          echo "SSH_PORT=$SSH_PORT" >> "$GITHUB_ENV"
+
+      - name: Configure pinned production SSH identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/clientplatform-production-ssh-key"
+          known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$known_hosts"
+          chmod 600 "$key" "$known_hosts"
+          ssh-keygen -y -f "$key" >/dev/null
+
+      - name: Read sanitized production delivery dead letters
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/clientplatform-production-ssh-key"
+          known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
+          ssh \
+            -p "$SSH_PORT" \
+            -i "$key" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$known_hosts" \
+            -o ConnectTimeout=10 \
+            "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          repo=/opt/clientplatform
+          cd "$repo"
+          privileged() {
+            if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi
+          }
+          app_id="$(privileged docker ps --filter name=clientplatform-production-app-1 --format '{{.ID}}' | head -n1)"
+          if [ -z "$app_id" ]; then
+            echo "CLIENTPLATFORM_DELIVERY_DIAGNOSTIC_FAILED:app_container_missing"
+            exit 20
+          fi
+          privileged docker exec -i "$app_id" python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          from services.db import get_db_ro
+
+          def error_class(raw: object) -> str:
+              text = " ".join(str(raw or "").lower().split())
+              checks = (
+                  ("rate_limited", ("429", "too many requests", "rate limit")),
+                  ("forbidden", ("403", "forbidden", "access denied")),
+                  ("not_found", ("404", "not found", "chat not found", "user not found")),
+                  ("blocked", ("blocked", "bot was blocked", "user blocked")),
+                  ("timeout", ("timeout", "timed out")),
+                  ("network", ("network", "connection", "dns", "resolve", "tls")),
+                  ("invalid_payload", ("bad request", "invalid", "validation")),
+              )
+              for label, markers in checks:
+                  if any(marker in text for marker in markers):
+                      return label
+              return "other" if text else "empty"
+
+          with get_db_ro() as conn:
+              rows = conn.execute(
+                  """
+                  SELECT platform,action,replies_json,attempts,last_error,created_at,updated_at
+                  FROM messenger_delivery_outbox
+                  WHERE status='dead'
+                  ORDER BY created_at,id
+                  """
+              ).fetchall()
+
+          print(f"CLIENTPLATFORM_DELIVERY_DEAD_LETTER_SUMMARY count={len(rows)}")
+          for index, row in enumerate(rows, 1):
+              try:
+                  replies = json.loads(str(row["replies_json"] or "[]"))
+              except (TypeError, ValueError, json.JSONDecodeError):
+                  replies = []
+              if not isinstance(replies, list):
+                  replies = []
+              kinds = []
+              text_lengths = []
+              for item in replies:
+                  if not isinstance(item, dict):
+                      continue
+                  kinds.append(str(item.get("kind") or "text")[:24])
+                  text_lengths.append(len(str(item.get("text") or "")))
+              raw_error = str(row["last_error"] or "")
+              digest = hashlib.sha256(raw_error.encode("utf-8", "replace")).hexdigest()[:12]
+              payload = {
+                  "row": index,
+                  "platform": str(row["platform"] or ""),
+                  "action": str(row["action"] or "")[:120],
+                  "attempts": int(row["attempts"] or 0),
+                  "created_at": str(row["created_at"] or ""),
+                  "updated_at": str(row["updated_at"] or ""),
+                  "error_class": error_class(raw_error),
+                  "error_digest": digest,
+                  "reply_count": len(replies),
+                  "reply_kinds": kinds[:8],
+                  "reply_text_lengths": text_lengths[:8],
+              }
+              print(
+                  "CLIENTPLATFORM_DELIVERY_DEAD_LETTER:"
+                  + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+              )
+          PY
+          REMOTE
