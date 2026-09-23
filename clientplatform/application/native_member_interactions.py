@@ -1681,7 +1681,7 @@ def _with_parent_navigation(
         back_label = nav.BACK.label
     navigation = [_button(back_label, parent_command)]
     if total + 2 <= 10:
-        navigation.append(_button(nav.HOME.label, "cpm:menu"))
+        navigation.append(_button(nav.MAIN_MENU_LABEL, "cpm:menu"))
     rows.append(tuple(navigation))
     return CustomerInteractionMessage(text=message.text, rows=tuple(rows))
 
