@@ -47,6 +47,7 @@ from clientplatform.domain.ad_connections import (
 from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
 from clientplatform.integrations.yandex_direct import YandexDirectError
+from clientplatform.presentation import owner_navigation as nav
 from clientplatform.presentation.visual_generation import (
     visual_failure_message,
     visual_provider_unavailable_message,
@@ -102,6 +103,19 @@ def _promotion_link(username: str, source_token: str) -> str:
 
 def _active_connections(connections):
     return [item for item in connections if item.status == AdConnectionStatus.ACTIVE]
+
+
+def _owner_navigation_rows(
+    business_token: str,
+    *,
+    back_callback: str | None = None,
+) -> list[list[tuple[str, str]]]:
+    """Return the canonical Telegram owner escape footer for notice/result screens."""
+
+    return [
+        [(nav.BACK.label, back_callback or f"cpa:home:{business_token}")],
+        [(nav.HOME.label, f"cpj:home:{business_token}")],
+    ]
 
 
 def _visual_wait_seconds() -> int:
@@ -191,6 +205,12 @@ async def _workspace(callback: CallbackQuery, *, business_token: str) -> None:
             [("⬅️ Получить клиентов", f"cpj:promote:{business_token}")],
         ]
     )
+    rows.extend(
+        _owner_navigation_rows(
+            business_token,
+            back_callback=f"cpo:ads:{business_token}",
+        )
+    )
 
     if active:
         next_step = (
@@ -262,12 +282,20 @@ async def open_ad_provider(callback: CallbackQuery) -> None:
             action = "Открыть Telegram Ads"
         rows.append([InlineKeyboardButton(text=action, url=channel.public_url)])
 
-    rows.append(
+    rows.extend(
         [
-            InlineKeyboardButton(
-                text="⬅️ Рекламные каналы",
-                callback_data=f"cpa:home:{business_token}",
-            )
+            [
+                InlineKeyboardButton(
+                    text=nav.BACK.label,
+                    callback_data=f"cpa:home:{business_token}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=nav.HOME.label,
+                    callback_data=f"cpj:home:{business_token}",
+                )
+            ],
         ]
     )
     state = (
@@ -312,7 +340,7 @@ async def open_ad_promotion_slots(callback: CallbackQuery) -> None:
         ]
         for slot in open_slots[:10]
     ]
-    rows.append([("⬅️ К рекламному кабинету", f"cpa:home:{business_token}")])
+    rows.extend(_owner_navigation_rows(business_token))
 
     await callback.answer()
     if not open_slots:
@@ -362,8 +390,14 @@ async def connect_yandex_direct(callback: CallbackQuery) -> None:
                 ],
                 [
                     InlineKeyboardButton(
-                        text="Вернуться",
+                        text=nav.BACK.label,
                         callback_data=f"cpa:home:{business_token}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=nav.HOME.label,
+                        callback_data=f"cpj:home:{business_token}",
                     )
                 ],
             ]
@@ -414,6 +448,7 @@ async def choose_ad_connection(
         for index, item in enumerate(active)
     ]
     rows.append([("Отмена", f"cpa:home:{business_token}")])
+    rows.extend(_owner_navigation_rows(business_token))
     await callback.answer()
     await _message(callback).answer(
         "Какой личный рекламный кабинет использовать?",
@@ -454,7 +489,8 @@ async def choose_managed_yandex_connection(
         "• Москва — 213\n"
         "• Санкт-Петербург — 2\n\n"
         "Показы по всей стране автоматически не включаются: география должна быть "
-        "задана явно."
+        "задана явно.",
+        reply_markup=control._keyboard(_owner_navigation_rows(str(data["business_token"]))),
     )
 
 
@@ -562,7 +598,8 @@ async def request_ad_regions(callback: CallbackQuery, state: FSMContext) -> None
         "• Москва — 213\n"
         "• Санкт-Петербург — 2\n\n"
         "Показы по всей стране автоматически не включаются: география должна быть "
-        "задана явно."
+        "задана явно.",
+        reply_markup=control._keyboard(_owner_navigation_rows(str(data["business_token"]))),
     )
 
 
@@ -600,15 +637,27 @@ async def prepare_ad_publication(message: Message, state: FSMContext) -> None:
                 source_url=str(data["source_url"]),
             )
     except (KeyError, TypeError, ValueError):
+        business_token = str(data.get("business_token") or "").strip()
         await message.answer(
             "Не удалось распознать регион. Введите положительный ID, например 47, "
-            "или несколько ID через запятую."
+            "или несколько ID через запятую.",
+            reply_markup=(
+                control._keyboard(_owner_navigation_rows(business_token))
+                if business_token
+                else None
+            ),
         )
         return
     except (AdConnectionError, YandexDirectError):
+        business_token = str(data.get("business_token") or "").strip()
         await message.answer(
             "Не удалось подготовить рекламный черновик в Яндекс Директе. "
-            "Проверьте состояние подключения кабинета и попробуйте ещё раз."
+            "Проверьте состояние подключения кабинета и попробуйте ещё раз.",
+            reply_markup=(
+                control._keyboard(_owner_navigation_rows(business_token))
+                if business_token
+                else None
+            ),
         )
         return
     await state.update_data(
@@ -633,6 +682,7 @@ async def prepare_ad_publication(message: Message, state: FSMContext) -> None:
                 [("🎬 Создать видео", "cpa:creative:video")],
                 [(_CONFIRM_DRAFT_LABEL, "cpa:confirm")],
                 [("Отмена", f"cpa:home:{data['business_token']}")],
+                *_owner_navigation_rows(str(data["business_token"])),
             ]
         ),
     )
@@ -706,7 +756,10 @@ async def _render_ad_visual(
             await state.update_data(creative_job_id="")
             await target.answer(
                 "Визуал создан, но не удалось безопасно получить файл. "
-                "Текстовый черновик сохранён."
+                "Текстовый черновик сохранён.",
+                reply_markup=control._keyboard(
+                    _owner_navigation_rows(str(data["business_token"]))
+                ),
             )
             return
         await state.update_data(creative_job_id="")
@@ -723,7 +776,10 @@ async def _render_ad_visual(
             "Визуал готов. Текущий Yandex Direct-контур создаёт текстовый DRAFT; "
             "файл визуала пока остаётся отдельным материалом для владельца.",
             reply_markup=control._keyboard(
-                [[(_CONFIRM_DRAFT_LABEL, "cpa:confirm")]]
+                [
+                    [(_CONFIRM_DRAFT_LABEL, "cpa:confirm")],
+                    *_owner_navigation_rows(str(data["business_token"])),
+                ]
             ),
         )
         return
@@ -736,6 +792,7 @@ async def _render_ad_visual(
                 [
                     [("🔄 Проверить визуал", "cpa:creative:refresh")],
                     [("➡️ Продолжить без визуала", "cpa:creative:skip")],
+                    *_owner_navigation_rows(str(data["business_token"])),
                 ]
             ),
         )
@@ -744,7 +801,10 @@ async def _render_ad_visual(
     await target.answer(
         visual_failure_message(job)
         + "\n\nТекстовый рекламный черновик уже готов — "
-        "можно повторить попытку позже или продолжить без визуала."
+        "можно повторить попытку позже или продолжить без визуала.",
+        reply_markup=control._keyboard(
+            _owner_navigation_rows(str(data["business_token"]))
+        ),
     )
 
 
@@ -790,7 +850,10 @@ async def refresh_ad_visual(callback: CallbackQuery, state: FSMContext) -> None:
             await state.update_data(creative_job_id="")
             await target.answer(
                 "Визуал создан, но файл получить не удалось. Можно продолжить с "
-                "текстовым черновиком."
+                "текстовым черновиком.",
+                reply_markup=control._keyboard(
+                    _owner_navigation_rows(str(data["business_token"]))
+                ),
             )
             return
         await state.update_data(creative_job_id="")
@@ -807,7 +870,10 @@ async def refresh_ad_visual(callback: CallbackQuery, state: FSMContext) -> None:
             "Визуал готов. Он не прикрепляется к Yandex Direct автоматически этим "
             "контуром.",
             reply_markup=control._keyboard(
-                [[(_CONFIRM_DRAFT_LABEL, "cpa:confirm")]]
+                [
+                    [(_CONFIRM_DRAFT_LABEL, "cpa:confirm")],
+                    *_owner_navigation_rows(str(data["business_token"])),
+                ]
             ),
         )
     elif job.status in {"queued", "running"}:
@@ -817,6 +883,7 @@ async def refresh_ad_visual(callback: CallbackQuery, state: FSMContext) -> None:
                 [
                     [("🔄 Проверить визуал", "cpa:creative:refresh")],
                     [("➡️ Продолжить без визуала", "cpa:creative:skip")],
+                    *_owner_navigation_rows(str(data["business_token"])),
                 ]
             ),
         )
@@ -824,7 +891,10 @@ async def refresh_ad_visual(callback: CallbackQuery, state: FSMContext) -> None:
         await state.update_data(creative_job_id="")
         await target.answer(
             visual_failure_message(job)
-            + "\n\nТекстовый рекламный черновик сохранён."
+            + "\n\nТекстовый рекламный черновик сохранён.",
+            reply_markup=control._keyboard(
+                _owner_navigation_rows(str(data["business_token"]))
+            ),
         )
 
 
@@ -884,7 +954,8 @@ async def confirm_yandex_publication(
                         "📣 Открыть рекламные кабинеты",
                         f"cpa:home:{data['business_token']}",
                     )
-                ]
+                ],
+                *_owner_navigation_rows(str(data["business_token"])),
             ]
         ),
     )
