@@ -760,7 +760,7 @@ def _allowed(actor, check) -> bool:
     return True
 
 
-_POPUP_HOME_LABEL = "🏠 В главное меню"
+_POPUP_HOME_LABEL = nav.MAIN_MENU.label
 
 
 def _popup_navigation_rows(
