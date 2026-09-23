@@ -26,7 +26,7 @@ def test_production_max_entry_repair_is_manual_fail_closed_and_secret_safe() -> 
         "russian_trusted_root_ca.crt",
         "russian_trusted_sub_ca.crt",
         "Remove temporary MAX token material",
-        "MAX_BOT_TOKEN=",
+        '"MAX_BOT_TOKEN": token',
         "clientplatform_recover_max_production_env.py",
         "scripts/register_max_webhook.py --apply",
         "scripts/max_provider_audit.py",
