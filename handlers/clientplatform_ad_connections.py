@@ -490,7 +490,9 @@ async def choose_managed_yandex_connection(
         "• Санкт-Петербург — 2\n\n"
         "Показы по всей стране автоматически не включаются: география должна быть "
         "задана явно.",
-        reply_markup=control._keyboard(_owner_navigation_rows(str(data["business_token"]))),
+        reply_markup=control._keyboard(
+            _owner_navigation_rows(str(data["business_token"]))
+        ),
     )
 
 
@@ -529,9 +531,7 @@ async def choose_yandex_campaign(
         rows = [[("🔄 Повторить", str(callback.data or "cpa:conn:0"))]]
         business_token = str(data.get("business_token") or "").strip()
         if business_token:
-            rows.append(
-                [("⬅️ К рекламному кабинету", f"cpa:home:{business_token}")]
-            )
+            rows.extend(_owner_navigation_rows(business_token))
         await _message(callback).answer(
             "Не удалось получить кампании Яндекса. Попробуйте ещё раз. "
             "Если ошибка повторится, обновите подключение рекламного кабинета.",
@@ -543,9 +543,7 @@ async def choose_yandex_campaign(
         business_token = str(data.get("business_token") or "").strip()
         rows = []
         if business_token:
-            rows.append(
-                [("⬅️ К рекламному кабинету", f"cpa:home:{business_token}")]
-            )
+            rows.extend(_owner_navigation_rows(business_token))
         await _message(callback).answer(
             "В кабинете нет подходящей активной текстовой кампании.",
             reply_markup=control._keyboard(rows),
@@ -563,6 +561,7 @@ async def choose_yandex_campaign(
         for index, item in enumerate(eligible)
     ]
     rows.append([("Отмена", f"cpa:home:{data['business_token']}")])
+    rows.extend(_owner_navigation_rows(str(data["business_token"])))
     await _message(callback).answer(
         "В какой существующей кампании создать рекламный черновик?\n\n"
         "ClientPlatform не меняет бюджет и стратегию кампании и не отправляет "
@@ -599,7 +598,9 @@ async def request_ad_regions(callback: CallbackQuery, state: FSMContext) -> None
         "• Санкт-Петербург — 2\n\n"
         "Показы по всей стране автоматически не включаются: география должна быть "
         "задана явно.",
-        reply_markup=control._keyboard(_owner_navigation_rows(str(data["business_token"]))),
+        reply_markup=control._keyboard(
+            _owner_navigation_rows(str(data["business_token"]))
+        ),
     )
 
 
