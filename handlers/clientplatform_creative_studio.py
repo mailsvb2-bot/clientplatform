@@ -378,6 +378,7 @@ async def ask_creative_video_prompt(callback: CallbackQuery, state: FSMContext) 
 @router.message(ClientPlatformCreativeStudioState.waiting_prompt)
 async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
+    token = str(data.get("creative_business_token") or "").strip()
     try:
         business_id = str(data["creative_business_id"])
         token = str(data["creative_business_token"])
@@ -391,7 +392,11 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
         await state.clear()
         await message.answer(
             "Сессия устарела. Откройте «Картинки и креативы» ещё раз.",
-            reply_markup=control._keyboard(_studio_navigation_rows(token)),
+            reply_markup=(
+                control._keyboard(_studio_navigation_rows(token))
+                if token
+                else None
+            ),
         )
         return
     except (TypeError, ValueError, TenantPermissionDenied):
