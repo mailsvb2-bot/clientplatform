@@ -22,6 +22,7 @@ from clientplatform.application.ad_connections import (
     yandex_direct_provider_configured,
 )
 from clientplatform.application.promotions import create_slot_promotion, promotion_public_url
+from clientplatform.application.public_business_entry import public_business_entry_url
 from clientplatform.domain.ad_connections import AdConnectionError, AdConnectionStatus
 from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
@@ -994,18 +995,45 @@ async def _send_business_more_tools(message: ClientPlatformMessageTarget, *, tok
 
 async def _send_website_tools(message: ClientPlatformMessageTarget, *, token: str, actor) -> None:
     actor.assert_can_manage_business()
+    public_base = str(getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "") or "").strip()
+    try:
+        web_url = public_business_entry_url(
+            public_base_url=public_base,
+            business_id=actor.business_id,
+        )
+    except ValueError:
+        web_url = None
+
+    if web_url is None:
+        await message.answer(
+            "🌐 Сайт / лендинг\n\n"
+            "ClientPlatform умеет сам создать веб-страницу бизнеса и принимать через неё заявки, "
+            "но публичный HTTPS-адрес этой установки сейчас не подтверждён. Ничего не считаю подключённым.",
+            reply_markup=control._keyboard(
+                [
+                    [(nav.INTEGRATIONS.label, f"cpo:integrations:{token}")],
+                    *_popup_navigation_rows(token, back_callback=f"cpo:entrypoints:{token}"),
+                ]
+            ),
+        )
+        return
+
     await message.answer(
         "🌐 Сайт / лендинг\n\n"
-        "ClientPlatform подключает сайт как точку входа клиентов, а не как отдельный бизнес. "
-        "Для обычного сайта самый безопасный вариант — готовая страница записи ClientPlatform: "
-        "её постоянную ссылку можно поставить на кнопку «Записаться» или форму лендинга.\n\n"
-        "Если сайт или CRM умеет работать через API/webhook, такое подключение относится к "
-        "«CRM и сервисы». ClientPlatform не показывает статус «подключено», пока реальная связь не подтверждена.",
-        reply_markup=control._keyboard(
-            [
-                [(nav.PUBLIC_PAGE.label, f"cpj:page:{token}")],
-                [(nav.INTEGRATIONS.label, f"cpo:integrations:{token}")],
-                *_popup_navigation_rows(token, back_callback=f"cpo:entrypoints:{token}"),
+        "ClientPlatform уже создал для этого бизнеса собственную веб-страницу заявки. "
+        "Она работает без отдельного сайта: заявка сразу создаёт клиента и обращение в ClientPlatform.\n\n"
+        f"Постоянная ссылка:\n{web_url}\n\n"
+        "Если у Вас уже есть сайт или лендинг, поставьте эту ссылку на кнопку «Записаться» "
+        "или «Оставить заявку». Для прямого API/webhook конкретной CRM используйте «CRM и сервисы».",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="🌐 Открыть веб-страницу бизнеса", url=web_url)],
+                [InlineKeyboardButton(text=nav.PUBLIC_PAGE.label, callback_data=f"cpj:page:{token}")],
+                [InlineKeyboardButton(text=nav.INTEGRATIONS.label, callback_data=f"cpo:integrations:{token}")],
+                [
+                    InlineKeyboardButton(text=nav.BACK.label, callback_data=f"cpo:entrypoints:{token}"),
+                    InlineKeyboardButton(text=nav.MAIN_MENU_LABEL, callback_data=f"cpj:home:{token}"),
+                ],
             ]
         ),
     )
