@@ -227,7 +227,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("только те быстрые действия", answer_text)
         self.assertNotIn("Если Вам нужно:", answer_text)
         self.assertNotIn("🧭 Что можно сделать", answer_text)
-        self.assertNotIn("💬 Подключить мессенджеры", labels)
+        self.assertNotIn("💬 Каналы общения", labels)
         self.assertNotIn("📣 Реклама и продвижение", labels)
 
     def test_all_capabilities_menu_falls_back_to_quick_actions_without_public_cockpit(self) -> None:
