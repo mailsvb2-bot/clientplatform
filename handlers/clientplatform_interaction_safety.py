@@ -25,6 +25,7 @@ from aiogram.types import (
 
 from clientplatform.application.tenancy import archive_business, rename_business
 from clientplatform.domain.activity import BusinessProfileStatus, CapabilityStatus
+from clientplatform.presentation import owner_navigation as nav
 
 control = importlib.import_module(".clientplatform_control", __package__)
 
@@ -775,7 +776,7 @@ async def cancel_business_archive(callback: CallbackQuery, state: FSMContext) ->
         "Удаление организации отменено.",
         reply_markup=control._keyboard(
             [
-                [("⚙️ Настройки организации", f"cpo:settings:{token}")],
+                [(nav.BUSINESS_SETTINGS.label, f"cpo:settings:{token}")],
                 *_safety_navigation_rows(
                     token,
                     back_callback=f"cpo:settings:{token}",
