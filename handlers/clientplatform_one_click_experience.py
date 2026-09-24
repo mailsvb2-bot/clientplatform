@@ -351,7 +351,7 @@ async def _prepare_draft(
                 ],
                 [(ad._CONFIRM_DRAFT_LABEL, "cpa:confirm")],
                 [("✏️ Изменить вручную", f"cpa:promote:{data['business_token']}")],
-                *_notice_navigation_rows(
+                *_popup_navigation_rows(
                     str(data["business_token"]),
                     back_callback=f"cpa:home:{data['business_token']}",
                 ),
@@ -389,7 +389,7 @@ async def _choose_connection(
                 [("Нижний Новгород", "cpo:region:47"), ("Москва", "cpo:region:213")],
                 [("Санкт-Петербург", "cpo:region:2")],
                 [("Другой регион", "cpo:region:other")],
-                *_notice_navigation_rows(
+                *_popup_navigation_rows(
                     str(data["business_token"]),
                     back_callback=f"cpa:home:{data['business_token']}",
                 ),
@@ -730,7 +730,7 @@ async def choose_one_click_region(callback: CallbackQuery, state: FSMContext) ->
             "Напишите город: Москва, Нижний Новгород, Санкт-Петербург. "
             "Для другого города можно указать ID региона Яндекс Директа.",
             reply_markup=control._keyboard(
-                _notice_navigation_rows(
+                _popup_navigation_rows(
                     str(data["business_token"]),
                     back_callback=f"cpa:home:{data['business_token']}",
                 )
@@ -761,7 +761,7 @@ async def receive_one_click_region(message: Message, state: FSMContext) -> None:
             await message.answer(
                 "Напишите город или ID региона Яндекс Директа.",
                 reply_markup=control._keyboard(
-                    _notice_navigation_rows(
+                    _popup_navigation_rows(
                         str(data["business_token"]),
                         back_callback=f"cpa:home:{data['business_token']}",
                     )
