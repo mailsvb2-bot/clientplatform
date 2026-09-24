@@ -15,9 +15,9 @@ class DeployPublicTransportContractTests(unittest.TestCase):
         media_position = source.index("@media path /clientplatform/*")
         self.assertLess(route_position, media_position)
         ingress_block_start = source.rfind(
-            "@clientplatform_messenger_webhooks",
+            "@clientplatform_public_business",
             0,
-            route_position,
+            route_position + 1,
         )
         ingress_block_end = source.index("}", route_position)
         ingress_block = source[ingress_block_start:ingress_block_end]
