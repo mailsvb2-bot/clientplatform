@@ -36,7 +36,7 @@ def test_webinar_hub_entry_matches_canonical_event_funnel_roles() -> None:
         assert f"cpev:home:{_TOKEN}" in _callbacks(rows)
         assert f"cpev:new:{_TOKEN}" not in _callbacks(rows)
     assert f"cpev:home:{_TOKEN}" not in _callbacks(marketer_rows)
-    assert _callbacks(analyst_rows) == [f"cpo:more:{_TOKEN}"]
+    assert _callbacks(analyst_rows) == [f"cpo:more:{_TOKEN}", f"cpj:home:{_TOKEN}"]
     assert analyst_help == []
     assert any("воронку и автосообщения" in line for line in owner_help)
     assert any("воронку и автосообщения" in line for line in manager_help)
@@ -52,7 +52,7 @@ def test_webinar_hub_remains_visible_if_event_access_outlives_promotion_manageme
         top_rows = one_click._more_rows(_TOKEN, actor)
         rows, help_lines = one_click._content_tools_rows(_TOKEN, actor)
     assert f"cpo:content:{_TOKEN}" in _callbacks(top_rows)
-    assert _callbacks(rows) == [f"cpev:home:{_TOKEN}", f"cpo:more:{_TOKEN}"]
+    assert _callbacks(rows) == [f"cpev:home:{_TOKEN}", f"cpo:more:{_TOKEN}", f"cpj:home:{_TOKEN}"]
     assert any("воронку и автосообщения" in line for line in help_lines)
 
 
@@ -78,5 +78,5 @@ def test_event_hub_is_repeatable_navigation_but_creation_remains_a_mutation() ->
 
 def test_client_tools_hide_customer_actions_without_customer_record_access() -> None:
     rows, help_lines = one_click._client_tools_rows(_TOKEN, _actor(PlatformRole.MARKETER))
-    assert _callbacks(rows) == [f"cpo:more:{_TOKEN}"]
+    assert _callbacks(rows) == [f"cpo:more:{_TOKEN}", f"cpj:home:{_TOKEN}"]
     assert help_lines == []

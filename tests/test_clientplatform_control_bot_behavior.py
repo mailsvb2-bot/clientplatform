@@ -639,6 +639,8 @@ async def test_business_archive_prompt_is_owner_only_stale_safe_and_explicit(
     assert buttons == [
         ("🗑 Да, удалить организацию", f"cps:archive-confirm:{token}"),
         ("Отмена", f"cps:archive-cancel:{token}"),
+        ("⬅️ Назад", f"cpo:settings:{token}"),
+        ("🏠 В главное меню", f"cpj:home:{token}"),
     ]
     assert "cps:archive-cancel:" in safety._ONE_SHOT_PREFIXES
 

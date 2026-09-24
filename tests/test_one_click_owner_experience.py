@@ -216,6 +216,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
                 "📈 Продвижение и контент",
                 "⚙️ Настройки организации",
                 "⬅️ Назад",
+                "🏠 В главное меню",
             ],
         )
         self.assertEqual(
@@ -690,6 +691,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
                 "📈 Продвижение и контент",
                 "⚙️ Настройки организации",
                 "⬅️ Назад",
+                "🏠 В главное меню",
             ],
         )
         buttons = {

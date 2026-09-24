@@ -162,7 +162,7 @@ class AdConnectionWorkspaceUxTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("Сейчас нет свободного времени", rendered)
         self.assertIn("разделе «Запись»", rendered)
-        self.assertEqual(labels, ["⬅️ К рекламному кабинету"])
+        self.assertEqual(labels, ["⬅️ К рекламному кабинету", "🏠 В главное меню"])
 
     async def test_create_ad_step_lists_open_slots_only_after_explicit_action(self) -> None:
         cb = callback("cpa:promote:business-token")

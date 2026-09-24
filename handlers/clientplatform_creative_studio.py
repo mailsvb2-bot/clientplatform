@@ -81,6 +81,13 @@ def _receipt_noun(receipt: CreativeGenerationReceipt | None) -> str:
     return "видео" if _receipt_kind(receipt) == "video" else "картинка"
 
 
+def _studio_navigation_rows(token: str) -> list[list[tuple[str, str]]]:
+    return [
+        [(nav.BACK.label, f"cpo:content:{token}")],
+        [("🏠 В главное меню", f"cpj:home:{token}")],
+    ]
+
+
 def _menu_rows(
     token: str,
     active: CreativeGenerationReceipt | None = None,
@@ -144,7 +151,7 @@ def _menu_rows(
         [
             [("🚀 Картинка для рекламы", f"cpo:start:{token}")],
             [("🎨 Фирменный стиль", f"cpb:open:{token}")],
-            [("🏠 Главная", f"cpj:home:{token}")],
+            *_studio_navigation_rows(token),
         ]
     )
     return control._keyboard(rows)
@@ -156,7 +163,7 @@ def _result_rows(token: str):
             [("✨ Создать ещё картинку", f"cpc:new:{token}")],
             [("🎬 Создать видео", f"cpc:video:{token}")],
             [("🚀 Перейти к рекламе", f"cpo:start:{token}")],
-            [("🏠 Главная", f"cpj:home:{token}")],
+            *_studio_navigation_rows(token),
         ]
     )
 
@@ -346,13 +353,15 @@ async def _ask_creative_prompt(
             "Какое видео создать?\n\n"
             "Опишите короткий ролик обычными словами, например: "
             "«спокойное вертикальное видео уютного кабинета психолога, "
-            "мягкое движение камеры, естественный свет, без текста»."
+            "мягкое движение камеры, естественный свет, без текста».",
+            reply_markup=control._keyboard(_studio_navigation_rows(token)),
         )
     else:
         await target.answer(
             "Какую картинку создать?\n\n"
             "Напишите обычными словами, например: «спокойная реалистичная фотография "
-            "кабинета психолога, светлая, без текста»."
+            "кабинета психолога, светлая, без текста».",
+            reply_markup=control._keyboard(_studio_navigation_rows(token)),
         )
 
 
@@ -369,6 +378,7 @@ async def ask_creative_video_prompt(callback: CallbackQuery, state: FSMContext) 
 @router.message(ClientPlatformCreativeStudioState.waiting_prompt)
 async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
+    token = str(data.get("creative_business_token") or "").strip()
     try:
         business_id = str(data["creative_business_id"])
         token = str(data["creative_business_token"])
@@ -381,13 +391,19 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
     except KeyError:
         await state.clear()
         await message.answer(
-            "Сессия устарела. Откройте «Картинки и креативы» ещё раз."
+            "Сессия устарела. Откройте «Картинки и креативы» ещё раз.",
+            reply_markup=(
+                control._keyboard(_studio_navigation_rows(token))
+                if token
+                else None
+            ),
         )
         return
     except (TypeError, ValueError, TenantPermissionDenied):
         await message.answer(
             "Опишите картинку или видео одним сообщением до 1500 символов. "
-            "Технический промпт составлять не нужно."
+            "Технический промпт составлять не нужно.",
+            reply_markup=control._keyboard(_studio_navigation_rows(token)),
         )
         return
     try:
@@ -398,7 +414,10 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
             country_code=country_code,
         )
         if not ready:
-            await message.answer(visual_provider_unavailable_message(kind))
+            await message.answer(
+                visual_provider_unavailable_message(kind),
+                reply_markup=control._keyboard(_studio_navigation_rows(token)),
+            )
             return
         brand = await asyncio.to_thread(load_goal_visual_brand, actor=actor)
         brand_context = brand.prompt_context()

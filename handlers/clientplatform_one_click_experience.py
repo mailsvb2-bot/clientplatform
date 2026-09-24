@@ -174,7 +174,7 @@ async def _fallback_failure(
     await control._callback_message(callback).answer(
         f"{reason}\n\nНе удалось собрать запасной вариант автоматически.",
         reply_markup=control._keyboard(
-            [[("🏠 В кабинет", f"cpj:home:{business_token}")]]
+            _popup_navigation_rows(business_token, back_callback=f"cpo:ads:{business_token}")
         ),
     )
 
@@ -193,7 +193,10 @@ async def _fallback(
         await control._callback_message(callback).answer(
             "Свободное время уже изменилось. Проверю всё заново по одной кнопке.",
             reply_markup=control._keyboard(
-                [[("🔄 Проверить снова", goal_contract.ACQUIRE_CLIENTS.callback(business_token))]]
+                [
+                    [("🔄 Проверить снова", goal_contract.ACQUIRE_CLIENTS.callback(business_token))],
+                    *_popup_navigation_rows(business_token, back_callback=f"cpo:ads:{business_token}"),
+                ]
             ),
         )
         return
@@ -243,9 +246,13 @@ async def _fallback(
                 ],
                 [
                     InlineKeyboardButton(
-                        text="🏠 В кабинет",
+                        text=nav.BACK.label,
+                        callback_data=f"cpo:ads:{business_token}",
+                    ),
+                    InlineKeyboardButton(
+                        text=_POPUP_HOME_LABEL,
                         callback_data=f"cpj:home:{business_token}",
-                    )
+                    ),
                 ],
             ]
         ),
@@ -265,7 +272,7 @@ async def _draft_failure(
         reply_markup=control._keyboard(
             [
                 [("🔄 Попробовать снова", goal_contract.ACQUIRE_CLIENTS.callback(business_token))],
-                [("🏠 В кабинет", f"cpj:home:{business_token}")],
+                *_popup_navigation_rows(business_token, back_callback=f"cpo:ads:{business_token}"),
             ]
         ),
     )
@@ -344,7 +351,10 @@ async def _prepare_draft(
                 ],
                 [(ad._CONFIRM_DRAFT_LABEL, "cpa:confirm")],
                 [("✏️ Изменить вручную", f"cpa:promote:{data['business_token']}")],
-                [("🏠 В кабинет", f"cpj:home:{data['business_token']}")],
+                *_popup_navigation_rows(
+                    str(data["business_token"]),
+                    back_callback=f"cpa:home:{data['business_token']}",
+                ),
             ]
         ),
     )
@@ -379,7 +389,10 @@ async def _choose_connection(
                 [("Нижний Новгород", "cpo:region:47"), ("Москва", "cpo:region:213")],
                 [("Санкт-Петербург", "cpo:region:2")],
                 [("Другой регион", "cpo:region:other")],
-                [("🏠 Отмена", f"cpj:home:{data['business_token']}")],
+                *_popup_navigation_rows(
+                    str(data["business_token"]),
+                    back_callback=f"cpa:home:{data['business_token']}",
+                ),
             ]
         ),
     )
@@ -487,9 +500,13 @@ async def _start_slot_ad(
                     ],
                     [
                         InlineKeyboardButton(
-                            text="🏠 В кабинет",
+                            text=nav.BACK.label,
+                            callback_data=f"cpo:ads:{token}",
+                        ),
+                        InlineKeyboardButton(
+                            text=_POPUP_HOME_LABEL,
                             callback_data=f"cpj:home:{token}",
-                        )
+                        ),
                     ],
                 ]
             ),
@@ -527,7 +544,7 @@ async def _start_slot_ad(
                 ]
                 for index, item in enumerate(active)
             ]
-            + [[("🏠 Отмена", f"cpj:home:{token}")]],
+            + _popup_navigation_rows(token, back_callback=f"cpo:ads:{token}"),
         ),
     )
 
@@ -547,7 +564,7 @@ async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> N
             reply_markup=control._keyboard(
                 [
                     [("🧰 Мои услуги", f"cpj:services:{token}")],
-                    [(nav.BACK.label, f"cpj:home:{token}")],
+                    *_popup_navigation_rows(token, back_callback=f"cpo:ads:{token}"),
                 ]
             ),
         )
@@ -565,7 +582,7 @@ async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> N
                 ]
                 for offering in offerings
             ]
-            + [[(nav.BACK.label, f"cpj:home:{token}")]],
+            + _popup_navigation_rows(token, back_callback=f"cpo:ads:{token}"),
         ),
     )
 
@@ -624,6 +641,7 @@ async def choose_one_click_offering(callback: CallbackQuery, state: FSMContext) 
                 )
             ],
             [("⬅️ Другая услуга", f"cpo:start:{business_token}")],
+            *_popup_navigation_rows(business_token, back_callback=f"cpo:start:{business_token}"),
         ]
     )
     await control._callback_message(callback).answer(
@@ -710,7 +728,13 @@ async def choose_one_click_region(callback: CallbackQuery, state: FSMContext) ->
         await callback.answer()
         await control._callback_message(callback).answer(
             "Напишите город: Москва, Нижний Новгород, Санкт-Петербург. "
-            "Для другого города можно указать ID региона Яндекс Директа."
+            "Для другого города можно указать ID региона Яндекс Директа.",
+            reply_markup=control._keyboard(
+                _popup_navigation_rows(
+                    str(data["business_token"]),
+                    back_callback=f"cpa:home:{data['business_token']}",
+                )
+            ),
         )
         return
     regions = _REGIONS.get(raw)
@@ -734,7 +758,15 @@ async def receive_one_click_region(message: Message, state: FSMContext) -> None:
             if not regions or any(item <= 0 for item in regions):
                 raise ValueError
         except ValueError:
-            await message.answer("Напишите город или ID региона Яндекс Директа.")
+            await message.answer(
+                "Напишите город или ID региона Яндекс Директа.",
+                reply_markup=control._keyboard(
+                    _popup_navigation_rows(
+                        str(data["business_token"]),
+                        back_callback=f"cpa:home:{data['business_token']}",
+                    )
+                ),
+            )
             return
     await _prepare_draft(message, state, data=data, region_ids=regions)
 
@@ -746,6 +778,22 @@ def _allowed(actor, check) -> bool:
     except TenantPermissionDenied:
         return False
     return True
+
+
+_POPUP_HOME_LABEL = nav.MAIN_MENU_LABEL
+
+
+def _popup_navigation_rows(
+    token: str,
+    *,
+    back_callback: str,
+) -> list[list[tuple[str, str]]]:
+    """Return the standard escape row for callback-opened Telegram panels."""
+
+    return [[
+        (nav.BACK.label, back_callback),
+        (_POPUP_HOME_LABEL, f"cpj:home:{token}"),
+    ]]
 
 
 def _more_rows(token: str, actor) -> list[list[tuple[str, str]]]:
@@ -760,7 +808,7 @@ def _more_rows(token: str, actor) -> list[list[tuple[str, str]]]:
     if _allowed(actor, actor.assert_can_manage_promotions) or _event_funnel_visible(actor):
         rows.append([(nav.CONTENT_PROMOTION.label, f"cpo:content:{token}")])
     rows.append([(nav.BUSINESS_SETTINGS.label, f"cpo:settings:{token}")])
-    rows.append([(nav.BACK.label, f"cpj:home:{token}")])
+    rows.extend(_popup_navigation_rows(token, back_callback=f"cpj:home:{token}"))
     return rows
 
 
@@ -795,7 +843,7 @@ def _client_tools_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], 
     if allowed:
         rows.append([("🔎 Все клиенты", f"cpa:{token}:customer-list")])
         help_lines.append("• найти конкретного человека → «🔎 Все клиенты»")
-    rows.append([(nav.BACK.label, f"cpo:more:{token}")])
+    rows.extend(_popup_navigation_rows(token, back_callback=f"cpo:more:{token}"))
     return rows, help_lines
 
 
@@ -851,7 +899,7 @@ def _content_tools_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]],
         help_lines.append(
             f"• посмотреть вебинары, воронку и автосообщения → «{nav.EVENTS.label}»"
         )
-    rows.append([(nav.BACK.label, f"cpo:more:{token}")])
+    rows.extend(_popup_navigation_rows(token, back_callback=f"cpo:more:{token}"))
     return rows, help_lines
 
 async def _send_content_tools(message: ClientPlatformMessageTarget, *, token: str, actor) -> None:
@@ -887,7 +935,7 @@ def _settings_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], list
     if actor.role in _SETTINGS_SYSTEM_ROLES:
         rows.append([("🛠 Технические проверки", f"cpa:{token}:menu-system")])
         help_lines.append("• проверить техническое состояние → «🛠 Технические проверки»")
-    rows.append([(nav.BACK.label, f"cpo:more:{token}")])
+    rows.extend(_popup_navigation_rows(token, back_callback=f"cpo:more:{token}"))
     return rows, help_lines
 
 async def _send_settings_tools(message: ClientPlatformMessageTarget, *, token: str, actor) -> None:
@@ -906,7 +954,7 @@ async def _send_work_tools(message: ClientPlatformMessageTarget, *, token: str, 
     ):
         await message.answer(
             "📅 Услуги и запись\n\nДля Вашей роли этот раздел недоступен.",
-            reply_markup=control._keyboard([[(nav.BACK.label, f"cpo:more:{token}")]]),
+            reply_markup=control._keyboard(_popup_navigation_rows(token, back_callback=f"cpo:more:{token}")),
         )
         return
     await message.answer(
@@ -920,7 +968,7 @@ async def _send_work_tools(message: ClientPlatformMessageTarget, *, token: str, 
                 [("🧰 Мои услуги", f"cpj:services:{token}")],
                 [("📅 Мой календарь", f"cpj:calendar:{token}:30")],
                 [("🔗 Моя страница", f"cpj:page:{token}")],
-                [(nav.BACK.label, f"cpo:more:{token}")],
+                *_popup_navigation_rows(token, back_callback=f"cpo:more:{token}"),
             ]
         ),
     )
@@ -983,7 +1031,7 @@ async def send_one_click_section(
         await message.answer(
             "📅 Календарь и записи\n\nОткройте актуальные записи организации.",
             reply_markup=control._keyboard(
-                [[("📅 Записи клиентов", f"cpj:bookings:{token}")], [(nav.HOME.label, f"cpj:home:{token}")]]
+                [[("📅 Записи клиентов", f"cpj:bookings:{token}")], *_popup_navigation_rows(token, back_callback=f"cpo:more:{token}")]
             ),
         )
         return
@@ -996,7 +1044,7 @@ async def send_one_click_section(
         rows: list[list[tuple[str, str]]] = [[("📚 Материалы и программы", f"cp:cprograms:{token}")]]
         if _allowed(actor, actor.assert_can_manage_promotions):
             rows.append([("📣 Публикации и продвижение", f"cpo:content:{token}")])
-        rows.append([(nav.HOME.label, f"cpj:home:{token}")])
+        rows.extend(_popup_navigation_rows(token, back_callback=f"cpo:more:{token}"))
         await message.answer(
             "📚 Контент и материалы\n\nПоказаны только действия, доступные Вашей роли.",
             reply_markup=control._keyboard(rows),
@@ -1007,7 +1055,7 @@ async def send_one_click_section(
         await message.answer(
             "🧰 Услуги\n\nПолное управление предложениями и ценами остаётся доступно в существующем интерфейсе.",
             reply_markup=control._keyboard(
-                [[(nav.OFFERS.label, f"cpa:{token}:offers")], [(nav.PRICES.label, f"cpa:{token}:prices")], [(nav.HOME.label, f"cpj:home:{token}")]]
+                [[(nav.OFFERS.label, f"cpa:{token}:offers")], [(nav.PRICES.label, f"cpa:{token}:prices")], *_popup_navigation_rows(token, back_callback=f"cpo:more:{token}")]
             ),
         )
         return
@@ -1017,7 +1065,7 @@ async def send_one_click_section(
         await message.answer(
             "💰 Деньги\n\nОткройте существующий финансовый экран со всеми расширенными действиями.",
             reply_markup=control._keyboard(
-                [[(nav.MONEY.label, f"cpa:{token}:money")], [(nav.HOME.label, f"cpj:home:{token}")]]
+                [[(nav.MONEY.label, f"cpa:{token}:money")], *_popup_navigation_rows(token, back_callback=f"cpo:more:{token}")]
             ),
         )
         return
@@ -1030,7 +1078,7 @@ async def send_one_click_section(
         rows.append([("🧪 A/B креативы", f"cpa:{token}:experiments")])
         if _allowed(actor, actor.assert_can_manage_promotions):
             rows.append([("📣 Реклама и продвижение", f"cpo:ads:{token}")])
-        rows.append([(nav.HOME.label, f"cpj:home:{token}")])
+        rows.extend(_popup_navigation_rows(token, back_callback=f"cpo:more:{token}"))
         await message.answer(
             "📈 Рост и аналитика\n\nПоказаны только доступные для Вашей роли данные и действия.",
             reply_markup=control._keyboard(rows),
@@ -1041,7 +1089,7 @@ async def send_one_click_section(
         await message.answer(
             "🤖 Автоматизация\n\nЗдесь можно проверить разрешённые системе действия и изменить границы автоматизации.",
             reply_markup=control._keyboard(
-                [[("🤖 Открыть автоматизацию", f"cpa:{token}:autopilot")], [(nav.HOME.label, f"cpj:home:{token}")]]
+                [[("🤖 Открыть автоматизацию", f"cpa:{token}:autopilot")], *_popup_navigation_rows(token, back_callback=f"cpo:more:{token}")]
             ),
         )
         return
@@ -1050,7 +1098,7 @@ async def send_one_click_section(
         await message.answer(
             "💬 Подключения\n\nПодключите или проверьте клиентские мессенджеры организации.",
             reply_markup=control._keyboard(
-                [[(nav.MESSENGERS.label, f"cpa:{token}:messengers")], [(nav.HOME.label, f"cpj:home:{token}")]]
+                [[(nav.MESSENGERS.label, f"cpa:{token}:messengers")], *_popup_navigation_rows(token, back_callback=f"cpo:more:{token}")]
             ),
         )
         return
@@ -1060,7 +1108,7 @@ async def send_one_click_section(
         await message.answer(
             "👤 Команда и роли\n\nУправляйте сотрудниками и их доступами.",
             reply_markup=control._keyboard(
-                [[("👤 Сотрудники и доступы", f"cpa:{token}:menu-team")], [(nav.HOME.label, f"cpj:home:{token}")]]
+                [[("👤 Сотрудники и доступы", f"cpa:{token}:menu-team")], *_popup_navigation_rows(token, back_callback=f"cpo:more:{token}")]
             ),
         )
         return
@@ -1082,7 +1130,7 @@ async def open_ad_tools(callback: CallbackQuery) -> None:
                 [("📣 Рекламные каналы", f"cpa:home:{token}")],
                 [("📊 Результаты Яндекс", f"cpy:a:{token}:30")],
                 [("📣 Партнёрские материалы", f"cpg:materials:{token}")],
-                [(nav.BACK.label, f"cpo:more:{token}")],
+                *_popup_navigation_rows(token, back_callback=f"cpo:more:{token}"),
             ]
         ),
     )
