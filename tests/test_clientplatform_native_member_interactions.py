@@ -819,6 +819,84 @@ class NativeMemberIngressTests(unittest.IsolatedAsyncioTestCase):
         complete.assert_called_once()
 
 
+class NativePopupNavigationParityTests(unittest.TestCase):
+    def test_dense_sales_actions_keep_back_and_main_menu_in_vk_and_max(self) -> None:
+        lead_id = str(uuid4())
+        parsed = parse_native_member_interaction(f"cpm:sales-actions:{lead_id}")
+
+        for platform in (ConnectionPlatform.VK, ConnectionPlatform.MAX):
+            with self.subTest(platform=platform.value):
+                actor = _actor(_route(platform))
+                item = {
+                    "stage": "new",
+                    "assigned_user_id": actor.user_id,
+                    "active_followup_id": "followup-1",
+                    "source_kind": platform.value,
+                    "contact_basis": "consent",
+                    "followup_suppressed": False,
+                }
+                with patch.object(
+                    native_member_ui,
+                    "get_sales_workspace_item",
+                    return_value=item,
+                ):
+                    rendered = native_member_ui._sales_actions_message(actor, lead_id)
+
+                message = native_member_ui._with_parent_navigation(rendered, parsed)
+                labels = [button.label for row in message.rows for button in row]
+
+                self.assertLessEqual(sum(len(row) for row in message.rows), 10)
+                self.assertEqual(
+                    [button.label for button in message.rows[-1]],
+                    ["⬅️ Назад", "🏠 В главное меню"],
+                )
+                self.assertNotIn("Связались", labels)
+                self.assertIn("Интерес", labels)
+                self.assertIn("Оформление", labels)
+
+    def test_dense_directions_paginate_and_keep_both_navigation_buttons(self) -> None:
+        parsed = parse_native_member_interaction("cpm:directions:0")
+
+        for platform in (ConnectionPlatform.VK, ConnectionPlatform.MAX):
+            with self.subTest(platform=platform.value):
+                actor = _actor(_route(platform))
+                directions = [
+                    SimpleNamespace(
+                        id=str(uuid4()),
+                        title=f"Направление {index}",
+                        status=native_member_ui.ActivityDirectionStatus.ACTIVE,
+                    )
+                    for index in range(4)
+                ]
+                directions.append(
+                    SimpleNamespace(
+                        id=str(uuid4()),
+                        title="Архивное направление",
+                        status=native_member_ui.ActivityDirectionStatus.ARCHIVED,
+                    )
+                )
+                with patch.object(
+                    native_member_ui,
+                    "list_activity_directions",
+                    return_value=directions,
+                ):
+                    rendered = native_member_ui._directions_message(actor)
+
+                message = native_member_ui._with_parent_navigation(rendered, parsed)
+                labels = [button.label for row in message.rows for button in row]
+
+                self.assertLessEqual(sum(len(row) for row in message.rows), 10)
+                self.assertEqual(
+                    [button.label for button in message.rows[-1]],
+                    ["⬅️ Назад", "🏠 В главное меню"],
+                )
+                self.assertEqual(
+                    len([label for label in labels if label.startswith("🧭 Направление ")]),
+                    3,
+                )
+                self.assertIn("Вперёд ➡️", labels)
+
+
 class NativeBusinessSettingsParityTests(unittest.TestCase):
     def test_vk_and_max_settings_expose_same_direction_and_delete_actions(self) -> None:
         for platform in (ConnectionPlatform.VK, ConnectionPlatform.MAX):
