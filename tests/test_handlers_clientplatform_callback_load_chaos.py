@@ -123,7 +123,10 @@ async def test_repeatable_navigation_is_acknowledged_before_waiting_for_busy_use
                 data,
             )
         )
-        await asyncio.wait_for(second_acknowledged.wait(), timeout=0.1)
+        # Coverage instrumentation can delay task scheduling; the assertion
+        # below verifies the semantic ordering, while this timeout only guards
+        # against a deadlock.
+        await asyncio.wait_for(second_acknowledged.wait(), timeout=1.0)
         assert "start:second" not in handler_order
         release_first.set()
 
