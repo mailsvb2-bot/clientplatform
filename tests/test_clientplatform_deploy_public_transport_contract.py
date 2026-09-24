@@ -9,6 +9,20 @@ from scripts import clientplatform_production_deploy as production_deploy
 
 
 class DeployPublicTransportContractTests(unittest.TestCase):
+    def test_public_business_page_is_routed_to_app_before_media_fallback(self) -> None:
+        source = Path("deploy/clientplatform/Caddyfile").read_text(encoding="utf-8")
+        route_position = source.index("/clientplatform/b/*")
+        media_position = source.index("@media path /clientplatform/*")
+        self.assertLess(route_position, media_position)
+        ingress_block_start = source.rfind(
+            "@clientplatform_messenger_webhooks",
+            0,
+            route_position,
+        )
+        ingress_block_end = source.index("}", route_position)
+        ingress_block = source[ingress_block_start:ingress_block_end]
+        self.assertIn("reverse_proxy {$CLIENTPLATFORM_INGRESS_UPSTREAM", ingress_block)
+
     def test_webhook_prefix_defaults_and_rejects_unsafe_values(self) -> None:
         self.assertEqual(
             production_deploy._telegram_webhook_prefix({}),
