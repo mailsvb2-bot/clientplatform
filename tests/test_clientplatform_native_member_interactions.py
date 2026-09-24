@@ -967,6 +967,20 @@ class NativeBusinessSettingsParityTests(unittest.TestCase):
         self.assertIn("cpm:sources", commands)
         self.assertIn("cpm:invites", commands)
 
+    def test_website_screen_exposes_hosted_business_page_when_https_is_configured(self) -> None:
+        actor = _actor(_route(ConnectionPlatform.MAX))
+        with patch.object(
+            native_member_ui.settings,
+            "MESSENGER_PUBLIC_BASE_URL",
+            "https://clientplatform.example.test",
+        ):
+            message = native_member_ui._website_message(actor)
+        self.assertIn(
+            f"https://clientplatform.example.test/clientplatform/b/{native_member_ui.uuid_token(actor.business_id)}",
+            message.text,
+        )
+        self.assertIn("сразу попадает в клиентов и обращения", message.text)
+
     def test_crm_screen_does_not_claim_unverified_connection(self) -> None:
         actor = _actor(_route(ConnectionPlatform.VK))
         message = native_member_ui._integrations_message(actor)
