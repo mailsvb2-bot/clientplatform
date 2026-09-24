@@ -458,7 +458,7 @@ async def test_business_and_activity_input_paths(monkeypatch: pytest.MonkeyPatch
     edit_state = FakeState({"business_id": business_id, "editing_activity": True})
     await handlers.receive_activity_description(editing, edit_state)
     assert structured[-1]["reset_confirmation"] is False
-    assert "Описание организации обновлено" in editing.answers[-1][0]
+    assert "Профиль бизнеса обновлён" in editing.answers[-1][0]
     assert dashboard_calls == [business_id]
 
 
