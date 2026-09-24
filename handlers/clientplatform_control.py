@@ -80,6 +80,7 @@ from clientplatform.domain.booking_calendar import (
 from clientplatform.domain.bookings import BookingError, BookingSlotStatus, BookingSlotView
 from clientplatform.domain.programs import ContentKind, ProgramError
 from clientplatform.domain.tenancy import TenantPermissionDenied, TenancyError
+from clientplatform.presentation import owner_navigation as nav
 from clientplatform.runtime.cockpit_links import cockpit_web_app_url
 from clientplatform.runtime.control_bot import control_bot_enabled
 from config.settings import settings
