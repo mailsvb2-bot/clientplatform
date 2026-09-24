@@ -488,11 +488,11 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             await labels_for(one_click.open_client_tools, "cpo:clients:business-1"),
-            ["💬 Обращения и продажи", "📅 Записи клиентов", "🔎 Все клиенты", "⬅️ Назад"],
+            ["💬 Обращения и продажи", "📅 Записи клиентов", "🔎 Все клиенты", "⬅️ Назад", "🏠 В главное меню"],
         )
         self.assertEqual(
             await labels_for(one_click.open_work_tools, "cpo:work:business-1"),
-            ["🧰 Мои услуги", "📅 Мой календарь", "🔗 Моя страница", "⬅️ Назад"],
+            ["🧰 Мои услуги", "📅 Мой календарь", "🔗 Моя страница", "⬅️ Назад", "🏠 В главное меню"],
         )
         self.assertEqual(
             await labels_for(one_click.open_content_tools, "cpo:content:business-1"),
@@ -505,6 +505,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
                 "📣 Реклама",
                 "🤝 Партнёрства",
                 "⬅️ Назад",
+                "🏠 В главное меню",
             ],
         )
         self.assertEqual(
@@ -519,6 +520,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
                 "👤 Сотрудники и доступы",
                 "🛠 Технические проверки",
                 "⬅️ Назад",
+                "🏠 В главное меню",
             ],
         )
         ad_labels = await labels_for(one_click.open_ad_tools, "cpo:ads:business-1")
@@ -534,15 +536,15 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(one_click, "cockpit_web_app_url", return_value=None):
             self.assertEqual(
                 labels(PlatformRole.MARKETER),
-                ["🎨 Создать картинку", "📈 Продвижение и контент", "⚙️ Настройки организации", "⬅️ Назад"],
+                ["🎨 Создать картинку", "📈 Продвижение и контент", "⚙️ Настройки организации", "⬅️ Назад", "🏠 В главное меню"],
             )
             self.assertEqual(
                 labels(PlatformRole.SUPPORT),
-                ["👥 Клиенты и продажи", "📅 Услуги и запись", "⚙️ Настройки организации", "⬅️ Назад"],
+                ["👥 Клиенты и продажи", "📅 Услуги и запись", "⚙️ Настройки организации", "⬅️ Назад", "🏠 В главное меню"],
             )
             self.assertEqual(
                 labels(PlatformRole.ANALYST),
-                ["⚙️ Настройки организации", "⬅️ Назад"],
+                ["⚙️ Настройки организации", "⬅️ Назад", "🏠 В главное меню"],
             )
 
     async def test_settings_help_mentions_only_buttons_visible_for_role(self):
@@ -555,7 +557,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
             for button in row
         ]
-        self.assertEqual(labels, ["🧩 Организация и возможности", "⬅️ Назад"])
+        self.assertEqual(labels, ["🧩 Организация и возможности", "⬅️ Назад", "🏠 В главное меню"])
         self.assertIn("Организация и возможности", text)
         self.assertNotIn("Подключить мессенджеры", text)
         self.assertNotIn("Сотрудники и доступы", text)
@@ -581,6 +583,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
                 "👤 Сотрудники и доступы",
                 "🛠 Технические проверки",
                 "⬅️ Назад",
+                "🏠 В главное меню",
             ],
         )
         self.assertEqual(
@@ -592,11 +595,12 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
                 "✏️ Описание организации",
                 "🛠 Технические проверки",
                 "⬅️ Назад",
+                "🏠 В главное меню",
             ],
         )
         self.assertEqual(
             labels(PlatformRole.MANAGER),
-            ["💬 Подключить мессенджеры", "🧩 Организация и возможности", "⬅️ Назад"],
+            ["💬 Подключить мессенджеры", "🧩 Организация и возможности", "⬅️ Назад", "🏠 В главное меню"],
         )
         self.assertEqual(
             labels(PlatformRole.MARKETER),
@@ -639,7 +643,8 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
                         for button in row
                     ]
                     self.assertIn(expected, labels)
-                    self.assertTrue("🏠 Главная" in labels or "⬅️ Назад" in labels)
+                    self.assertIn("⬅️ Назад", labels)
+                    self.assertIn("🏠 В главное меню", labels)
 
     async def test_cockpit_section_launchers_keep_read_only_roles_read_only(self):
         target = out()
@@ -659,7 +664,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
                 for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
                 for button in row
             ]
-            self.assertEqual(labels, ["📚 Материалы и программы", "🏠 Главная"])
+            self.assertEqual(labels, ["📚 Материалы и программы", "⬅️ Назад", "🏠 В главное меню"])
 
             target.answer.reset_mock()
             await one_click.send_one_click_section(
@@ -690,7 +695,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
                 for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
                 for button in row
             ]
-            self.assertEqual(labels, ["💰 Выручка и платящие клиенты", "🏠 Главная"])
+            self.assertEqual(labels, ["💰 Выручка и платящие клиенты", "⬅️ Назад", "🏠 В главное меню"])
 
             content_manager = tenant_actor(PlatformRole.CONTENT_MANAGER)
             with patch.object(
@@ -718,6 +723,20 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
                     business_id="business-1",
                     section="unknown",
                 )
+
+    def test_popup_navigation_has_back_and_main_menu(self):
+        rows = one_click._popup_navigation_rows(
+            "business-1",
+            back_callback="cpo:more:business-1",
+        )
+        self.assertEqual(
+            rows,
+            [[
+                ("⬅️ Назад", "cpo:more:business-1"),
+                ("🏠 В главное меню", "cpj:home:business-1"),
+            ]],
+        )
+
 
 
 if __name__ == "__main__":

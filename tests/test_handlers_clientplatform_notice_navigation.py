@@ -47,14 +47,14 @@ def test_creative_studio_menu_and_result_keep_two_escape_routes() -> None:
 
 
 def test_one_click_notice_navigation_has_parent_and_home() -> None:
-    rows = one_click._notice_navigation_rows(
+    rows = one_click._popup_navigation_rows(
         "business-token",
         back_callback="cpa:home:business-token",
     )
-    assert rows == [
-        [(nav.BACK.label, "cpa:home:business-token")],
-        [(nav.MAIN_MENU_LABEL, "cpj:home:business-token")],
-    ]
+    assert rows == [[
+        (nav.BACK.label, "cpa:home:business-token"),
+        (nav.MAIN_MENU_LABEL, "cpj:home:business-token"),
+    ]]
 
 
 def test_admin_back_keyboard_keeps_back_and_adds_main_menu() -> None:
