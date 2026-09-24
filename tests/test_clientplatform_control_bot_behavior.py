@@ -748,7 +748,7 @@ async def test_business_archive_cancel_is_one_shot_and_returns_to_settings(
     assert callback_answer_text(callback) == "Удаление отменено"
     assert callback.message.answers[-1][0] == "Удаление организации отменено."
     button = callback.message.answers[-1][1]["reply_markup"].inline_keyboard[0][0]
-    assert button.text == "⚙️ Настройки организации"
+    assert button.text == "⚙️ Мой бизнес"
     assert button.callback_data == f"cpo:settings:{token}"
     assert "cps:archive-cancel:" in safety._ONE_SHOT_PREFIXES
 
