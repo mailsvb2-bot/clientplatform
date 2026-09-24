@@ -1044,7 +1044,7 @@ async def send_one_click_section(
         rows: list[list[tuple[str, str]]] = [[("📚 Материалы и программы", f"cp:cprograms:{token}")]]
         if _allowed(actor, actor.assert_can_manage_promotions):
             rows.append([("📣 Публикации и продвижение", f"cpo:content:{token}")])
-        rows.append(*_popup_navigation_rows(token, back_callback=f"cpo:more:{token}"))
+        rows.extend(_popup_navigation_rows(token, back_callback=f"cpo:more:{token}"))
         await message.answer(
             "📚 Контент и материалы\n\nПоказаны только действия, доступные Вашей роли.",
             reply_markup=control._keyboard(rows),
@@ -1078,7 +1078,7 @@ async def send_one_click_section(
         rows.append([("🧪 A/B креативы", f"cpa:{token}:experiments")])
         if _allowed(actor, actor.assert_can_manage_promotions):
             rows.append([("📣 Реклама и продвижение", f"cpo:ads:{token}")])
-        rows.append(*_popup_navigation_rows(token, back_callback=f"cpo:more:{token}"))
+        rows.extend(_popup_navigation_rows(token, back_callback=f"cpo:more:{token}"))
         await message.answer(
             "📈 Рост и аналитика\n\nПоказаны только доступные для Вашей роли данные и действия.",
             reply_markup=control._keyboard(rows),
