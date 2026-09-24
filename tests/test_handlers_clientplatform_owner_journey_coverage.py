@@ -454,7 +454,7 @@ async def test_public_page_and_promotion_cover_ready_and_empty_states(
     page = FakeCallback(f"cpj:page:{business_token}")
     await owner.open_public_page_for_owner(page)
     page_text, page_kwargs = page.message.answers[-1]
-    assert "Ваша публичная страница" in page_text
+    assert "Страница записи ClientPlatform" in page_text
     assert "Замена раковины" in page_text
     assert "https://t.me/clientplatform_bot?start=cpsb_" in page_text
     assert page_kwargs["reply_markup"].inline_keyboard[0][0].url.startswith("https://t.me/")

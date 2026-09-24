@@ -112,7 +112,7 @@ def test_welcome_and_simple_keyboard_are_result_first() -> None:
     assert "цифровой помощник" in text
     assert "сложных настроек" in text
     button = simple.welcome_keyboard().inline_keyboard[0][0]
-    assert button.text == "🚀 Подключить организацию"
+    assert button.text == "➕ Добавить бизнес"
     assert button.callback_data == "cps:start"
 
     business_id = str(uuid4())

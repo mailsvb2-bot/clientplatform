@@ -71,7 +71,7 @@ async def register_clientplatform_bot_commands(bot: Bot) -> bool:
 def _entry_keyboard():
     return control._keyboard(
         [
-            [("Мои организации", "cp:entry:businesses")],
+            [("Мои бизнесы", "cp:entry:businesses")],
             [("Мои специалисты и материалы", "cp:entry:clients")],
         ]
     )
@@ -79,15 +79,15 @@ def _entry_keyboard():
 
 def _owner_landing_keyboard():
     return control._keyboard(
-        [[("Подключить организацию", "business")]]
+        [[("➕ Добавить бизнес", "business")]]
     )
 
 
 def _owner_landing_text() -> str:
     return (
         "Добро пожаловать в ClientPlatform.\n\n"
-        "Вы открыли управляющий вход для владельца организации. "
-        "Нажмите «Подключить организацию», чтобы создать рабочее пространство организации."
+        "Вы открыли управляющий вход для владельца бизнеса. "
+        "Нажмите «➕ Добавить бизнес», чтобы создать отдельное рабочее пространство бизнеса. Каналы, сайт, точки входа и сервисы подключаются уже внутри него."
     )
 
 
@@ -101,7 +101,7 @@ async def _send_business_choice(
     if len(accesses) > 1:
         await state.clear()
         await message.answer(
-            "Выберите организацию, с которой хотите работать:",
+            "Выберите бизнес, с которым хотите работать:",
             reply_markup=control._business_choice_keyboard(accesses),
         )
         return
@@ -433,7 +433,7 @@ async def clientplatform_support_case_command(message: Message) -> None:
     actor, accesses = await asyncio.to_thread(_telegram_support_actor, user_id)
     if actor is None:
         if not accesses:
-            await message.answer("Сначала подключите организацию, затем создайте обращение в поддержку.")
+            await message.answer("Сначала добавьте бизнес, затем создайте обращение в поддержку.")
         else:
             await message.answer(
                 "У Вас несколько организаций. Сначала откройте нужную организацию через /start, "

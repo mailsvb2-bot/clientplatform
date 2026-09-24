@@ -25,6 +25,7 @@ from aiogram.types import (
 
 from clientplatform.application.tenancy import archive_business, rename_business
 from clientplatform.domain.activity import BusinessProfileStatus, CapabilityStatus
+from clientplatform.presentation import owner_navigation as nav
 
 control = importlib.import_module(".clientplatform_control", __package__)
 
@@ -48,6 +49,11 @@ _OWNER_NAVIGATION_PREFIXES = (
     "cpo:clients:",
     "cpo:content:",
     "cpo:settings:",
+    "cpo:entrypoints:",
+    "cpo:website:",
+    "cpo:sources:",
+    "cpo:integrations:",
+    "cpo:business-more:",
     "cpo:work:",
     "cpo:ads:",
 )
@@ -99,6 +105,7 @@ _STATE_ESCAPE_PREFIXES = (
     "cps:firstmat:",
     "cps:firstclient:",
     "cps:cancelsetup:",
+    "cp:onboardwork:",
     "cps:s:",
     "cps:sw:",
     "cps:swv:",
@@ -158,6 +165,7 @@ _REPEATABLE_NAVIGATION_PREFIXES = (
     "cps:programs:",
     "cps:booking:",
     "cps:advanced:",
+    "cp:onboardwork:",
     "cps:firstgoal:",
     "cps:s:",
     "cps:sw:",
@@ -768,7 +776,7 @@ async def cancel_business_archive(callback: CallbackQuery, state: FSMContext) ->
         "Удаление организации отменено.",
         reply_markup=control._keyboard(
             [
-                [("⚙️ Настройки организации", f"cpo:settings:{token}")],
+                [(nav.BUSINESS_SETTINGS.label, f"cpo:settings:{token}")],
                 *_safety_navigation_rows(
                     token,
                     back_callback=f"cpo:settings:{token}",
@@ -814,7 +822,7 @@ async def archive_business_from_settings(callback: CallbackQuery, state: FSMCont
         await message.answer(
             "Активных организаций больше нет. Можно создать новую.",
             reply_markup=control._keyboard(
-                [[("➕ Создать организацию", "cps:start")]]
+                [[("➕ Добавить бизнес", "cps:start")]]
             ),
         )
         return
@@ -827,7 +835,7 @@ async def archive_business_from_settings(callback: CallbackQuery, state: FSMCont
         )
         return
     await message.answer(
-        "Выберите организацию, с которой хотите работать:",
+        "Выберите бизнес, с которым хотите работать:",
         reply_markup=control._business_choice_keyboard(remaining),
     )
 

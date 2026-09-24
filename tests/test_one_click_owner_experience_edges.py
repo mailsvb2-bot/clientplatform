@@ -492,7 +492,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             await labels_for(one_click.open_work_tools, "cpo:work:business-1"),
-            ["🧰 Мои услуги", "📅 Мой календарь", "🔗 Моя страница", "⬅️ Назад", "🏠 В главное меню"],
+            ["🧰 Мои услуги", "📅 Мой календарь", "📄 Страница записи", "⬅️ Назад", "🏠 В главное меню"],
         )
         self.assertEqual(
             await labels_for(one_click.open_content_tools, "cpo:content:business-1"),
@@ -511,17 +511,35 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             await labels_for(one_click.open_settings_tools, "cpo:settings:business-1"),
             [
-                "💬 Подключить мессенджеры",
-                "🧩 Организация и возможности",
-                "🧭 Направления деятельности",
-                "✏️ Описание организации",
-                "➕ Создать организацию",
-                "🗑 Удалить организацию",
+                "✏️ Профиль бизнеса",
+                "💬 Каналы общения",
+                "🔗 Точки входа клиентов",
+                "⚙️ CRM и сервисы",
                 "👤 Сотрудники и доступы",
-                "🛠 Технические проверки",
+                "🛠 Другие настройки бизнеса",
                 "⬅️ Назад",
                 "🏠 В главное меню",
             ],
+        )
+        self.assertEqual(
+            await labels_for(one_click.open_entry_point_tools, "cpo:entrypoints:business-1"),
+            ["🌐 Сайт / лендинг", "📄 Страница записи", "🔗 Источники клиентов", "⬅️ Назад", "🏠 В главное меню"],
+        )
+        self.assertEqual(
+            await labels_for(one_click.open_website_tools, "cpo:website:business-1"),
+            ["📄 Страница записи", "⚙️ CRM и сервисы", "⬅️ Назад", "🏠 В главное меню"],
+        )
+        self.assertEqual(
+            await labels_for(one_click.open_source_tools, "cpo:sources:business-1"),
+            ["📄 Страница записи", "📣 Рекламные каналы", "🤝 Партнёрства", "⬅️ Назад", "🏠 В главное меню"],
+        )
+        self.assertEqual(
+            await labels_for(one_click.open_integration_tools, "cpo:integrations:business-1"),
+            ["💬 Каналы общения", "🌐 Сайт / лендинг", "🛠 Технические проверки", "⬅️ Назад", "🏠 В главное меню"],
+        )
+        self.assertEqual(
+            await labels_for(one_click.open_business_more_tools, "cpo:business-more:business-1"),
+            ["🧩 Возможности бизнеса", "🧭 Направления деятельности", "🛠 Технические проверки", "➕ Добавить бизнес", "🗑 Удалить бизнес", "⬅️ Назад", "🏠 В главное меню"],
         )
         ad_labels = await labels_for(one_click.open_ad_tools, "cpo:ads:business-1")
         self.assertIn("🚀 Найти новых клиентов", ad_labels)
@@ -536,15 +554,15 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(one_click, "cockpit_web_app_url", return_value=None):
             self.assertEqual(
                 labels(PlatformRole.MARKETER),
-                ["🎨 Создать картинку", "📈 Продвижение и контент", "⚙️ Настройки организации", "⬅️ Назад", "🏠 В главное меню"],
+                ["🎨 Создать картинку", "📈 Продвижение и контент", "⚙️ Мой бизнес", "⬅️ Назад", "🏠 В главное меню"],
             )
             self.assertEqual(
                 labels(PlatformRole.SUPPORT),
-                ["👥 Клиенты и продажи", "📅 Услуги и запись", "⚙️ Настройки организации", "⬅️ Назад", "🏠 В главное меню"],
+                ["👥 Клиенты и продажи", "📅 Услуги и запись", "⚙️ Мой бизнес", "⬅️ Назад", "🏠 В главное меню"],
             )
             self.assertEqual(
                 labels(PlatformRole.ANALYST),
-                ["⚙️ Настройки организации", "⬅️ Назад", "🏠 В главное меню"],
+                ["⚙️ Мой бизнес", "⬅️ Назад", "🏠 В главное меню"],
             )
 
     async def test_settings_help_mentions_only_buttons_visible_for_role(self):
@@ -557,9 +575,9 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
             for button in row
         ]
-        self.assertEqual(labels, ["🧩 Организация и возможности", "⬅️ Назад", "🏠 В главное меню"])
-        self.assertIn("Организация и возможности", text)
-        self.assertNotIn("Подключить мессенджеры", text)
+        self.assertEqual(labels, ["🧩 Возможности бизнеса", "⬅️ Назад", "🏠 В главное меню"])
+        self.assertIn("Возможности бизнеса", text)
+        self.assertNotIn("Каналы общения", text)
         self.assertNotIn("Сотрудники и доступы", text)
         self.assertNotIn("Технические проверки", text)
 
@@ -574,14 +592,12 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             labels(PlatformRole.OWNER),
             [
-                "💬 Подключить мессенджеры",
-                "🧩 Организация и возможности",
-                "🧭 Направления деятельности",
-                "✏️ Описание организации",
-                "➕ Создать организацию",
-                "🗑 Удалить организацию",
+                "✏️ Профиль бизнеса",
+                "💬 Каналы общения",
+                "🔗 Точки входа клиентов",
+                "⚙️ CRM и сервисы",
                 "👤 Сотрудники и доступы",
-                "🛠 Технические проверки",
+                "🛠 Другие настройки бизнеса",
                 "⬅️ Назад",
                 "🏠 В главное меню",
             ],
@@ -589,22 +605,22 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             labels(PlatformRole.ADMINISTRATOR),
             [
-                "💬 Подключить мессенджеры",
-                "🧩 Организация и возможности",
-                "🧭 Направления деятельности",
-                "✏️ Описание организации",
-                "🛠 Технические проверки",
+                "✏️ Профиль бизнеса",
+                "💬 Каналы общения",
+                "🔗 Точки входа клиентов",
+                "⚙️ CRM и сервисы",
+                "🛠 Другие настройки бизнеса",
                 "⬅️ Назад",
                 "🏠 В главное меню",
             ],
         )
         self.assertEqual(
             labels(PlatformRole.MANAGER),
-            ["💬 Подключить мессенджеры", "🧩 Организация и возможности", "⬅️ Назад", "🏠 В главное меню"],
+            ["💬 Каналы общения", "🧩 Возможности бизнеса", "⬅️ Назад", "🏠 В главное меню"],
         )
         self.assertEqual(
             labels(PlatformRole.MARKETER),
-            ["🧩 Организация и возможности", "⬅️ Назад", "🏠 В главное меню"],
+            ["🧩 Возможности бизнеса", "⬅️ Назад", "🏠 В главное меню"],
         )
 
 
@@ -620,9 +636,9 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             "growth": "🧪 A/B креативы",
             "analytics": "📊 Результаты Яндекс",
             "automation": "🤖 Открыть автоматизацию",
-            "connections": "💬 Подключить мессенджеры",
+            "connections": "💬 Каналы общения",
             "team": "👤 Сотрудники и доступы",
-            "settings": "🧩 Организация и возможности",
+            "settings": "✏️ Профиль бизнеса",
         }
         with (
             patch.object(one_click.control, "_actor", new=AsyncMock(return_value=actor)),

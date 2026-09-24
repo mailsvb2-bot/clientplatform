@@ -229,7 +229,7 @@ class ClientPlatformZeroToFirstOutcomeTests(unittest.TestCase):
         self.assertEqual(review_calls, [business_id])
         self.assertEqual(guarded_calls, [])
 
-    def test_resume_confirmed_draft_returns_to_first_result(self) -> None:
+    def test_resume_confirmed_draft_offers_business_connections_first(self) -> None:
         assert control is not None
         business_id = str(uuid4())
         actor = object()
@@ -263,14 +263,15 @@ class ClientPlatformZeroToFirstOutcomeTests(unittest.TestCase):
             )
 
         text, markup = message.answers[-1]
-        self.assertTrue(text.startswith("Что Вы хотите получить первым?"))
+        self.assertTrue(text.startswith("✅ Бизнес создан. Что подключим к нему?"))
         callbacks = _button_callbacks(markup)
-        self.assertTrue(any(item.startswith("cps:firstbook:") for item in callbacks))
-        self.assertTrue(any(item.startswith("cps:firstmat:") for item in callbacks))
-        self.assertTrue(any(item.startswith("cp:onboardmore:") for item in callbacks))
-        self.assertFalse(any(item.startswith("cps:firstclient:") for item in callbacks))
+        self.assertTrue(any(item.startswith("cpa:") and item.endswith(":messengers") for item in callbacks))
+        self.assertTrue(any(item.startswith("cpo:entrypoints:") for item in callbacks))
+        self.assertTrue(any(item.startswith("cpo:integrations:") for item in callbacks))
+        self.assertTrue(any(item.startswith("cp:onboardwork:") for item in callbacks))
+        self.assertFalse(any(item.startswith("cps:firstbook:") for item in callbacks))
 
-    def test_confirm_onboarding_is_tenant_checked_before_first_result(self) -> None:
+    def test_confirm_onboarding_is_tenant_checked_before_connection_choice(self) -> None:
         assert control is not None
         business_id = str(uuid4())
         token = control._uuid_token(business_id)
@@ -299,8 +300,36 @@ class ClientPlatformZeroToFirstOutcomeTests(unittest.TestCase):
         self.assertEqual(calls, ["actor", "confirm"])
         self.assertEqual(callback.answers, [("Подтверждено", False)])
         text, markup = message.answers[-1]
+        self.assertTrue(text.startswith("✅ Бизнес создан. Что подключим к нему?"))
+        callbacks = _button_callbacks(markup)
+        self.assertTrue(any(item.startswith("cpo:entrypoints:") for item in callbacks))
+        self.assertTrue(any(item.startswith("cp:onboardwork:") for item in callbacks))
+
+    def test_onboarding_work_continuation_preserves_existing_first_result_choices(self) -> None:
+        assert control is not None
+        business_id = str(uuid4())
+        token = control._uuid_token(business_id)
+        actor = object()
+        message = _Message()
+        callback = _Callback(data=f"cp:onboardwork:{token}", message=message)
+        state = _State()
+
+        async def fake_actor(_user_id: int, selected_business_id: str):
+            self.assertEqual(selected_business_id, business_id)
+            return actor
+
+        with (
+            patch.object(control, "_actor", fake_actor),
+            patch.object(control, "_callback_message", lambda _callback: message),
+        ):
+            asyncio.run(control.continue_onboarding_work(callback, state))
+
+        text, markup = message.answers[-1]
         self.assertTrue(text.startswith("Что Вы хотите получить первым?"))
-        self.assertTrue(any(item.startswith("cps:firstbook:") for item in _button_callbacks(markup)))
+        callbacks = _button_callbacks(markup)
+        self.assertTrue(any(item.startswith("cps:firstbook:") for item in callbacks))
+        self.assertTrue(any(item.startswith("cps:firstmat:") for item in callbacks))
+        self.assertTrue(any(item.startswith("cp:onboardmore:") for item in callbacks))
 
     def test_first_result_requires_confirmed_draft(self) -> None:
         assert first_result is not None

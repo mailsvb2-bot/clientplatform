@@ -84,14 +84,14 @@ class CapabilityParityUiTests(unittest.IsolatedAsyncioTestCase):
             await simple.send_advanced_dashboard(message, user_id=7, business_id="business-1")
 
         text, kwargs = message.answers[-1]
-        self.assertIn("🧩 Организация и возможности", text)
+        self.assertIn("🧩 Бизнес и возможности", text)
         self.assertIn("Telegram — ✅ работает", text)
         self.assertIn("ВКонтакте — ⏸ сейчас недоступно", text)
         self.assertIn("MAX — ⏸ подключено, но сейчас выключено", text)
         self.assertIn("Яндекс Директ — ✅ работает", text)
         self.assertIn("Консультации", text)
         labels = [button.text for row in kwargs["reply_markup"].inline_keyboard for button in row]
-        self.assertEqual(labels[:2], ["💬 Подключить мессенджеры", "📣 Реклама"])
+        self.assertEqual(labels[:2], ["💬 Каналы общения", "📣 Реклама"])
 
     async def test_admin_hides_disabled_channels_and_blocks_forged_connect(self) -> None:
         projection = _projection(

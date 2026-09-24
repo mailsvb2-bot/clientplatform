@@ -214,7 +214,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
                 "📅 Услуги и запись",
                 "🎨 Создать картинку",
                 "📈 Продвижение и контент",
-                "⚙️ Настройки организации",
+                "⚙️ Мой бизнес",
                 "⬅️ Назад",
                 "🏠 В главное меню",
             ],
@@ -227,7 +227,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("только те быстрые действия", answer_text)
         self.assertNotIn("Если Вам нужно:", answer_text)
         self.assertNotIn("🧭 Что можно сделать", answer_text)
-        self.assertNotIn("💬 Подключить мессенджеры", labels)
+        self.assertNotIn("💬 Каналы общения", labels)
         self.assertNotIn("📣 Реклама и продвижение", labels)
 
     def test_all_capabilities_menu_falls_back_to_quick_actions_without_public_cockpit(self) -> None:
@@ -640,34 +640,32 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Яндекс · one", labels)
         self.assertIn("Яндекс · two", labels)
 
-    def test_settings_exposes_direction_edit_and_owner_business_removal(self) -> None:
+    def test_settings_exposes_business_connection_structure(self) -> None:
         owner_rows, owner_help = one_click._settings_rows("business-1", tenant_actor())
         owner_buttons = {
             label: callback_data
             for row in owner_rows
             for label, callback_data in row
         }
+        self.assertEqual(owner_buttons["✏️ Профиль бизнеса"], "cp:editact:business-1")
+        self.assertEqual(owner_buttons["💬 Каналы общения"], "cpa:business-1:messengers")
+        self.assertEqual(owner_buttons["🔗 Точки входа клиентов"], "cpo:entrypoints:business-1")
+        self.assertEqual(owner_buttons["⚙️ CRM и сервисы"], "cpo:integrations:business-1")
+        self.assertEqual(owner_buttons["👤 Сотрудники и доступы"], "cpa:business-1:menu-team")
         self.assertEqual(
-            owner_buttons["✏️ Описание организации"],
-            "cp:editact:business-1",
+            owner_buttons["🛠 Другие настройки бизнеса"],
+            "cpo:business-more:business-1",
         )
-        self.assertEqual(
-            owner_buttons["➕ Создать организацию"],
-            "cps:start",
-        )
-        self.assertEqual(
-            owner_buttons["🗑 Удалить организацию"],
-            "cps:archive-prompt:business-1",
-        )
-        self.assertTrue(any("убрать тестовую" in line for line in owner_help))
+        self.assertTrue(any("сайт, страницу записи" in line for line in owner_help))
 
         admin_rows, _ = one_click._settings_rows(
             "business-1",
             tenant_actor(PlatformRole.ADMINISTRATOR),
         )
         admin_labels = [label for row in admin_rows for label, _ in row]
-        self.assertIn("✏️ Описание организации", admin_labels)
-        self.assertNotIn("🗑 Удалить организацию", admin_labels)
+        self.assertIn("✏️ Профиль бизнеса", admin_labels)
+        self.assertIn("⚙️ CRM и сервисы", admin_labels)
+        self.assertNotIn("👤 Сотрудники и доступы", admin_labels)
 
     async def test_more_menu_hides_advanced_actions_from_home(self) -> None:
         out = outbound_message()
@@ -689,7 +687,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
                 "📅 Услуги и запись",
                 "🎨 Создать картинку",
                 "📈 Продвижение и контент",
-                "⚙️ Настройки организации",
+                "⚙️ Мой бизнес",
                 "⬅️ Назад",
                 "🏠 В главное меню",
             ],
@@ -701,7 +699,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         }
         self.assertEqual(buttons["👥 Клиенты и продажи"], "cpo:clients:business-1")
         self.assertEqual(buttons["📈 Продвижение и контент"], "cpo:content:business-1")
-        self.assertEqual(buttons["⚙️ Настройки организации"], "cpo:settings:business-1")
+        self.assertEqual(buttons["⚙️ Мой бизнес"], "cpo:settings:business-1")
 
 
 if __name__ == "__main__":

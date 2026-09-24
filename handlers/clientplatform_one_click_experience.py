@@ -914,36 +914,139 @@ async def _send_content_tools(message: ClientPlatformMessageTarget, *, token: st
 def _settings_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], list[str]]:
     rows: list[list[tuple[str, str]]] = []
     help_lines: list[str] = []
+
+    if actor.role in _SETTINGS_SYSTEM_ROLES:
+        rows.append([(nav.ACTIVITY.label, f"cp:editact:{token}")])
+        help_lines.append(f"• изменить описание и основные данные бизнеса → «{nav.ACTIVITY.label}»")
+
     if actor.role in _SETTINGS_MESSENGER_ROLES:
         rows.append([(nav.MESSENGERS.label, f"cpa:{token}:messengers")])
         help_lines.append(f"• подключить или проверить Telegram, ВКонтакте или MAX → «{nav.MESSENGERS.label}»")
-    rows.append([("🧩 Организация и возможности", f"cps:advanced:{token}")])
-    help_lines.append("• посмотреть форматы работы и возможности организации → «🧩 Организация и возможности»")
+
     if actor.role in _SETTINGS_SYSTEM_ROLES:
-        rows.append([(nav.DIRECTIONS.label, f"cp:dirs:{token}")])
-        help_lines.append(f"• {nav.DIRECTIONS.need} → «{nav.DIRECTIONS.label}»")
-        rows.append([(nav.ACTIVITY.label, f"cp:editact:{token}")])
-        help_lines.append(f"• {nav.ACTIVITY.need} → «{nav.ACTIVITY.label}»")
-    if actor.role == PlatformRole.OWNER:
-        rows.append([("➕ Создать организацию", "cps:start")])
-        help_lines.append("• создать ещё одну организацию → «➕ Создать организацию»")
-        rows.append([(nav.DELETE_BUSINESS.label, f"cps:archive-prompt:{token}")])
-        help_lines.append(f"• {nav.DELETE_BUSINESS.need} → «{nav.DELETE_BUSINESS.label}»")
+        rows.append([(nav.ENTRY_POINTS.label, f"cpo:entrypoints:{token}")])
+        help_lines.append(f"• настроить сайт, страницу записи и источники → «{nav.ENTRY_POINTS.label}»")
+        rows.append([(nav.INTEGRATIONS.label, f"cpo:integrations:{token}")])
+        help_lines.append(f"• проверить доступные внешние подключения → «{nav.INTEGRATIONS.label}»")
+
     if actor.role in _SETTINGS_TEAM_ROLES:
         rows.append([("👤 Сотрудники и доступы", f"cpa:{token}:menu-team")])
         help_lines.append("• добавить сотрудника или изменить доступ → «👤 Сотрудники и доступы»")
+
     if actor.role in _SETTINGS_SYSTEM_ROLES:
-        rows.append([("🛠 Технические проверки", f"cpa:{token}:menu-system")])
-        help_lines.append("• проверить техническое состояние → «🛠 Технические проверки»")
+        rows.append([("🛠 Другие настройки бизнеса", f"cpo:business-more:{token}")])
+        help_lines.append("• направления, возможности, технические проверки или удаление → «🛠 Другие настройки бизнеса»")
+    else:
+        rows.append([("🧩 Возможности бизнеса", f"cps:advanced:{token}")])
+        help_lines.append("• посмотреть услуги, форматы работы и возможности → «🧩 Возможности бизнеса»")
+
     rows.extend(_popup_navigation_rows(token, back_callback=f"cpo:more:{token}"))
     return rows, help_lines
+
 
 async def _send_settings_tools(message: ClientPlatformMessageTarget, *, token: str, actor) -> None:
     rows, help_lines = _settings_rows(token, actor)
     body = "\n".join(help_lines) or "Для Вашей роли здесь сейчас нет доступных настроек."
     await message.answer(
-        "⚙️ Настройки организации\n\nЕсли Вам нужно:\n" + body,
+        "⚙️ Мой бизнес\n\n"
+        "Это рабочее пространство бизнеса. Здесь показаны только подключения и настройки, "
+        "доступные Вашей роли.\n\n"
+        "Если Вам нужно:\n" + body,
         reply_markup=control._keyboard(rows),
+    )
+
+
+async def _send_entry_point_tools(message: ClientPlatformMessageTarget, *, token: str, actor) -> None:
+    actor.assert_can_manage_business()
+    await message.answer(
+        "🔗 Точки входа клиентов\n\n"
+        "Выберите, как люди будут попадать именно в этот бизнес. "
+        "Сайт и лендинг используют готовую точку входа ClientPlatform, страница записи "
+        "даёт постоянную ссылку, а источники помогают отделять рекламу и рекомендации.",
+        reply_markup=control._keyboard(
+            [
+                [(nav.WEBSITE.label, f"cpo:website:{token}")],
+                [(nav.PUBLIC_PAGE.label, f"cpj:page:{token}")],
+                [(nav.CUSTOMER_SOURCES.label, f"cpo:sources:{token}")],
+                *_popup_navigation_rows(token, back_callback=f"cpo:settings:{token}"),
+            ]
+        ),
+    )
+
+
+async def _send_business_more_tools(message: ClientPlatformMessageTarget, *, token: str, actor) -> None:
+    actor.assert_can_manage_business()
+    rows: list[list[tuple[str, str]]] = [
+        [("🧩 Возможности бизнеса", f"cps:advanced:{token}")],
+        [(nav.DIRECTIONS.label, f"cp:dirs:{token}")],
+        [("🛠 Технические проверки", f"cpa:{token}:menu-system")],
+    ]
+    if actor.role == PlatformRole.OWNER:
+        rows.append([("➕ Добавить бизнес", "cps:start")])
+        rows.append([(nav.DELETE_BUSINESS.label, f"cps:archive-prompt:{token}")])
+    rows.extend(_popup_navigation_rows(token, back_callback=f"cpo:settings:{token}"))
+    await message.answer(
+        "🛠 Другие настройки бизнеса\n\n"
+        "Здесь находятся редкие действия, которые не нужны для ежедневного подключения клиентов.",
+        reply_markup=control._keyboard(rows),
+    )
+
+
+async def _send_website_tools(message: ClientPlatformMessageTarget, *, token: str, actor) -> None:
+    actor.assert_can_manage_business()
+    await message.answer(
+        "🌐 Сайт / лендинг\n\n"
+        "ClientPlatform подключает сайт как точку входа клиентов, а не как отдельный бизнес. "
+        "Для обычного сайта самый безопасный вариант — готовая страница записи ClientPlatform: "
+        "её постоянную ссылку можно поставить на кнопку «Записаться» или форму лендинга.\n\n"
+        "Если сайт или CRM умеет работать через API/webhook, такое подключение относится к "
+        "«CRM и сервисы». ClientPlatform не показывает статус «подключено», пока реальная связь не подтверждена.",
+        reply_markup=control._keyboard(
+            [
+                [(nav.PUBLIC_PAGE.label, f"cpj:page:{token}")],
+                [(nav.INTEGRATIONS.label, f"cpo:integrations:{token}")],
+                *_popup_navigation_rows(token, back_callback=f"cpo:entrypoints:{token}"),
+            ]
+        ),
+    )
+
+
+async def _send_source_tools(message: ClientPlatformMessageTarget, *, token: str, actor) -> None:
+    actor.assert_can_manage_business()
+    await message.answer(
+        "🔗 Источники клиентов\n\n"
+        "Здесь настраивается не сам бизнес, а откуда в него приходят люди. "
+        "Используйте страницу записи как универсальную точку входа, рекламные подключения — "
+        "для подтверждённых рекламных источников, а партнёрский раздел — для рекомендаций. "
+        "Источник фиксируется только там, где ClientPlatform реально получает подтверждённые данные.",
+        reply_markup=control._keyboard(
+            [
+                [(nav.PUBLIC_PAGE.label, f"cpj:page:{token}")],
+                [("📣 Рекламные каналы", f"cpo:ads:{token}")],
+                [("🤝 Партнёрства", f"cpg:home:{token}")],
+                *_popup_navigation_rows(token, back_callback=f"cpo:entrypoints:{token}"),
+            ]
+        ),
+    )
+
+
+async def _send_integration_tools(message: ClientPlatformMessageTarget, *, token: str, actor) -> None:
+    actor.assert_can_manage_business()
+    await message.answer(
+        "⚙️ CRM и сервисы\n\n"
+        "ClientPlatform подключает внешние системы через отдельные защищённые коннекторы. "
+        "Telegram, ВКонтакте и MAX подключаются в разделе каналов общения; сайт и лендинг — "
+        "через точку входа. Для произвольной CRM нужен её реальный API/webhook-коннектор.\n\n"
+        "Здесь нет фиктивной кнопки «готово»: сервис считается подключённым только после "
+        "проверенной связи и доступных credentials.",
+        reply_markup=control._keyboard(
+            [
+                [(nav.MESSENGERS.label, f"cpa:{token}:messengers")],
+                [(nav.WEBSITE.label, f"cpo:website:{token}")],
+                [("🛠 Технические проверки", f"cpa:{token}:menu-system")],
+                *_popup_navigation_rows(token, back_callback=f"cpo:settings:{token}"),
+            ]
+        ),
     )
 
 
@@ -962,12 +1065,12 @@ async def _send_work_tools(message: ClientPlatformMessageTarget, *, token: str, 
         "Если Вам нужно:\n"
         "• настроить то, что можно заказать → «🧰 Мои услуги»\n"
         "• открыть или проверить время → «📅 Мой календарь»\n"
-        "• посмотреть ссылку для клиентов → «🔗 Моя страница»",
+        f"• открыть готовую ссылку для записи → «{nav.PUBLIC_PAGE.label}»",
         reply_markup=control._keyboard(
             [
                 [("🧰 Мои услуги", f"cpj:services:{token}")],
                 [("📅 Мой календарь", f"cpj:calendar:{token}:30")],
-                [("🔗 Моя страница", f"cpj:page:{token}")],
+                [(nav.PUBLIC_PAGE.label, f"cpj:page:{token}")],
                 *_popup_navigation_rows(token, back_callback=f"cpo:more:{token}"),
             ]
         ),
@@ -1005,6 +1108,41 @@ async def open_settings_tools(callback: CallbackQuery) -> None:
     token = str(callback.data).split(":", 2)[2]
     actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await _send_settings_tools(control._callback_message(callback), token=token, actor=actor)
+
+
+@router.callback_query(F.data.startswith("cpo:entrypoints:"))
+async def open_entry_point_tools(callback: CallbackQuery) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    await _send_entry_point_tools(control._callback_message(callback), token=token, actor=actor)
+
+
+@router.callback_query(F.data.startswith("cpo:business-more:"))
+async def open_business_more_tools(callback: CallbackQuery) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    await _send_business_more_tools(control._callback_message(callback), token=token, actor=actor)
+
+
+@router.callback_query(F.data.startswith("cpo:website:"))
+async def open_website_tools(callback: CallbackQuery) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    await _send_website_tools(control._callback_message(callback), token=token, actor=actor)
+
+
+@router.callback_query(F.data.startswith("cpo:sources:"))
+async def open_source_tools(callback: CallbackQuery) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    await _send_source_tools(control._callback_message(callback), token=token, actor=actor)
+
+
+@router.callback_query(F.data.startswith("cpo:integrations:"))
+async def open_integration_tools(callback: CallbackQuery) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    await _send_integration_tools(control._callback_message(callback), token=token, actor=actor)
 
 
 @router.callback_query(F.data.startswith("cpo:work:"))

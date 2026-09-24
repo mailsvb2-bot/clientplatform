@@ -84,6 +84,11 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
             ui._growth_more_message(actor),
             ui._growth_lifecycle_message(actor),
             ui._manage_message(actor),
+            ui._business_profile_message(actor),
+            ui._entrypoints_message(actor),
+            ui._website_message(actor),
+            ui._sources_message(actor),
+            ui._integrations_message(actor),
             ui._manage_more_message(actor),
         )
         for message in menus:

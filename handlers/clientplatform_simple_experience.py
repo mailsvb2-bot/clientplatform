@@ -74,7 +74,7 @@ def _managed_bot_auto_enabled() -> bool:
 
 def welcome_keyboard():
     return control._keyboard(
-        [[("🚀 Подключить организацию", "cps:start")]]
+        [[("➕ Добавить бизнес", "cps:start")]]
     )
 
 
@@ -86,8 +86,8 @@ def welcome_text() -> str:
         "• записывать их на встречи и напоминать;\n"
         "• выдавать аудио, видео, документы и программы;\n"
         "• показывать, кто получил материал и что требует внимания.\n\n"
-        "Сначала понадобится только название и одно простое описание. "
-        "Остальное я подготовлю сам."
+        "Сначала добавим Ваш бизнес: понадобится только название и одно простое описание. "
+        "После этого ClientPlatform отдельно предложит подключить каналы, сайт и точки входа клиентов."
     )
 
 
@@ -226,7 +226,7 @@ async def send_advanced_dashboard(
         ]
     )
     await message.answer(
-        f"🧩 Организация и возможности · {access.business.name}\n\n"
+        f"🧩 Бизнес и возможности · {access.business.name}\n\n"
         f"Чем Вы занимаетесь:\n{profile.activity_description}\n\n"
         f"Каналы:\n{messenger_lines}"
         f"{advertising_lines}\n\n"
