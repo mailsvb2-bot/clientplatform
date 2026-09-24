@@ -150,6 +150,7 @@ from clientplatform.application.retention import (
     prepare_reactivation_sales_lead,
 )
 from clientplatform.application.progress import list_business_program_progress
+from clientplatform.application.public_business_entry import public_business_entry_url
 from clientplatform.application.sales_workspace import (
     add_sales_workspace_note,
     assign_sales_workspace_to_actor,
@@ -3993,16 +3994,37 @@ def _entrypoints_message(actor: TenantContext) -> CustomerInteractionMessage:
 
 def _website_message(actor: TenantContext) -> CustomerInteractionMessage:
     actor.assert_can_manage_business()
-    return CustomerInteractionMessage(
-        text=(
+    public_base = str(
+        getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "") or ""
+    ).strip()
+    try:
+        web_url = public_business_entry_url(
+            public_base_url=public_base,
+            business_id=actor.business_id,
+        )
+    except ValueError:
+        web_url = None
+
+    if web_url is None:
+        text = (
             "🌐 Сайт / лендинг\n\n"
-            "Сайт подключается к текущему бизнесу как точка входа клиентов. "
-            "ClientPlatform может создать клиентское приглашение, которое размещается на кнопке "
-            "«Записаться». Если сайт умеет API или webhook, используйте «CRM и сервисы». "
-            "Статус «подключено» появляется только после реальной связи."
-        ),
+            "ClientPlatform умеет сам создать веб-страницу бизнеса и принимать через неё "
+            "заявки, но публичный HTTPS-адрес этой установки сейчас не подтверждён. "
+            "Ничего не считаю подключённым."
+        )
+    else:
+        text = (
+            "🌐 Сайт / лендинг\n\n"
+            "ClientPlatform уже создал для этого бизнеса собственную веб-страницу заявки. "
+            "Заявка с неё сразу попадает в клиентов и обращения ClientPlatform.\n\n"
+            f"Постоянная ссылка:\n{web_url}\n\n"
+            "Разместите эту ссылку на кнопке «Записаться» или «Оставить заявку» "
+            "на существующем сайте/лендинге. Для прямого API/webhook конкретной CRM "
+            "используйте «CRM и сервисы»."
+        )
+    return CustomerInteractionMessage(
+        text=text,
         rows=(
-            (_button("🔗 Создать приглашение клиенту", "cpm:invite-new"),),
             (_button(nav.CUSTOMER_SOURCES.label, "cpm:sources"),),
             (_button(nav.INTEGRATIONS.label, "cpm:integrations"),),
             _back_row(),
