@@ -949,8 +949,8 @@ async def _send_settings_tools(message: ClientPlatformMessageTarget, *, token: s
     body = "\n".join(help_lines) or "Для Вашей роли здесь сейчас нет доступных настроек."
     await message.answer(
         "⚙️ Мой бизнес\n\n"
-        "Это рабочее пространство бизнеса. Каналы общения, точки входа и внешние сервисы "
-        "подключаются к нему отдельно.\n\n"
+        "Это рабочее пространство бизнеса. Здесь показаны только подключения и настройки, "
+        "доступные Вашей роли.\n\n"
         "Если Вам нужно:\n" + body,
         reply_markup=control._keyboard(rows),
     )
