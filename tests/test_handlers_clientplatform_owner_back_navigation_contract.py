@@ -68,7 +68,7 @@ def test_native_navigation_normalizer_replaces_home_only_with_back_and_home() ->
     labels = [button.label for row in normalized.rows for button in row]
     assert normalized.rows[-1][0].label == nav.BACK.label
     assert normalized.rows[-1][0].command == "cpm:growth"
-    assert nav.HOME.label in labels
+    assert nav.MAIN_MENU_LABEL in labels
     assert "cpm:menu" in commands
     assert sum(len(row) for row in normalized.rows) <= 10
 

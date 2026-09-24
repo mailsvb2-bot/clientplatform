@@ -61,7 +61,7 @@ def test_admin_back_keyboard_keeps_back_and_adds_main_menu() -> None:
     markup = admin._back_keyboard(SimpleNamespace(business_token="business-token"))
     buttons = _flatten(markup)
     assert buttons[nav.BACK.label] == "cpa:business-token:back"
-    assert buttons[nav.HOME.label] == "cpa:business-token:leave"
+    assert buttons[nav.MAIN_MENU_LABEL] == "cpa:business-token:leave"
 
 
 def test_native_direct_child_has_explicit_back_and_main_menu() -> None:

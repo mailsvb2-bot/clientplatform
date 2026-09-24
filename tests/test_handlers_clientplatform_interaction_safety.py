@@ -91,6 +91,30 @@ def fsm_context(*, user_id: int = 7) -> FSMContext:
     )
 
 
+def test_safety_navigation_rows_and_rename_prompt_have_escape_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(safety.control, "_uuid_token", lambda _value: "business-token")
+    rows = safety._safety_navigation_rows(
+        "business-token",
+        back_callback="cpo:settings:business-token",
+    )
+    assert rows == [[
+        ("⬅️ Назад", "cpo:settings:business-token"),
+        ("🏠 В главное меню", "cpj:home:business-token"),
+    ]]
+
+    markup = safety._rename_keyboard("business-id")
+    labels = [button.text for row in markup.inline_keyboard for button in row]
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert labels == ["Отменить", "⬅️ Назад", "🏠 В главное меню"]
+    assert callbacks == [
+        "cps:cancel:business-token",
+        "cpo:settings:business-token",
+        "cpj:home:business-token",
+    ]
+
+
 def test_command_like_values_are_never_valid_profile_fields() -> None:
     assert _command_like("") is True
     assert _command_like("   /mybot") is True
