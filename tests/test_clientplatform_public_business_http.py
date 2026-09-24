@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import importlib.util
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from clientplatform.runtime import public_business
+_AIOHTTP_AVAILABLE = importlib.util.find_spec("aiohttp") is not None
+if _AIOHTTP_AVAILABLE:
+    from clientplatform.runtime import public_business
 
 
 class _Request:
@@ -18,6 +21,10 @@ class _Request:
         return self._form
 
 
+@unittest.skipUnless(
+    _AIOHTTP_AVAILABLE,
+    "aiohttp runtime dependency is not installed in dependency-light Canon",
+)
 class PublicBusinessHttpTests(unittest.IsolatedAsyncioTestCase):
     async def test_get_renders_escaped_first_party_form(self) -> None:
         entry = SimpleNamespace(
