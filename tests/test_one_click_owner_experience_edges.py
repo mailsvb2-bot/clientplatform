@@ -525,10 +525,21 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             await labels_for(one_click.open_entry_point_tools, "cpo:entrypoints:business-1"),
             ["🌐 Сайт / лендинг", "📄 Страница записи", "🔗 Источники клиентов", "⬅️ Назад", "🏠 В главное меню"],
         )
-        self.assertEqual(
-            await labels_for(one_click.open_website_tools, "cpo:website:business-1"),
-            ["📄 Страница записи", "⚙️ CRM и сервисы", "⬅️ Назад", "🏠 В главное меню"],
-        )
+        with patch.object(
+            one_click.settings,
+            "MESSENGER_PUBLIC_BASE_URL",
+            "https://clientplatform.example.test",
+        ):
+            self.assertEqual(
+                await labels_for(one_click.open_website_tools, "cpo:website:business-1"),
+                [
+                    "🌐 Открыть веб-страницу бизнеса",
+                    "📄 Страница записи",
+                    "⚙️ CRM и сервисы",
+                    "⬅️ Назад",
+                    "🏠 В главное меню",
+                ],
+            )
         self.assertEqual(
             await labels_for(one_click.open_source_tools, "cpo:sources:business-1"),
             ["📄 Страница записи", "📣 Рекламные каналы", "🤝 Партнёрства", "⬅️ Назад", "🏠 В главное меню"],
