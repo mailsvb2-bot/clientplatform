@@ -821,7 +821,7 @@ async def archive_business_from_settings(callback: CallbackQuery, state: FSMCont
         await message.answer(
             "Активных организаций больше нет. Можно создать новую.",
             reply_markup=control._keyboard(
-                [[("➕ Создать организацию", "cps:start")]]
+                [[("➕ Добавить бизнес", "cps:start")]]
             ),
         )
         return
