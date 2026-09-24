@@ -368,6 +368,7 @@ def test_route_registration_helpers_have_no_telegram_route() -> None:
     messenger_webhooks._register_max_routes(app)
     messenger_webhooks._register_vk_routes(app)
     messenger_webhooks._register_clientplatform_owner_entry_routes(app)
+    messenger_webhooks._register_public_business_routes(app)
     routes = {(method, path) for method, path, _handler in app.router.routes}
     assert ("GET", "/") in routes
     assert ("GET", "/health") in routes
@@ -375,6 +376,8 @@ def test_route_registration_helpers_have_no_telegram_route() -> None:
     assert ("POST", "/webhooks/max") in routes
     assert ("POST", "/webhooks/vk") in routes
     assert ("GET", "/clientplatform/open/{platform}") in routes
+    assert ("GET", "/clientplatform/b/{business_token}") in routes
+    assert ("POST", "/clientplatform/b/{business_token}") in routes
     assert all("telegram" not in path for _method, path in routes)
     assert any(path.endswith("{token}") for _method, path in routes)
 
