@@ -604,7 +604,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             labels(PlatformRole.MARKETER),
-            ["🧩 Организация и возможности", "⬅️ Назад"],
+            ["🧩 Организация и возможности", "⬅️ Назад", "🏠 В главное меню"],
         )
 
 
