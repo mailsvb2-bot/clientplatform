@@ -1660,7 +1660,6 @@ def _with_parent_navigation(
             and row[0].command in {"cpm:menu", parent_command}
         )
     ]
-    total = sum(len(row) for row in rows)
     if parsed.action == "events":
         back_label = BACK_TO_GROWTH_LABEL
     elif parsed.action in {
@@ -1679,9 +1678,13 @@ def _with_parent_navigation(
         back_label = BACK_TO_EVENTS_LABEL
     else:
         back_label = nav.BACK.label
-    navigation = [_button(back_label, parent_command)]
-    if total + 2 <= 10:
-        navigation.append(_button(nav.MAIN_MENU_LABEL, "cpm:menu"))
+    # Native VK/MAX keyboards reserve two final slots for escape navigation.
+    # Dense renderers must paginate or remove only actions duplicated on the
+    # parent card instead of dropping either navigation control.
+    navigation = [
+        _button(back_label, parent_command),
+        _button(nav.MAIN_MENU_LABEL, "cpm:menu"),
+    ]
     rows.append(tuple(navigation))
     return CustomerInteractionMessage(text=message.text, rows=tuple(rows))
 
@@ -2064,11 +2067,24 @@ def _sales_actions_message(actor: TenantContext, lead_id: str) -> CustomerIntera
             rows.append((_button("👤 Снять ответственного", f"cpm:sales-unassign:{lead_id}"),))
         else:
             rows.append((_button("👤 Взять себе", f"cpm:sales-assign:{lead_id}"),))
-        rows.append((
-            _button("Связались", f"cpm:sales-stage:{lead_id}:contacted"),
-            _button("Интерес", f"cpm:sales-stage:{lead_id}:qualified"),
-            _button("Оформление", f"cpm:sales-stage:{lead_id}:checkout"),
-        ))
+        stage_buttons = (
+            ("contacted", "Связались"),
+            ("qualified", "Интерес"),
+            ("checkout", "Оформление"),
+        )
+        hidden_stage = {
+            "new": "contacted",
+            "contacted": "qualified",
+            "qualified": "checkout",
+            "checkout": "checkout",
+        }.get(stage)
+        rows.append(
+            tuple(
+                _button(label, f"cpm:sales-stage:{lead_id}:{target_stage}")
+                for target_stage, label in stage_buttons
+                if target_stage != hidden_stage
+            )
+        )
         rows.append((
             _button("📝 Заметка", f"cpm:sales-note-help:{lead_id}"),
             _button("➡️ Следующее", f"cpm:sales-next-help:{lead_id}"),
@@ -3638,7 +3654,7 @@ def _experiment_apply_message(
     )
 
 
-_DIRECTION_PAGE_SIZE = 4
+_DIRECTION_PAGE_SIZE = 3
 
 
 def _directions_message(
