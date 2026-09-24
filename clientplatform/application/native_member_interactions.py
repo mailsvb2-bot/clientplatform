@@ -2074,8 +2074,8 @@ def _sales_actions_message(actor: TenantContext, lead_id: str) -> CustomerIntera
         )
         hidden_stage = {
             "new": "contacted",
-            "contacted": "qualified",
-            "qualified": "checkout",
+            "contacted": "contacted",
+            "qualified": "qualified",
             "checkout": "checkout",
         }.get(stage)
         rows.append(
