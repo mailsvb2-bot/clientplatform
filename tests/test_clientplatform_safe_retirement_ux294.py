@@ -144,7 +144,9 @@ class ClientPlatformSafeRetirementUX294Tests(unittest.TestCase):
 
     def test_native_business_retirement_confirmation_ends_dead_workspace_navigation(self) -> None:
         settings = self._render("cpm:manage")
-        self.assertIn("cpm:business-retire", self._commands(settings))
+        self.assertIn("cpm:business-profile", self._commands(settings))
+        profile = self._render("cpm:business-profile")
+        self.assertIn("cpm:business-retire", self._commands(profile))
         confirm = self._render("cpm:business-retire")
         self.assertIn("Оплаты, результаты и аудит не удаляются", confirm.text)
         self.assertIn("cpm:business-retire-ok", self._commands(confirm))

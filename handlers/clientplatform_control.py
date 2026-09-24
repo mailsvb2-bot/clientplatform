@@ -233,7 +233,7 @@ def _business_choice_keyboard(accesses: list[object]) -> InlineKeyboardMarkup:
         ]
         for access in accesses
     ]
-    rows.append([("➕ Создать организацию", "cps:start")])
+    rows.append([("➕ Добавить бизнес", "cps:start")])
     return _keyboard(rows)
 
 
@@ -265,6 +265,20 @@ def _onboarding_review_keyboard(business_id: str) -> InlineKeyboardMarkup:
 
 
 def _onboarding_first_result_keyboard(business_id: str) -> InlineKeyboardMarkup:
+    """First screen after Business profile confirmation: attach real entry surfaces."""
+
+    token = _uuid_token(business_id)
+    return _keyboard(
+        [
+            [(nav.MESSENGERS.label, f"cpa:{token}:messengers")],
+            [(nav.ENTRY_POINTS.label, f"cpo:entrypoints:{token}")],
+            [(nav.INTEGRATIONS.label, f"cpo:integrations:{token}")],
+            [("➡️ Настроить услуги и работу", f"cp:onboardwork:{token}")],
+        ]
+    )
+
+
+def _onboarding_work_goal_keyboard(business_id: str) -> InlineKeyboardMarkup:
     token = _uuid_token(business_id)
     return _keyboard(
         [
@@ -309,7 +323,7 @@ def _dashboard_keyboard(business_id: str, capabilities: list[object]) -> InlineK
     rows.extend(
         [
             [("Клиенты", f"cp:clients:{token}"), ("Результаты", f"cp:results:{token}")],
-            [("✏️ Описание организации", f"cp:editact:{token}")],
+            [(nav.ACTIVITY.label, f"cp:editact:{token}")],
         ]
     )
     markup = _keyboard(rows)
@@ -366,9 +380,20 @@ async def _send_onboarding_review(message: Message, *, actor, business_id: str) 
 
 async def _send_onboarding_first_result(message: Message, *, business_id: str) -> None:
     await message.answer(
+        "✅ Бизнес создан. Что подключим к нему?\n\n"
+        "• «Каналы общения» — Telegram, ВКонтакте и MAX.\n"
+        "• «Точки входа клиентов» — сайт / лендинг, страница записи и источники клиентов.\n"
+        "• «CRM и сервисы» — только реальные проверяемые API/webhook-подключения.\n\n"
+        "Можно подключить это сейчас или перейти к услугам и работе.",
+        reply_markup=_onboarding_first_result_keyboard(business_id),
+    )
+
+
+async def _send_onboarding_work_goal(message: Message, *, business_id: str) -> None:
+    await message.answer(
         "Что Вы хотите получить первым?\n\n"
         "Выберите результат — ClientPlatform сам подготовит следующий шаг.",
-        reply_markup=_onboarding_first_result_keyboard(business_id),
+        reply_markup=_onboarding_work_goal_keyboard(business_id),
     )
 
 
@@ -477,7 +502,7 @@ async def clientplatform_start(message: Message, state: FSMContext) -> None:
     if len(accesses) > 1:
         await state.clear()
         await message.answer(
-            "Выберите организацию, с которой хотите работать:",
+            "Выберите бизнес, с которым хотите работать:",
             reply_markup=_business_choice_keyboard(accesses),
         )
         return
@@ -526,7 +551,7 @@ async def receive_activity_description(message: Message, state: FSMContext) -> N
     )
     if editing_activity:
         await state.clear()
-        await message.answer("Описание организации обновлено.")
+        await message.answer("Профиль бизнеса обновлён.")
         await _send_dashboard(message, user_id=_user_id(message), business_id=business_id)
         return
 
@@ -563,6 +588,18 @@ async def edit_onboarding_profile(callback: CallbackQuery, state: FSMContext) ->
     await _callback_message(callback).answer(
         "Напишите описание заново своими словами. Если важно, добавьте цену, "
         "город или онлайн-формат, контакт и правила записи."
+    )
+
+
+@router.callback_query(F.data.startswith("cp:onboardwork:"))
+async def continue_onboarding_work(callback: CallbackQuery, state: FSMContext) -> None:
+    business_id = _token_uuid(str(callback.data).split(":", 2)[2])
+    await _actor(_callback_actor_user_id(callback), business_id)
+    await state.clear()
+    await callback.answer()
+    await _send_onboarding_work_goal(
+        _callback_message(callback),
+        business_id=business_id,
     )
 
 

@@ -38,6 +38,7 @@ from clientplatform.application.owner_booking_journey import (
     replace_owner_booking_slot,
 )
 from clientplatform.domain.bookings import BookingSlotStatus, BookingSlotView
+from clientplatform.presentation import owner_navigation as nav
 
 control = importlib.import_module(".clientplatform_control", __package__)
 simple = importlib.import_module(".clientplatform_simple_experience", __package__)
@@ -111,11 +112,11 @@ def _owner_keyboard(business_id: str) -> InlineKeyboardMarkup:
             ],
             [
                 ("👥 Записи клиентов", f"cpj:bookings:{token}"),
-                ("🔗 Моя страница", f"cpj:page:{token}"),
+                (nav.PUBLIC_PAGE.label, f"cpj:page:{token}"),
             ],
             [
                 ("📢 Продвижение", f"cpj:promote:{token}"),
-                ("⚙️ Настройки", f"cps:advanced:{token}"),
+                ("⚙️ Мой бизнес", f"cpo:settings:{token}"),
             ],
         ]
     )
@@ -741,7 +742,7 @@ async def open_public_page_for_owner(callback: CallbackQuery) -> None:
     ) or "• свободного времени пока нет"
     await callback.answer()
     await control._callback_message(callback).answer(
-        "🔗 Ваша публичная страница\n\n"
+        "📄 Страница записи ClientPlatform\n\n"
         f"Услуги:\n{offering_lines}\n\n"
         f"Свободное время:\n{slot_lines}\n\n"
         f"Постоянная ссылка бизнеса:\n{link}\n\n"
@@ -749,7 +750,7 @@ async def open_public_page_for_owner(callback: CallbackQuery) -> None:
         "Посетитель сразу увидит актуальное свободное время.",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text="🔗 Открыть публичную страницу", url=link)],
+                [InlineKeyboardButton(text="📄 Открыть страницу записи", url=link)],
                 [InlineKeyboardButton(
                     text="📢 Продвижение",
                     callback_data=f"cpj:promote:{business_token}",

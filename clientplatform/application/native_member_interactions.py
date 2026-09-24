@@ -878,6 +878,11 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "work-more",
             "manage-more",
             "manage",
+            "business-profile",
+            "entrypoints",
+            "website",
+            "sources",
+            "integrations",
             "team",
             "today",
             "today-full",
@@ -1445,7 +1450,12 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "retention": "cpm:growth-lifecycle",
     "invites": "cpm:growth-lifecycle",
     "manage": "cpm:menu-all",
-    "directions": "cpm:manage",
+    "business-profile": "cpm:manage",
+    "entrypoints": "cpm:manage",
+    "website": "cpm:entrypoints",
+    "sources": "cpm:entrypoints",
+    "integrations": "cpm:manage",
+    "directions": "cpm:business-profile",
     "directions-archived": "cpm:directions:0",
     "direction": "cpm:directions:0",
     "direction-new": "cpm:directions:0",
@@ -1457,7 +1467,7 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "direction-restore": "cpm:directions-archived:0",
     "manage-more": "cpm:manage",
     "release": "cpm:manage",
-    "formats": "cpm:manage",
+    "formats": "cpm:business-profile",
     "tariff": "cpm:manage",
     "tariff-upgrade": "cpm:tariff",
     "recent": "cpm:manage-more",
@@ -1470,7 +1480,7 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "connect-telegram": "cpm:messengers",
     "connect-vk": "cpm:messengers",
     "connect-max": "cpm:messengers",
-    "activity-edit-help": "cpm:manage",
+    "activity-edit-help": "cpm:business-profile",
     "publication-new": "cpm:publications",
     "payment-new": "cpm:payments",
     "price-set": "cpm:prices",
@@ -1480,7 +1490,7 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "offering-new-dir": "cpm:offers",
     "offering-retire-list": "cpm:offers",
     "publication-retire-list": "cpm:publications",
-    "business-retire": "cpm:manage-more",
+    "business-retire": "cpm:business-profile",
     "program-create": "cpm:programs:0",
     "program-create-dirs": "cpm:programs:0",
     "program-create-dir": "cpm:programs:0",
@@ -3684,7 +3694,7 @@ def _directions_message(
         for item in shown
     ]
     if not archived:
-        rows.append((_button("✏️ Описание организации", "cpm:activity-edit-help"),))
+        rows.append((_button(nav.ACTIVITY.label, "cpm:activity-edit-help"),))
         rows.append((_button("➕ Добавить направление", "cpm:direction-new"),))
         if any(item.status == ActivityDirectionStatus.ARCHIVED for item in all_directions):
             rows.append((_button("📦 Архив направлений", "cpm:directions-archived:0"),))
@@ -3921,12 +3931,37 @@ def _direction_restore_result(
 def _manage_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role not in _CONNECTION_ROLES:
         return _permission_message()
-    items = [nav.MESSENGERS, nav.FORMATS]
+    items = [nav.ACTIVITY, nav.MESSENGERS, nav.ENTRY_POINTS, nav.INTEGRATIONS]
     rows: list[tuple[CustomerInteractionButton, ...]] = [
-        (_button("🧭 Направления деятельности", "cpm:directions:0"),),
+        (_button(nav.ACTIVITY.label, "cpm:business-profile"),),
         (_button(nav.MESSENGERS.label, "cpm:messengers"),),
+        (_button(nav.ENTRY_POINTS.label, "cpm:entrypoints"),),
+        (_button(nav.INTEGRATIONS.label, "cpm:integrations"),),
+    ]
+    if actor.role == PlatformRole.OWNER:
+        rows.append((_button("👤 Сотрудники и доступы", "cpm:team"),))
+        items.append(nav.TEAM)
+    rows.append(_back_row())
+    return CustomerInteractionMessage(
+        text=(
+            "⚙️ Мой бизнес\n\n"
+            "Это рабочее пространство бизнеса. Каналы общения, точки входа и внешние сервисы "
+            "подключаются к нему отдельно.\n\n"
+            + nav.choice_help(*items)
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _business_profile_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _CONNECTION_ROLES:
+        return _permission_message()
+    rows: list[tuple[CustomerInteractionButton, ...]] = [
+        (_button("✏️ Изменить описание", "cpm:activity-edit-help"),),
+        (_button(nav.DIRECTIONS.label, "cpm:directions:0"),),
         (_button(nav.FORMATS.label, "cpm:formats"),),
     ]
+    items = [nav.ACTIVITY, nav.DIRECTIONS, nav.FORMATS]
     if actor.role == PlatformRole.OWNER:
         rows.append((_button(nav.DELETE_BUSINESS.label, "cpm:business-retire"),))
         items.append(nav.DELETE_BUSINESS)
@@ -3934,12 +3969,80 @@ def _manage_message(actor: TenantContext) -> CustomerInteractionMessage:
     items.append(nav.SETTINGS_MORE)
     rows.append(_back_row())
     return CustomerInteractionMessage(
-        text=(
-            "⚙️ Настроить бизнес\n\n"
-            + nav.choice_help(*items)
-            + "\n• изменить описание организации или управлять её направлениями → «🧭 Направления деятельности»"
-        ),
+        text="✏️ Профиль бизнеса\n\n" + nav.choice_help(*items),
         rows=tuple(rows),
+    )
+
+
+def _entrypoints_message(actor: TenantContext) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    return CustomerInteractionMessage(
+        text=(
+            "🔗 Точки входа клиентов\n\n"
+            "Здесь выбирается, откуда люди попадают в этот бизнес: сайт или лендинг, "
+            "подтверждённые источники и персональные приглашения."
+        ),
+        rows=(
+            (_button(nav.WEBSITE.label, "cpm:website"),),
+            (_button(nav.CUSTOMER_SOURCES.label, "cpm:sources"),),
+            (_button("🔗 Приглашения клиентов", "cpm:invites"),),
+            _back_row(),
+        ),
+    )
+
+
+def _website_message(actor: TenantContext) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    return CustomerInteractionMessage(
+        text=(
+            "🌐 Сайт / лендинг\n\n"
+            "Сайт подключается к текущему бизнесу как точка входа клиентов. "
+            "ClientPlatform может создать клиентское приглашение, которое размещается на кнопке "
+            "«Записаться». Если сайт умеет API или webhook, используйте «CRM и сервисы». "
+            "Статус «подключено» появляется только после реальной связи."
+        ),
+        rows=(
+            (_button("🔗 Создать приглашение клиенту", "cpm:invite-new"),),
+            (_button(nav.CUSTOMER_SOURCES.label, "cpm:sources"),),
+            (_button(nav.INTEGRATIONS.label, "cpm:integrations"),),
+            _back_row(),
+        ),
+    )
+
+
+def _sources_message(actor: TenantContext) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    return CustomerInteractionMessage(
+        text=(
+            "🔗 Источники клиентов\n\n"
+            "Здесь настраивается, откуда приходят люди: реклама, приглашения и другие "
+            "подтверждённые источники. ClientPlatform не приписывает источник автоматически, "
+            "если реального сигнала от канала нет."
+        ),
+        rows=(
+            (_button("📣 Рекламные каналы", "cpm:ad-channels"),),
+            (_button("🔗 Приглашения клиентов", "cpm:invites"),),
+            _back_row(),
+        ),
+    )
+
+
+def _integrations_message(actor: TenantContext) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    return CustomerInteractionMessage(
+        text=(
+            "⚙️ CRM и сервисы\n\n"
+            "Внешние системы подключаются через отдельные защищённые коннекторы. "
+            "Telegram, ВКонтакте и MAX уже имеют собственный мастер подключения. "
+            "Для произвольной CRM нужен её реальный API/webhook-коннектор; ClientPlatform "
+            "не показывает фиктивный статус «подключено», пока связь не проверена."
+        ),
+        rows=(
+            (_button(nav.MESSENGERS.label, "cpm:messengers"),),
+            (_button(nav.WEBSITE.label, "cpm:website"),),
+            (_button(nav.SYSTEM.label, "cpm:system"),),
+            _back_row(),
+        ),
     )
 
 
@@ -7394,6 +7497,16 @@ def _render(
             )
         if parsed.action == "manage":
             return _manage_message(actor)
+        if parsed.action == "business-profile":
+            return _business_profile_message(actor)
+        if parsed.action == "entrypoints":
+            return _entrypoints_message(actor)
+        if parsed.action == "website":
+            return _website_message(actor)
+        if parsed.action == "sources":
+            return _sources_message(actor)
+        if parsed.action == "integrations":
+            return _integrations_message(actor)
         if parsed.action == "directions":
             return _directions_message(actor, _page_number(parsed.args))
         if parsed.action == "directions-archived":

@@ -166,7 +166,7 @@ def test_keyboard_builders_and_content_detection(monkeypatch: pytest.MonkeyPatch
     choice = handlers._business_choice_keyboard([access])
     assert choice.inline_keyboard[0][0].text == "Моя практика"
     assert choice.inline_keyboard[0][0].callback_data.startswith("cp:business:")
-    assert choice.inline_keyboard[-1][0].text == "➕ Создать организацию"
+    assert choice.inline_keyboard[-1][0].text == "➕ Добавить бизнес"
     assert choice.inline_keyboard[-1][0].callback_data == "cps:start"
 
     client_choice = handlers._client_business_keyboard(
@@ -202,7 +202,7 @@ def test_keyboard_builders_and_content_detection(monkeypatch: pytest.MonkeyPatch
     assert "Services" not in flat
     assert "Клиенты" in flat
     assert "Результаты" in flat
-    assert "✏️ Описание организации" in flat
+    assert "✏️ Профиль бизнеса" in flat
     assert "🏠 Открыть кабинет" in flat
     cockpit_button = next(
         button
@@ -363,10 +363,10 @@ async def test_start_invite_new_multi_and_single_business(monkeypatch: pytest.Mo
     multi_state = FakeState({"old": 1})
     await handlers.clientplatform_start(multiple, multi_state)
     assert multi_state.clear_count == 1
-    assert "Выберите организацию" in multiple.answers[-1][0]
+    assert "Выберите бизнес" in multiple.answers[-1][0]
     multiple_rows = multiple.answers[-1][1]["reply_markup"].inline_keyboard
     assert len(multiple_rows) == 3
-    assert multiple_rows[-1][0].text == "➕ Создать организацию"
+    assert multiple_rows[-1][0].text == "➕ Добавить бизнес"
     assert multiple_rows[-1][0].callback_data == "cps:start"
 
     one = [business_access(business_id)]
@@ -705,7 +705,7 @@ async def test_business_archive_confirmation_fails_closed_and_routes_remaining(
         for row in none_left.message.answers[-1][1]["reply_markup"].inline_keyboard
         for button in row
     ]
-    assert create_buttons == ["➕ Создать организацию"]
+    assert create_buttons == ["➕ Добавить бизнес"]
 
     other_id = str(uuid4())
     remaining = [business_access(other_id, "Основной бизнес")]
@@ -729,7 +729,7 @@ async def test_business_archive_confirmation_fails_closed_and_routes_remaining(
     )
     multiple_left = FakeCallback(f"cps:archive-confirm:{token}")
     await safety.archive_business_from_settings(multiple_left, FakeState())
-    assert "Выберите организацию" in multiple_left.message.answers[-1][0]
+    assert "Выберите бизнес" in multiple_left.message.answers[-1][0]
     assert multiple_left.message.answers[-1][1]["reply_markup"] == "business-choice"
 
 

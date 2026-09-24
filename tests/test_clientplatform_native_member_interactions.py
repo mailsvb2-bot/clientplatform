@@ -898,17 +898,39 @@ class NativePopupNavigationParityTests(unittest.TestCase):
 
 
 class NativeBusinessSettingsParityTests(unittest.TestCase):
-    def test_vk_and_max_settings_expose_same_direction_and_delete_actions(self) -> None:
+    def test_new_business_navigation_commands_are_parsed(self) -> None:
+        for action in ("business-profile", "entrypoints", "website", "sources", "integrations"):
+            with self.subTest(action=action):
+                parsed = native_member_ui.parse_native_member_interaction(f"cpm:{action}")
+                self.assertEqual(action, parsed.action)
+                self.assertTrue(native_member_ui.recognizes_native_member_interaction(f"cpm:{action}"))
+
+    def test_vk_and_max_my_business_hub_keeps_connections_and_profile_reachable(self) -> None:
         for platform in (ConnectionPlatform.VK, ConnectionPlatform.MAX):
             with self.subTest(platform=platform.value):
                 actor = _actor(_route(platform))
                 message = native_member_ui._manage_message(actor)
                 labels = [button.label for row in message.rows for button in row]
                 commands = [button.command for row in message.rows for button in row]
-                self.assertIn("🧭 Направления деятельности", labels)
-                self.assertIn("🗑 Удалить организацию", labels)
-                self.assertIn("cpm:directions:0", commands)
-                self.assertIn("cpm:business-retire", commands)
+                self.assertIn("✏️ Профиль бизнеса", labels)
+                self.assertIn("💬 Каналы общения", labels)
+                self.assertIn("🔗 Точки входа клиентов", labels)
+                self.assertIn("⚙️ CRM и сервисы", labels)
+                self.assertIn("👤 Сотрудники и доступы", labels)
+                self.assertIn("cpm:business-profile", commands)
+                self.assertIn("cpm:messengers", commands)
+                self.assertIn("cpm:entrypoints", commands)
+                self.assertIn("cpm:integrations", commands)
+                self.assertIn("cpm:team", commands)
+
+                profile = native_member_ui._business_profile_message(actor)
+                profile_labels = [button.label for row in profile.rows for button in row]
+                profile_commands = [button.command for row in profile.rows for button in row]
+                self.assertIn("🧭 Направления деятельности", profile_labels)
+                self.assertIn("🗑 Удалить бизнес", profile_labels)
+                self.assertIn("cpm:directions:0", profile_commands)
+                self.assertIn("cpm:business-retire", profile_commands)
+
                 with patch.object(
                     native_member_ui,
                     "list_activity_directions",
@@ -918,14 +940,38 @@ class NativeBusinessSettingsParityTests(unittest.TestCase):
                 direction_labels = [
                     button.label for row in directions.rows for button in row
                 ]
-                self.assertIn("✏️ Описание организации", direction_labels)
+                self.assertIn("✏️ Профиль бизнеса", direction_labels)
 
-    def test_admin_can_edit_direction_but_cannot_delete_business(self) -> None:
+    def test_admin_keeps_profile_controls_without_owner_only_delete_or_team(self) -> None:
         actor = replace(_actor(_route(ConnectionPlatform.VK)), role=PlatformRole.ADMINISTRATOR)
-        message = native_member_ui._manage_message(actor)
+        hub = native_member_ui._manage_message(actor)
+        hub_labels = [button.label for row in hub.rows for button in row]
+        self.assertIn("✏️ Профиль бизнеса", hub_labels)
+        self.assertIn("⚙️ CRM и сервисы", hub_labels)
+        self.assertNotIn("👤 Сотрудники и доступы", hub_labels)
+
+        profile = native_member_ui._business_profile_message(actor)
+        profile_labels = [button.label for row in profile.rows for button in row]
+        self.assertIn("🧭 Направления деятельности", profile_labels)
+        self.assertNotIn("🗑 Удалить бизнес", profile_labels)
+
+    def test_entry_points_separate_site_sources_and_customer_invites(self) -> None:
+        actor = _actor(_route(ConnectionPlatform.MAX))
+        message = native_member_ui._entrypoints_message(actor)
         labels = [button.label for row in message.rows for button in row]
-        self.assertIn("🧭 Направления деятельности", labels)
-        self.assertNotIn("🗑 Удалить организацию", labels)
+        commands = [button.command for row in message.rows for button in row]
+        self.assertIn("🌐 Сайт / лендинг", labels)
+        self.assertIn("🔗 Источники клиентов", labels)
+        self.assertIn("🔗 Приглашения клиентов", labels)
+        self.assertIn("cpm:website", commands)
+        self.assertIn("cpm:sources", commands)
+        self.assertIn("cpm:invites", commands)
+
+    def test_crm_screen_does_not_claim_unverified_connection(self) -> None:
+        actor = _actor(_route(ConnectionPlatform.VK))
+        message = native_member_ui._integrations_message(actor)
+        self.assertIn("не показывает фиктивный статус «подключено»", message.text)
+        self.assertNotIn("✅ подключено", message.text)
 
     def test_business_delete_confirmation_is_explicit_and_preserves_history(self) -> None:
         actor = _actor(_route(ConnectionPlatform.MAX))

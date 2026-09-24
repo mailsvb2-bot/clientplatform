@@ -386,6 +386,11 @@ def test_owner_group_navigation_escapes_stale_ordinary_wizards() -> None:
         "cpo:clients:business",
         "cpo:content:business",
         "cpo:settings:business",
+        "cpo:entrypoints:business",
+        "cpo:website:business",
+        "cpo:sources:business",
+        "cpo:integrations:business",
+        "cpo:business-more:business",
         "cpo:work:business",
         "cpo:ads:business",
     ):
