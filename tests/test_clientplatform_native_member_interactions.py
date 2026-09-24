@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 from clientplatform.application import native_member_interactions as native_member_ui
+from clientplatform.application.control_callbacks import uuid_token
 from clientplatform.application.admin_ops import PublicationCalendarProjection, PublicationRecord
 from clientplatform.application.native_member_interactions import (
     NativeMemberBridgeRejected,
@@ -976,7 +977,7 @@ class NativeBusinessSettingsParityTests(unittest.TestCase):
         ):
             message = native_member_ui._website_message(actor)
         self.assertIn(
-            f"https://clientplatform.example.test/clientplatform/b/{native_member_ui.uuid_token(actor.business_id)}",
+            f"https://clientplatform.example.test/clientplatform/b/{uuid_token(actor.business_id)}",
             message.text,
         )
         self.assertIn("сразу попадает в клиентов и обращения", message.text)
