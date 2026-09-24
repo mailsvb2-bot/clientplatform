@@ -835,7 +835,7 @@ async def archive_business_from_settings(callback: CallbackQuery, state: FSMCont
         )
         return
     await message.answer(
-        "Выберите организацию, с которой хотите работать:",
+        "Выберите бизнес, с которым хотите работать:",
         reply_markup=control._business_choice_keyboard(remaining),
     )
 
