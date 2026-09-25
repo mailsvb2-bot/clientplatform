@@ -651,6 +651,33 @@ def _prune_deploy_image_history(target_sha: str) -> dict[str, int]:
     }
 
 
+def _prune_images_without_containers() -> dict[str, object]:
+    """Drop images no container references, then record what remained.
+
+    Running and stopped containers keep their images. A rollback tag that points
+    at the image of a live container stays with it. Volumes, networks and backups
+    are not pruned.
+    """
+
+    listed = _run(
+        ["docker", "images", "--format", "{{.Repository}}:{{.Tag}} {{.ID}} {{.Size}}"],
+        capture=True,
+        check=False,
+    )
+    if listed.returncode != 0:
+        raise DeploymentError("unused_image_audit_failed")
+    print("CLIENTPLATFORM_IMAGE_AUDIT_BEGIN")
+    print(listed.stdout.rstrip())
+    print("CLIENTPLATFORM_IMAGE_AUDIT_END")
+    pruned = _run(["docker", "image", "prune", "--all", "--force"], capture=True, check=False)
+    if pruned.returncode != 0:
+        raise DeploymentError("unused_image_prune_failed")
+    print("CLIENTPLATFORM_UNUSED_IMAGE_PRUNE_BEGIN")
+    print(pruned.stdout.rstrip())
+    print("CLIENTPLATFORM_UNUSED_IMAGE_PRUNE_END")
+    return {"pruned": True}
+
+
 def _prune_build_cache(*, pressure: bool = False) -> dict[str, str]:
     command = ["docker", "builder", "prune", "--force", "--all"]
     if not pressure:
@@ -1441,6 +1468,7 @@ def deploy(
     predeploy_stale_image_cleanup = _cleanup_stale_project_images()
     image_retention = _prune_deploy_image_history(target_sha)
     predeploy_backup_image_retention = _remove_transient_backup_image()
+    unreferenced_image_prune = _prune_images_without_containers()
     build_cache_retention = _prune_build_cache_for_capacity(
         rollout_mode=runtime_rollout_mode
     )
@@ -1644,6 +1672,7 @@ def deploy(
             "predeploy_stale_image_cleanup": predeploy_stale_image_cleanup,
             "image_retention": image_retention,
             "predeploy_backup_image_retention": predeploy_backup_image_retention,
+            "unreferenced_image_prune": unreferenced_image_prune,
             "build_cache_retention": build_cache_retention,
             "disk_before_deploy": disk_before_deploy,
             "post_deploy_retention": post_deploy_retention,

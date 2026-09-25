@@ -192,6 +192,7 @@ def test_app_only_deploy_rebuilds_app_without_rebuilding_visual_gateway(monkeypa
         },
     )
     monkeypatch.setattr(deploy, "_remove_transient_backup_image", lambda: {"present": False, "removed": False})
+    monkeypatch.setattr(deploy, "_prune_images_without_containers", lambda: {"pruned": True})
     monkeypatch.setattr(deploy, "_prune_build_cache_for_capacity", lambda **_: cache)
     monkeypatch.setattr(deploy, "_encrypted_backup", lambda _: "/backup/proof.dump.age")
     monkeypatch.setattr(
