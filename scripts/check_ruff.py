@@ -8,17 +8,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUFF_TARGETS = (
-    "services",
-    "scripts",
-    "handlers",
-    "core",
-    "runtime",
-    "config",
-    "tests",
-    "app.py",
-    "main.py",
-)
+# Lint the whole repository so no Python package can silently escape the gate.
+# Scope is bounded by [tool.ruff] exclude in pyproject.toml plus the venv
+# excludes passed below; an explicit directory list previously left
+# clientplatform/ and other top-level packages unlinted.
+RUFF_TARGETS = (".",)
 # Keep architecture audits behind Ruff so the canonical lint failure remains the
 # first actionable result while every successful lint run enforces boundaries.
 HANDLER_BOUNDARY_AUDITS = (
