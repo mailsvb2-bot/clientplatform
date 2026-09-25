@@ -44,6 +44,7 @@ from clientplatform.runtime.native_messenger_setup_http import (
 )
 from clientplatform.runtime.partner_aware_bot_gateway import ManagedBotGatewayRuntime
 from clientplatform.runtime.public_events import register_public_event_routes
+from clientplatform.runtime.public_business import register_public_business_routes
 from config.settings import settings
 from core.runtime_env import env_float, env_int
 from core.task_manager import TaskManager
@@ -142,6 +143,8 @@ async def _health(request: web.Request) -> web.Response:
         payload["omnichannel_ingress"] = True
     if request.app.get("clientplatform_acquisition_ingress") is True:
         payload["acquisition_ingress"] = True
+    if request.app.get("clientplatform_public_business_ingress") is True:
+        payload["public_business_ingress"] = True
     if request.app.get("clientplatform_event_ingress") is True:
         payload["event_ingress"] = True
     reconciliation_task = request.app.get(
@@ -501,6 +504,10 @@ def _register_acquisition_routes(app: web.Application) -> None:
     app["clientplatform_acquisition_ingress"] = True
 
 
+def _register_public_business_routes(app: web.Application) -> None:
+    register_public_business_routes(app)
+
+
 def _register_health_routes(app: web.Application) -> None:
     app.router.add_get("/", _health)
     app.router.add_get("/health", _health)
@@ -634,6 +641,7 @@ async def start_messenger_webhook_runtime(
         _register_external_product_routes(app)
     if acquisition_enabled:
         _register_acquisition_routes(app)
+        _register_public_business_routes(app)
     if event_enabled:
         register_public_event_routes(app)
     if ad_oauth_enabled:

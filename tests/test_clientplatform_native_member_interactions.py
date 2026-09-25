@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 from clientplatform.application import native_member_interactions as native_member_ui
+from clientplatform.application.control_callbacks import uuid_token
 from clientplatform.application.admin_ops import PublicationCalendarProjection, PublicationRecord
 from clientplatform.application.native_member_interactions import (
     NativeMemberBridgeRejected,
@@ -966,6 +967,20 @@ class NativeBusinessSettingsParityTests(unittest.TestCase):
         self.assertIn("cpm:website", commands)
         self.assertIn("cpm:sources", commands)
         self.assertIn("cpm:invites", commands)
+
+    def test_website_screen_exposes_hosted_business_page_when_https_is_configured(self) -> None:
+        actor = _actor(_route(ConnectionPlatform.MAX))
+        with patch.object(
+            native_member_ui.settings,
+            "MESSENGER_PUBLIC_BASE_URL",
+            "https://clientplatform.example.test",
+        ):
+            message = native_member_ui._website_message(actor)
+        self.assertIn(
+            f"https://clientplatform.example.test/clientplatform/b/{uuid_token(actor.business_id)}",
+            message.text,
+        )
+        self.assertIn("сразу попадает в клиентов и обращения", message.text)
 
     def test_crm_screen_does_not_claim_unverified_connection(self) -> None:
         actor = _actor(_route(ConnectionPlatform.VK))
