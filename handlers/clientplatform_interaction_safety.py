@@ -56,6 +56,7 @@ _OWNER_NAVIGATION_PREFIXES = (
     "cpo:business-more:",
     "cpo:work:",
     "cpo:ads:",
+    "cpo:ad-materials:",
 )
 
 # Callback namespaces are shared by several independently composed routers.  Keep

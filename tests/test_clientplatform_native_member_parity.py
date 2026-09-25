@@ -44,18 +44,18 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
             message = ui._menu_message(actor, linked=False)
         self.assertEqual(
             [
-                "cpm:customers",
-                "cpm:bookings",
+                "cpm:next",
+                "cpm:manage",
+                "cpm:ads",
+                "cpm:clients-sales",
                 "cpm:events",
-                "cpm:programs",
-                "cpm:acquire",
-                "cpm:today",
+                "cpm:bookings",
                 "cpm:menu-all",
             ],
             _commands(message),
         )
         self.assertEqual(sum(len(row) for row in message.rows), 7)
-        self.assertIn("Быстрые действия подобраны под этот бизнес", message.text)
+        self.assertIn("Выберите, что хотите сделать", message.text)
         primary.assert_not_called()
 
         advanced = ui._menu_all_message(actor)
@@ -170,7 +170,7 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
             ),
         ):
             message = ui._menu_message(actor, linked=False)
-        self.assertIn("Что нужно сделать?", message.text)
+        self.assertIn("Выберите, что хотите сделать", message.text)
         self.assertNotIn("Не знаете, что нажать?", message.text)
         self.assertIn("cpm:bookings", _commands(message))
         self.assertIn("cpm:menu-all", _commands(message))
@@ -192,11 +192,47 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
         ):
             message = ui._menu_message(actor, linked=False)
         self.assertEqual(
-            ["cpm:customers", "cpm:sales", "cpm:today", "cpm:menu-all"],
+            ["cpm:next", "cpm:clients-sales", "cpm:menu-all"],
             _commands(message),
         )
         self.assertNotIn("cpm:bookings", _commands(message))
         self.assertEqual(["cpm:work", "cpm:messengers", "cpm:menu"], _commands(ui._menu_all_message(actor)))
+
+    def test_canonical_owner_home_and_ad_flow_keep_working_commands(self) -> None:
+        actor = _actor(PlatformRole.OWNER)
+        with patch.object(ui, "_business_name", return_value="Практика"):
+            home = ui._menu_message(actor, linked=False)
+        self.assertEqual(
+            [
+                "cpm:next",
+                "cpm:manage",
+                "cpm:ads",
+                "cpm:clients-sales",
+                "cpm:events",
+                "cpm:bookings",
+                "cpm:menu-all",
+            ],
+            _commands(home),
+        )
+        ads = ui._ads_message(actor)
+        self.assertEqual(
+            [
+                "cpm:offers",
+                "cpm:ad-materials",
+                "cpm:ad-channels",
+                "cpm:ad-spend",
+                "cpm:growth-analysis",
+                "cpm:menu",
+            ],
+            _commands(ads),
+        )
+        with patch.object(
+            ui,
+            "_native_primary_action",
+            return_value=ui._button("💬 Ответить клиенту", "cpm:sales"),
+        ):
+            next_message = ui._next_message(actor)
+        self.assertEqual("cpm:sales", next_message.rows[0][0].command)
 
     def test_native_home_falls_back_to_role_safe_manual_read_when_cockpit_is_unavailable(self) -> None:
         marketer = _actor(PlatformRole.MARKETER)

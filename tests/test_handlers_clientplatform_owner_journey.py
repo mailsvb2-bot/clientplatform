@@ -195,12 +195,12 @@ async def test_owner_dashboard_keeps_status_and_separates_acquisition_from_sales
     markup = kwargs["reply_markup"]
     labels = [button.text for row in markup.inline_keyboard for button in row]
     assert labels == [
-        "💬 Клиенты и обращения",
-        "📅 Запись клиентов",
-        "👥 Найти клиентов",
-        "💰 Продажи",
-        "📊 Результаты",
-        "▦ Все возможности",
+        "✨ Что сделать сейчас",
+        "⚙️ Мой бизнес",
+        "📣 Реклама и продвижение",
+        "👥 Клиенты и продажи",
+        "🎥 Вебинары и видеозвонки",
+        "📅 Запись и календарь",
     ]
     assert "Не знаете, что нажать?" not in text
 

@@ -553,9 +553,34 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             ["🧩 Возможности бизнеса", "🧭 Направления деятельности", "🛠 Технические проверки", "➕ Добавить бизнес", "🗑 Удалить бизнес", "⬅️ Назад", "🏠 В главное меню"],
         )
         ad_labels = await labels_for(one_click.open_ad_tools, "cpo:ads:business-1")
-        self.assertIn("🚀 Найти новых клиентов", ad_labels)
+        self.assertEqual(
+            ad_labels,
+            [
+                "🎯 Что рекламировать",
+                "🎨 Рекламный материал",
+                "📡 Где рекламировать",
+                "💰 Бюджет и запуск",
+                "📊 Что дала реклама",
+                "⬅️ Назад",
+                "🏠 В главное меню",
+            ],
+        )
         self.assertNotIn("🚀 Получить клиентов", ad_labels)
-        self.assertIn("📣 Рекламные каналы", ad_labels)
+        material_labels = await labels_for(
+            one_click.open_ad_materials,
+            "cpo:ad-materials:business-1",
+        )
+        self.assertEqual(
+            material_labels,
+            [
+                "✍️ Подготовить текст",
+                "🖼 Создать картинку",
+                "🎬 Создать видео",
+                "📎 Использовать своё медиа",
+                "⬅️ Назад",
+                "🏠 В главное меню",
+            ],
+        )
 
     async def test_website_tools_without_confirmed_public_base_url(self):
         target = out()

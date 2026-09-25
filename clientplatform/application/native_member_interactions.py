@@ -849,6 +849,10 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
         if action in {
             "menu",
             "menu-all",
+            "next",
+            "ads",
+            "ad-materials",
+            "clients-sales",
             "work",
             "growth",
             "growth-more",
@@ -1294,34 +1298,25 @@ def _native_primary_action(actor: TenantContext) -> CustomerInteractionButton:
     return _button(nav.PROGRAMS.label, "cpm:programs")
 
 
-def _personalized_menu_message(actor: TenantContext) -> CustomerInteractionMessage | None:
-    try:
-        profile = get_business_profile(actor=actor)
-        capabilities = list_business_capabilities(actor=actor)
-    except (ActivityError, TenantPermissionDenied, ValueError):
-        return None
-    commands = {
-        "customers": "cpm:customers",
-        "booking": "cpm:bookings",
-        "events": "cpm:events",
-        "programs": "cpm:programs",
-        "acquire": "cpm:acquire",
-        "sales": "cpm:sales",
-        "results": "cpm:today",
-        "all": "cpm:menu-all",
-    }
-    actions = build_owner_quick_actions(
-        activity_description=profile.activity_description,
-        capabilities=capabilities,
-        role=actor.role,
+def _canonical_home_rows(actor: TenantContext) -> tuple[tuple[CustomerInteractionButton, ...], ...]:
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    rows.append((_button(nav.MAIN_NEXT.label, "cpm:next"),))
+    if actor.role in _CONNECTION_ROLES:
+        rows.append((_button(nav.MAIN_BUSINESS.label, "cpm:manage"),))
+    if actor.role in _ACQUISITION_ROLES:
+        rows.append((_button(nav.MAIN_ADS.label, "cpm:ads"),))
+    if actor.role in _SUPPORT_ROLES:
+        rows.append((_button(nav.MAIN_CLIENTS.label, "cpm:clients-sales"),))
+    event_visible = any(
+        item.id == "events" and item.status == "available"
+        for item in cockpit_navigation(actor)
     )
-    return CustomerInteractionMessage(
-        text=quick_menu_intro(business_name=_business_name(actor)),
-        rows=tuple(
-            (_button(action.label, commands[action.key]),)
-            for action in actions
-        ),
-    )
+    if event_visible:
+        rows.append((_button(nav.MAIN_EVENTS.label, "cpm:events"),))
+    if actor.role in _BOOKING_MANAGEMENT_ROLES:
+        rows.append((_button(nav.MAIN_CALENDAR.label, "cpm:bookings"),))
+    rows.append((_button(nav.ALL.label, "cpm:menu-all"),))
+    return tuple(rows)
 
 
 def _menu_message(
@@ -1329,34 +1324,20 @@ def _menu_message(
     *,
     linked: bool,
 ) -> CustomerInteractionMessage:
-    personalized = _personalized_menu_message(actor)
-    if personalized is not None:
-        heading = (
-            "✅ Этот мессенджер подключён к Вашему рабочему аккаунту.\n\n"
-            if linked
-            else ""
-        )
-        return CustomerInteractionMessage(
-            text=heading + personalized.text,
-            rows=personalized.rows,
-        )
-
     heading = (
         "✅ Этот мессенджер подключён к Вашему рабочему аккаунту.\n\n"
         if linked
         else ""
     )
-    primary = _native_primary_action(actor)
     return CustomerInteractionMessage(
         text=(
             heading
             + f"🏠 {_business_name(actor)}\n\n"
-            + "Выберите нужное действие или откройте полный список возможностей."
+            + "Выберите, что хотите сделать. «✨ Что сделать сейчас» ведёт "
+            + "сразу к текущему рекомендуемому действию, остальные разделы "
+            + "остаются на своих местах."
         ),
-        rows=(
-            (primary,),
-            (_button(nav.ALL.label, "cpm:menu-all"),),
-        ),
+        rows=_canonical_home_rows(actor),
     )
 
 def _menu_all_message(actor: TenantContext) -> CustomerInteractionMessage:
@@ -1381,6 +1362,10 @@ def _back_row() -> tuple[CustomerInteractionButton, ...]:
 
 _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "menu-all": "cpm:menu",
+    "next": "cpm:menu",
+    "ads": "cpm:menu",
+    "ad-materials": "cpm:ads",
+    "clients-sales": "cpm:menu",
     "work": "cpm:menu-all",
     "work-more": "cpm:work",
     "today": "cpm:work",
@@ -2320,6 +2305,76 @@ def _sales_mutation_message(
             text="✅ Запрет на сообщения сохранён.\n\n" + card.text, rows=card.rows
         )
     return _stale_message()
+
+
+def _next_message(actor: TenantContext) -> CustomerInteractionMessage:
+    primary = _native_primary_action(actor)
+    return CustomerInteractionMessage(
+        text=(
+            "✨ Что сделать сейчас\n\n"
+            "ClientPlatform выбрал следующий шаг по текущему состоянию бизнеса. "
+            "Нажмите кнопку ниже, чтобы перейти к нему."
+        ),
+        rows=((primary,), _back_row()),
+    )
+
+
+def _clients_sales_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _SUPPORT_ROLES:
+        return _permission_message()
+    return CustomerInteractionMessage(
+        text=(
+            "👥 Клиенты и продажи\n\n"
+            "Выберите, с чем хотите работать: новые обращения, вся клиентская база "
+            "или текущие продажи."
+        ),
+        rows=(
+            (_button("💬 Обращения и продажи", "cpm:sales"),),
+            (_button("👥 Все клиенты", "cpm:customers:0"),),
+            (_button("♻️ Вернуть клиентов", "cpm:reactivate"),),
+            _back_row(),
+        ),
+    )
+
+
+def _ad_materials_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _ACQUISITION_ROLES:
+        return _permission_message()
+    rows: list[tuple[CustomerInteractionButton, ...]] = [
+        (_button("✍️ Подготовить текст", "cpm:copy"),),
+    ]
+    if actor.role in (_CONTENT_ROLES | _MARKETING_ROLES):
+        rows.append((_button("🖼 Картинка / 🎬 Видео", "cpm:ai-visuals"),))
+    rows.append((_button("📎 Своё медиа — в мастере запуска", "cpm:acquire"),))
+    rows.append(_back_row())
+    return CustomerInteractionMessage(
+        text=(
+            "🎨 Рекламный материал\n\n"
+            "Подготовьте текст, картинку или видео. Собственное медиа можно выбрать "
+            "в безопасном мастере запуска после выбора предложения."
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _ads_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _ACQUISITION_ROLES:
+        return _permission_message()
+    return CustomerInteractionMessage(
+        text=(
+            "📣 Реклама и продвижение\n\n"
+            "Идите сверху вниз: что рекламировать → материал → рекламный канал → "
+            "бюджет и запуск → результат."
+        ),
+        rows=(
+            (_button("🎯 Что рекламировать", "cpm:offers"),),
+            (_button("🎨 Рекламный материал", "cpm:ad-materials"),),
+            (_button("📡 Где рекламировать", "cpm:ad-channels"),),
+            (_button("💰 Бюджет и запуск", "cpm:ad-spend"),),
+            (_button("📊 Что дала реклама", "cpm:growth-analysis"),),
+            _back_row(),
+        ),
+    )
 
 
 def _growth_message(actor: TenantContext) -> CustomerInteractionMessage:
@@ -7330,6 +7385,14 @@ def _render(
     try:
         if parsed.action == "menu-all":
             return _menu_all_message(actor)
+        if parsed.action == "next":
+            return _next_message(actor)
+        if parsed.action == "ads":
+            return _ads_message(actor)
+        if parsed.action == "ad-materials":
+            return _ad_materials_message(actor)
+        if parsed.action == "clients-sales":
+            return _clients_sales_message(actor)
         if parsed.action == "work":
             return _work_message(actor)
         if parsed.action == "work-more":

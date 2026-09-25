@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 from clientplatform.domain.ad_connections import AdConnectionStatus
 from clientplatform.domain.bookings import BookingSlotStatus
@@ -179,14 +180,43 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             labels,
             [
-                "💬 Клиенты и обращения",
-                "👥 Найти клиентов",
-                "💰 Продажи",
-                "📊 Результаты",
-                "▦ Все возможности",
+                "✨ Что сделать сейчас",
+                "⚙️ Мой бизнес",
+                "📣 Реклама и продвижение",
+                "👥 Клиенты и продажи",
+                "🎥 Вебинары и видеозвонки",
+                "📅 Запись и календарь",
             ],
         )
         self.assertNotIn("🚀 Получить клиентов", labels)
+
+    def test_canonical_home_keyboard_keeps_all_six_real_routes(self) -> None:
+        business_id = str(uuid4())
+        token = dashboard.control._uuid_token(business_id)
+        markup = dashboard._goal_keyboard(business_id)
+        buttons = [button for row in markup.inline_keyboard for button in row]
+        self.assertEqual(
+            [button.text for button in buttons],
+            [
+                "✨ Что сделать сейчас",
+                "⚙️ Мой бизнес",
+                "📣 Реклама и продвижение",
+                "👥 Клиенты и продажи",
+                "🎥 Вебинары и видеозвонки",
+                "📅 Запись и календарь",
+            ],
+        )
+        self.assertEqual(
+            [button.callback_data for button in buttons],
+            [
+                f"cpo:start:{token}",
+                f"cpo:settings:{token}",
+                f"cpo:ads:{token}",
+                f"cpo:clients:{token}",
+                f"cpev:home:{token}",
+                f"cpo:work:{token}",
+            ],
+        )
 
     async def test_all_capabilities_menu_leads_with_real_cockpit_and_keeps_quick_actions(self) -> None:
         out = outbound_message()

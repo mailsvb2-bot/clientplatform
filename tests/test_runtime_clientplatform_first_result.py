@@ -47,10 +47,17 @@ class ClientPlatformFirstResultUiTests(unittest.IsolatedAsyncioTestCase):
         buttons = [button for row in markup.inline_keyboard for button in row]
         self.assertEqual(
             [button.text for button in buttons],
-            ["🚀 Найти новых клиентов", "🧭 Все разделы"],
+            [
+            "✨ Что сделать сейчас",
+            "⚙️ Мой бизнес",
+            "📣 Реклама и продвижение",
+            "👥 Клиенты и продажи",
+            "🎥 Вебинары и видеозвонки",
+            "📅 Запись и календарь",
+        ],
         )
         self.assertTrue(str(buttons[0].callback_data).startswith("cpo:start:"))
-        self.assertTrue(str(buttons[1].callback_data).startswith("cpo:more:"))
+        self.assertTrue(str(buttons[1].callback_data).startswith("cpo:settings:"))
         self.assertFalse(
             any(str(button.callback_data or "").startswith("cps:next:") for button in buttons)
         )

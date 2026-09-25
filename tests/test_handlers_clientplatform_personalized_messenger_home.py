@@ -83,21 +83,14 @@ class TelegramComposedOwnerDashboardTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=(actor, access, profile, capabilities, [], [], [])),
             ),
             patch.object(goal.asyncio, "to_thread", new=AsyncMock(return_value=next_action)),
-            patch.object(goal.one_click.simple, "_simple_keyboard", return_value=markup) as quick,
-            patch.object(goal, "_goal_keyboard") as legacy,
+            patch.object(goal, "_goal_keyboard", return_value=markup) as canonical,
         ):
             await owner.send_owner_dashboard(message, user_id=101, business_id=business_id)
 
-        quick.assert_called_once_with(
-            business_id,
-            activity_description=profile.activity_description,
-            capabilities=capabilities,
-            role=PlatformRole.OWNER,
-        )
-        legacy.assert_not_called()
+        canonical.assert_called_once_with(business_id, next_action)
         self.assertIs(message.answer.await_args.kwargs["reply_markup"], markup)
         text = message.answer.await_args.args[0]
-        self.assertIn("Быстрые действия подобраны под этот бизнес", text)
+        self.assertIn("✨ Что сделать сейчас", text)
         self.assertIn("Главное сейчас", text)
         self.assertNotIn("Не знаете, что нажать?", text)
 

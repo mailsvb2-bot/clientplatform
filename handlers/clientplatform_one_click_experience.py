@@ -73,13 +73,17 @@ class OneClickOwnerState(StatesGroup):
 
 def _home_keyboard(business_id: str) -> InlineKeyboardMarkup:
     token = control._uuid_token(business_id)
+    # Keep the owner mental model stable across Telegram/VK/MAX. These are
+    # navigation doors only: every callback delegates to an already existing
+    # canonical business mechanism instead of duplicating domain logic.
     return control._keyboard(
         [
-            [(goal_contract.ACQUIRE_CLIENTS.label, goal_contract.ACQUIRE_CLIENTS.callback(token))],
-            [
-                ("👥 Клиенты и запись", f"cpj:bookings:{token}"),
-                ("⚙️ Ещё", f"cpo:more:{token}"),
-            ],
+            [(nav.MAIN_NEXT.label, f"cps:next:{token}")],
+            [(nav.MAIN_BUSINESS.label, f"cpo:settings:{token}")],
+            [(nav.MAIN_ADS.label, f"cpo:ads:{token}")],
+            [(nav.MAIN_CLIENTS.label, f"cpo:clients:{token}")],
+            [(nav.MAIN_EVENTS.label, f"cpev:home:{token}")],
+            [(nav.MAIN_CALENDAR.label, f"cpo:work:{token}")],
         ]
     )
 
@@ -101,8 +105,8 @@ async def send_one_click_dashboard(
     )
     await message.answer(
         f"🏠 {access.business.name}\n\n"
-        f"Нажмите «{goal_contract.ACQUIRE_CLIENTS.label}». Я сам проверю свободное время, рекламу "
-        "и прежние настройки. Спрошу только то, что нельзя определить безопасно.\n\n"
+        "Выберите, что хотите сделать. «✨ Что сделать сейчас» покажет текущий "
+        "рекомендуемый шаг, а остальные разделы всегда остаются на своих местах.\n\n"
         f"{status}",
         reply_markup=_home_keyboard(business_id),
     )
@@ -1284,19 +1288,44 @@ async def send_one_click_section(
         return
     raise ValueError("unsupported cockpit section")
 
+@router.callback_query(F.data.startswith("cpo:ad-materials:"))
+async def open_ad_materials(callback: CallbackQuery) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    actor.assert_can_manage_promotions()
+    await control._callback_message(callback).answer(
+        "🎨 Рекламный материал\n\n"
+        "Сначала выберите, что хотите подготовить. Своё изображение или видео также "
+        "можно загрузить в безопасном мастере запуска рекламы.",
+        reply_markup=control._keyboard(
+            [
+                [("✍️ Подготовить текст", f"cpa:{token}:copy")],
+                [("🖼 Создать картинку", f"cpc:new:{token}")],
+                [("🎬 Создать видео", f"cpc:video:{token}")],
+                [("📎 Использовать своё медиа", f"cpo:start:{token}")],
+                *_popup_navigation_rows(token, back_callback=f"cpo:ads:{token}"),
+            ]
+        ),
+    )
+
+
 @router.callback_query(F.data.startswith("cpo:ads:"))
 async def open_ad_tools(callback: CallbackQuery) -> None:
     token = str(callback.data).split(":", 2)[2]
-    await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    actor.assert_can_manage_promotions()
     await control._callback_message(callback).answer(
-        f"📣 Реклама и продвижение\n\nОбычный путь — «{goal_contract.ACQUIRE_CLIENTS.label}».",
+        "📣 Реклама и продвижение\n\n"
+        "Идите сверху вниз: сначала выберите или создайте предложение, затем материал, "
+        "после этого рекламный канал, и только потом бюджет и запуск.",
         reply_markup=control._keyboard(
             [
-                [(goal_contract.ACQUIRE_CLIENTS.label, goal_contract.ACQUIRE_CLIENTS.callback(token))],
-                [("📣 Рекламные каналы", f"cpa:home:{token}")],
-                [("📊 Результаты Яндекс", f"cpy:a:{token}:30")],
-                [("📣 Партнёрские материалы", f"cpg:materials:{token}")],
-                *_popup_navigation_rows(token, back_callback=f"cpo:more:{token}"),
+                [("🎯 Что рекламировать", f"cpo:start:{token}")],
+                [("🎨 Рекламный материал", f"cpo:ad-materials:{token}")],
+                [("📡 Где рекламировать", f"cpa:home:{token}")],
+                [("💰 Бюджет и запуск", f"cpsp:home:{token}")],
+                [("📊 Что дала реклама", f"cpy:a:{token}:30")],
+                *_popup_navigation_rows(token, back_callback=f"cpj:home:{token}"),
             ]
         ),
     )
