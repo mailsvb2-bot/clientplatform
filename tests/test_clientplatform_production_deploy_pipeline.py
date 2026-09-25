@@ -575,6 +575,30 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
         self.assertEqual(result["foreign_skipped_count"], 1)
         self.assertGreaterEqual(result["protected_count"], 2)
 
+    def test_unreferenced_image_prune_lists_then_prunes_without_touching_volumes(self) -> None:
+        completed = __import__("subprocess").CompletedProcess
+        calls: list[list[str]] = []
+
+        def run(command: list[str], **kwargs: object):
+            calls.append(command)
+            if command[:2] == ["docker", "images"]:
+                return completed(command, 0, "postgres:16 abc123 80MB\n", "")
+            if command[:4] == ["docker", "image", "prune", "--all"]:
+                return completed(command, 0, "deleted: sha256:dead\n", "")
+            raise AssertionError(command)
+
+        with mock.patch.object(production_deploy, "_run", side_effect=run):
+            result = production_deploy._prune_images_without_containers()
+
+        self.assertEqual(result, {"pruned": True})
+        self.assertEqual(
+            calls,
+            [
+                ["docker", "images", "--format", "{{.Repository}}:{{.Tag}} {{.ID}} {{.Size}}"],
+                ["docker", "image", "prune", "--all", "--force"],
+            ],
+        )
+
     def test_build_cache_retention_is_bounded(self) -> None:
         with mock.patch.object(production_deploy, "_run") as run:
             result = production_deploy._prune_build_cache()
@@ -898,6 +922,13 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
         post_retention = post_retention_patcher.start()
         self.addCleanup(post_retention_patcher.stop)
 
+        prune_patch = mock.patch.object(
+            production_deploy,
+            "_prune_images_without_containers",
+            return_value={"pruned": True},
+        )
+        prune_patch.start()
+        self.addCleanup(prune_patch.stop)
         with (
             mock.patch.object(production_deploy.os, "geteuid", return_value=0),
             mock.patch.object(production_deploy, "_assert_tracked_worktree_clean"),

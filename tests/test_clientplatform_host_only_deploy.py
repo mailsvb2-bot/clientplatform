@@ -91,6 +91,7 @@ def test_host_only_deploy_keeps_safety_gates_without_runtime_recreate(monkeypatc
         lambda _: {"removed_tags": 0, "app_rollbacks_retained_before_deploy": 1, "visual_rollbacks_retained_before_deploy": 1},
     )
     monkeypatch.setattr(deploy, "_remove_transient_backup_image", lambda: {"present": False, "removed": False})
+    monkeypatch.setattr(deploy, "_prune_images_without_containers", lambda: {"pruned": True})
     monkeypatch.setattr(deploy, "_prune_build_cache_for_capacity", lambda **_: cache)
     monkeypatch.setattr(deploy, "_encrypted_backup", lambda _: "/backup/proof.dump.age")
     monkeypatch.setattr(
