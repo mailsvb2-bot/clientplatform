@@ -262,6 +262,11 @@ async def test_health_and_environment_helpers(monkeypatch: pytest.MonkeyPatch) -
     )
     assert json.loads(response.body)["managed_bot_gateway"]["transport"] == "polling"
 
+    response = await messenger_webhooks._health(
+        SimpleNamespace(app={"clientplatform_public_business_ingress": True})
+    )
+    assert json.loads(response.body)["public_business_ingress"] is True
+
     monkeypatch.delenv("FLAG", raising=False)
     monkeypatch.delenv("APP_ENV", raising=False)
     monkeypatch.setattr(

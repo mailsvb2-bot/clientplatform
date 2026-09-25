@@ -557,6 +557,34 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("🚀 Получить клиентов", ad_labels)
         self.assertIn("📣 Рекламные каналы", ad_labels)
 
+    async def test_website_tools_without_confirmed_public_base_url(self):
+        target = out()
+        common = self.common(target)
+
+        for public_base in ("", "http://clientplatform.example.test"):
+            with self.subTest(public_base=public_base):
+                target.answer.reset_mock()
+                with (
+                    common[1],
+                    patch.object(
+                        one_click.control,
+                        "_actor",
+                        new=AsyncMock(return_value=tenant_actor()),
+                    ),
+                    common[4],
+                    patch.object(one_click.settings, "MESSENGER_PUBLIC_BASE_URL", public_base),
+                ):
+                    await one_click.open_website_tools(callback("cpo:website:business-1", target))
+
+                text = target.answer.await_args.args[0]
+                self.assertIn("публичный HTTPS-адрес этой установки сейчас не подтверждён", text)
+                labels = [
+                    button.text
+                    for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+                    for button in row
+                ]
+                self.assertEqual(labels, ["⚙️ CRM и сервисы", "⬅️ Назад", "🏠 В главное меню"])
+
     def test_more_menu_filters_groups_by_canonical_permissions(self):
         def labels(role: PlatformRole) -> list[str]:
             markup = one_click._more_keyboard("business-1", tenant_actor(role))
