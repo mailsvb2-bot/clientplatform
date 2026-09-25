@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
