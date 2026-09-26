@@ -31,6 +31,7 @@ from clientplatform.application.activity_directions import (
     update_activity_direction,
 )
 from clientplatform.application.ad_channel_directory import advertising_channel, advertising_channels
+from clientplatform.domain.activity_directions import DirectionSubjectKind
 from clientplatform.application.ad_connections import list_ad_connections
 from clientplatform.application.ad_spend_consent import list_ad_spend_authorizations
 from clientplatform.application.ad_spend_operations import (
