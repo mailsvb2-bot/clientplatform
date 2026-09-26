@@ -86,10 +86,9 @@ def _goal_keyboard(business_id: str, next_action: GrowthAction | None = None):
     """Stable owner home: one smart CTA plus five permanent business sections."""
 
     token = control._uuid_token(business_id)
-    _primary_label, primary_callback = _primary_action(business_id, next_action)
     return control._keyboard(
         [
-            [(nav.MAIN_NEXT.label, primary_callback)],
+            [(nav.MAIN_NEXT.label, f"cpo:next:{token}")],
             [(nav.MAIN_BUSINESS.label, f"cpo:settings:{token}")],
             [(nav.MAIN_ADS.label, f"cpo:ads:{token}")],
             [(nav.MAIN_CLIENTS.label, f"cpo:clients:{token}")],

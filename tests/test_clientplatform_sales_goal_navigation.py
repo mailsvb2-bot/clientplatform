@@ -20,15 +20,12 @@ def _buttons(markup):
 class ClientPlatformSalesGoalNavigationTests(unittest.IsolatedAsyncioTestCase):
     def test_owner_home_uses_canonical_acquisition_contract(self) -> None:
         from handlers import clientplatform_goal_dashboard as goal_dashboard
-        from handlers import clientplatform_goal_first_safety as goal_contract
-
         business_id = str(uuid4())
         token = goal_dashboard.control._uuid_token(business_id)
         buttons = _buttons(goal_dashboard._goal_keyboard(business_id))
         by_text = {button.text: button.callback_data for button in buttons}
-        action = goal_contract.ACQUIRE_CLIENTS
 
-        self.assertEqual(by_text["✨ Что сделать сейчас"], action.callback(token))
+        self.assertEqual(by_text["✨ Что сделать сейчас"], f"cpo:next:{token}")
         self.assertEqual(by_text["⚙️ Мой бизнес"], f"cpo:settings:{token}")
         self.assertEqual(by_text["📣 Реклама и продвижение"], f"cpo:ads:{token}")
         self.assertEqual(by_text["👥 Клиенты и продажи"], f"cpo:clients:{token}")
@@ -52,7 +49,7 @@ class ClientPlatformSalesGoalNavigationTests(unittest.IsolatedAsyncioTestCase):
         buttons = _buttons(goal_dashboard._goal_keyboard(business_id, action))
 
         self.assertEqual(buttons[0].text, "✨ Что сделать сейчас")
-        self.assertEqual(buttons[0].callback_data, f"cps:sh:{token}")
+        self.assertEqual(buttons[0].callback_data, f"cpo:next:{token}")
         self.assertEqual(buttons[1].text, "⚙️ Мой бизнес")
 
 
@@ -158,7 +155,7 @@ class ClientPlatformSalesGoalNavigationTests(unittest.IsolatedAsyncioTestCase):
                 "📅 Запись и календарь",
             ],
         )
-        self.assertEqual(buttons[0].callback_data, f"cps:sw:{token}")
+        self.assertEqual(buttons[0].callback_data, f"cpo:next:{token}")
 
     def test_goal_schedule_resume_uses_same_acquisition_callback(self) -> None:
         from handlers import clientplatform_goal_first_safety as goal_contract

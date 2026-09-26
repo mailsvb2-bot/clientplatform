@@ -2308,14 +2308,36 @@ def _sales_mutation_message(
 
 
 def _next_message(actor: TenantContext) -> CustomerInteractionMessage:
-    primary = _native_primary_action(actor)
+    try:
+        snapshot = get_growth_cockpit(
+            actor=actor,
+            period_days=7,
+            advertising_loader=lambda **_kwargs: None,
+        )
+        actions = snapshot.actions[:5]
+    except (TenantAccessDenied, TenantPermissionDenied, ValueError, OSError, RuntimeError):
+        actions = ()
+
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    details: list[str] = []
+    seen_commands: set[str] = set()
+    for action in actions:
+        button = _native_growth_action_button(actor, action)
+        if button is None or button.command in seen_commands:
+            continue
+        seen_commands.add(button.command)
+        rows.append((button,))
+        details.append(f"• {action.title} — {action.reason}")
+
+    if not rows:
+        fallback = _native_primary_action(actor)
+        rows.append((fallback,))
+        details.append("• Срочных действий по текущим данным нет. Можно продолжить обычную работу.")
+
+    rows.append(_back_row())
     return CustomerInteractionMessage(
-        text=(
-            "✨ Что сделать сейчас\n\n"
-            "ClientPlatform выбрал следующий шаг по текущему состоянию бизнеса. "
-            "Нажмите кнопку ниже, чтобы перейти к нему."
-        ),
-        rows=((primary,), _back_row()),
+        text="✨ Что сделать сейчас\n\n" + "\n".join(details),
+        rows=tuple(rows),
     )
 
 

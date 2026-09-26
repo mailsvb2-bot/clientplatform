@@ -56,10 +56,10 @@ class ClientPlatformFirstResultUiTests(unittest.IsolatedAsyncioTestCase):
             "📅 Запись и календарь",
         ],
         )
-        self.assertTrue(str(buttons[0].callback_data).startswith("cpo:start:"))
+        self.assertTrue(str(buttons[0].callback_data).startswith("cps:firstgoal:"))
         self.assertTrue(str(buttons[1].callback_data).startswith("cpo:settings:"))
         self.assertFalse(
-            any(str(button.callback_data or "").startswith("cps:next:") for button in buttons)
+            any(str(button.callback_data or "").startswith(("cps:next:", "cpo:next:")) for button in buttons)
         )
 
     async def test_first_result_menu_offers_independent_human_goals(self) -> None:

@@ -209,7 +209,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [button.callback_data for button in buttons],
             [
-                f"cpo:start:{token}",
+                f"cpo:next:{token}",
                 f"cpo:settings:{token}",
                 f"cpo:ads:{token}",
                 f"cpo:clients:{token}",
@@ -217,6 +217,32 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
                 f"cpo:work:{token}",
             ],
         )
+
+    async def test_what_to_do_now_lists_real_growth_actions_before_navigation(self) -> None:
+        out = outbound_message()
+        cb = callback("cpo:next:business-1", out)
+        action = SimpleNamespace(
+            title="Ответить клиенту",
+            reason="Есть новое обращение.",
+            action_key="sales_handoff",
+        )
+        snapshot = SimpleNamespace(actions=(action,))
+        with (
+            patch.object(one_click.control, "_actor", new=AsyncMock(return_value=tenant_actor())),
+            patch.object(one_click.control, "_token_uuid", side_effect=lambda value: value),
+            patch.object(one_click.control, "_callback_message", return_value=out),
+            patch.object(one_click.asyncio, "to_thread", new=immediate_to_thread),
+            patch.object(one_click, "_growth_snapshot_without_ads", return_value=snapshot),
+        ):
+            await one_click.open_next_actions(cb)
+
+        text = out.answer.await_args.args[0]
+        buttons = [button for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard for button in row]
+        self.assertIn("Ответить клиенту", text)
+        self.assertEqual(buttons[0].text, "🙋 Ответить клиентам")
+        self.assertEqual(buttons[0].callback_data, "cps:sh:business-1")
+        self.assertEqual(buttons[-2].text, "⬅️ Назад")
+        self.assertEqual(buttons[-1].text, "🏠 В главное меню")
 
     async def test_all_capabilities_menu_leads_with_real_cockpit_and_keeps_quick_actions(self) -> None:
         out = outbound_message()
@@ -278,12 +304,19 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
                 "_advertisable_offerings",
                 new=AsyncMock(return_value=[offering()]),
             ),
+            patch.object(
+                one_click.control,
+                "list_business_capabilities",
+                return_value=[SimpleNamespace(id="cap-1", connector_key="services", status=one_click.control.CapabilityStatus.ACTIVE)],
+            ),
         ):
             await one_click.get_clients_one_click(cb, FakeState())
-        self.assertIn("Что именно Вы хотите рекламировать", out.answer.await_args.args[0])
-        button = out.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
-        self.assertEqual(button.text, "🧰 Консультация")
-        self.assertTrue(str(button.callback_data).startswith("cpo:offer:"))
+        self.assertIn("Создайте новую услугу / предложение или выберите уже существующее", out.answer.await_args.args[0])
+        buttons = [button for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard for button in row]
+        self.assertEqual(buttons[0].text, "➕ Создать услугу / предложение")
+        self.assertTrue(str(buttons[0].callback_data).startswith("cp:offeradd:"))
+        self.assertEqual(buttons[1].text, "🧰 Консультация")
+        self.assertTrue(str(buttons[1].callback_data).startswith("cpo:offer:"))
 
     async def test_advertisable_offerings_excludes_programs_and_deduplicates(self) -> None:
         actor = tenant_actor()
@@ -393,16 +426,21 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
                 "_advertisable_offerings",
                 new=AsyncMock(return_value=[]),
             ),
+            patch.object(
+                one_click.control,
+                "list_business_capabilities",
+                return_value=[SimpleNamespace(id="cap-1", connector_key="services", status=one_click.control.CapabilityStatus.ACTIVE)],
+            ),
         ):
             await one_click.get_clients_one_click(cb, FakeState())
 
-        self.assertIn("Сначала добавьте услугу", out.answer.await_args.args[0])
+        self.assertIn("Создайте новую услугу / предложение", out.answer.await_args.args[0])
         labels = [
             button.text
             for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
             for button in row
         ]
-        self.assertIn("🧰 Мои услуги", labels)
+        self.assertIn("➕ Создать услугу / предложение", labels)
 
     async def test_stale_selected_service_fails_closed(self) -> None:
         out = outbound_message()
