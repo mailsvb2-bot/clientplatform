@@ -16,6 +16,7 @@ from clientplatform.domain.tenancy import PlatformRole, TenantPermissionDenied
 simple = importlib.import_module("handlers.clientplatform_simple_experience")
 control = importlib.import_module("handlers.clientplatform_control")
 builder = importlib.import_module("handlers.clientplatform_program_builder")
+goal_dashboard = importlib.import_module("handlers.clientplatform_goal_dashboard")
 
 
 class FakeUser:
@@ -297,6 +298,7 @@ async def test_simple_dashboard_is_role_safe_for_staff_without_customer_access(
     booking_reads = 0
 
     monkeypatch.setattr(control, "_actor", AsyncMock(return_value=actor))
+    monkeypatch.setattr(goal_dashboard, "_owner_next_action", lambda _actor: None)
     monkeypatch.setattr(control, "get_business_profile", lambda **_kwargs: profile)
     monkeypatch.setattr(control, "list_business_capabilities", lambda **_kwargs: [capability])
     monkeypatch.setattr(control, "list_programs", lambda **_kwargs: [object()])
