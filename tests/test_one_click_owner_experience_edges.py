@@ -582,6 +582,27 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_primary_owner_sections_return_to_canonical_home(self):
+        actor = tenant_actor(PlatformRole.OWNER)
+        expected = [
+            ("⬅️ Назад", "cpj:home:business-1"),
+            ("🏠 В главное меню", "cpj:home:business-1"),
+        ]
+
+        client_rows, _ = one_click._client_tools_rows("business-1", actor)
+        settings_rows, _ = one_click._settings_rows("business-1", actor)
+        self.assertEqual(client_rows[-1], expected)
+        self.assertEqual(settings_rows[-1], expected)
+
+        target = out()
+        await one_click._send_work_tools(target, token="business-1", actor=actor)
+        self.assertIn("📅 Запись и календарь", target.answer.await_args.args[0])
+        navigation = target.answer.await_args.kwargs["reply_markup"].inline_keyboard[-1]
+        self.assertEqual(
+            [(button.text, button.callback_data) for button in navigation],
+            expected,
+        )
+
     async def test_website_tools_without_confirmed_public_base_url(self):
         target = out()
         common = self.common(target)
