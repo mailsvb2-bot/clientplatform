@@ -366,3 +366,81 @@ def test_native_direction_selectors_offer_no_direction_and_paginate() -> None:
     assert "cpm:event-new-dirs:1" in _commands(event)
     assert len(program.rows) <= 10
     assert len(event.rows) <= 10
+
+
+def test_native_direction_ad_pagination_keeps_direction_scope() -> None:
+    actor = _actor()
+    direction = _direction()
+    offerings = [
+        SimpleNamespace(id=str(uuid4()), title=f"Услуга {index}")
+        for index in range(7)
+    ]
+    with (
+        patch.object(ui, "_native_all_offerings", return_value=offerings),
+        patch.object(
+            ui,
+            "_direction_subject_ids",
+            return_value={item.id for item in offerings},
+        ),
+    ):
+        first = ui._ad_offers_message(actor, 0, direction_id=direction.id)
+        second = ui._ad_offers_message(actor, 1, direction_id=direction.id)
+
+    assert f"cpm:direction-ad-offers:{direction.id}:1" in _commands(first)
+    assert f"cpm:direction-ad-offers:{direction.id}:0" in _commands(second)
+    assert not any(command.startswith("cpm:ad-offers:") for command in _commands(first))
+
+
+def test_native_direction_program_pagination_keeps_direction_scope() -> None:
+    actor = _actor()
+    direction = _direction()
+    programs = [
+        SimpleNamespace(
+            id=str(uuid4()),
+            title=f"Программа {index}",
+            status=SimpleNamespace(value="active"),
+        )
+        for index in range(4)
+    ]
+    with (
+        patch.object(ui, "list_programs", return_value=programs),
+        patch.object(
+            ui,
+            "_direction_subject_ids",
+            return_value={item.id for item in programs},
+        ),
+    ):
+        first = ui._programs_message(actor, 0, direction_id=direction.id)
+        second = ui._programs_message(actor, 1, direction_id=direction.id)
+
+    assert f"cpm:direction-programs:{direction.id}:1" in _commands(first)
+    assert f"cpm:direction-programs:{direction.id}:0" in _commands(second)
+    assert not any(command.startswith("cpm:programs:") for command in _commands(first))
+
+
+def test_native_direction_results_are_scoped_without_business_wide_drilldowns() -> None:
+    actor = _actor()
+    direction = _direction()
+    program_id = str(uuid4())
+    customer_id = str(uuid4())
+    progress = SimpleNamespace(
+        program_id=program_id,
+        customer_id=customer_id,
+        customer_display_name="Клиент",
+        program_title="Курс B2B",
+        completed_lessons=2,
+        total_lessons=4,
+        percent_complete=50,
+    )
+    with (
+        patch.object(ui, "get_activity_direction", return_value=direction),
+        patch.object(ui, "_direction_subject_ids", return_value={program_id}),
+        patch.object(ui, "list_business_program_progress", return_value=[progress]),
+    ):
+        message = ui._direction_results_message(actor, direction.id)
+
+    assert "Курс B2B" in message.text
+    assert "Клиентов с прогрессом: 1" in message.text
+    assert "cpm:funnel" not in _commands(message)
+    assert "cpm:funnel2" not in _commands(message)
+    assert f"cpm:direction:{direction.id}" in _commands(message)
