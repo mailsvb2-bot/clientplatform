@@ -238,7 +238,10 @@ def test_keyboard_builders_and_content_detection(monkeypatch: pytest.MonkeyPatch
 @pytest.mark.asyncio
 async def test_setup_dashboard_and_resume_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     business_id = str(uuid4())
-    actor = SimpleNamespace(role=PlatformRole.OWNER)
+    actor = SimpleNamespace(
+        role=PlatformRole.OWNER,
+        assert_can_view_customer_records=lambda: None,
+    )
 
     async def fake_actor(_uid: int, _bid: str) -> object:
         return actor

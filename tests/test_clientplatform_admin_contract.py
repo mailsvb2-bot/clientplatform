@@ -35,7 +35,6 @@ class ClientPlatformAdminContractTests(unittest.TestCase):
 
         for required in {
             "_load_admin_context",
-            "_menu_keyboard",
             "_safe_edit",
             "_navigate_back",
             "_assert_section_allowed",
@@ -48,7 +47,10 @@ class ClientPlatformAdminContractTests(unittest.TestCase):
         }:
             self.assertIn(required, functions)
 
-        self.assertIn("⚙️ Управление бизнесом", text)
+        self.assertNotIn("_menu_keyboard", functions)
+        self.assertNotIn("_render_menu", functions)
+        self.assertNotIn("⚙️ Управление бизнесом", text)
+        self.assertIn("control._send_dashboard(", text)
         self.assertIn('text="🛠 Панель"', text)
         self.assertIn("owner_navigation as nav", text)
         self.assertIn("_ADMIN_GROUP_NEEDS", text)

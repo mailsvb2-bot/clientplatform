@@ -108,10 +108,18 @@ async def send_goal_dashboard(
         await one_click.simple._business_snapshot(
             user_id=user_id,
             business_id=business_id,
+            role_safe=True,
         )
     )
     next_action = await asyncio.to_thread(_owner_next_action, actor)
-    open_slots = [item for item in slots if item.slot.status == BookingSlotStatus.OPEN]
+    stats = [f"материалов и программ: {len(programs)}"]
+    if one_click.simple._can_view_customer_records(actor):
+        open_slots = [item for item in slots if item.slot.status == BookingSlotStatus.OPEN]
+        stats = [
+            f"Клиентов: {len(customers)}",
+            f"свободных времён: {len(open_slots)}",
+            *stats,
+        ]
     if next_action is None or next_action.action_key == "none":
         main_title = "Можно заняться ростом бизнеса"
         main_reason = "Срочных задач сейчас нет — ClientPlatform подготовит следующий шаг для привлечения клиентов."
@@ -125,8 +133,8 @@ async def send_goal_dashboard(
         + "Главное сейчас\n"
         + f"• {main_title}\n"
         + f"  {main_reason}\n\n"
-        + f"Клиентов: {len(customers)} · свободных времён: {len(open_slots)} · "
-        + f"материалов и программ: {len(programs)}\n\n"
+        + " · ".join(stats)
+        + "\n\n"
         + "Нажмите «✨ Что сделать сейчас», чтобы перейти к рекомендуемому действию, "
         + "или откройте нужный постоянный раздел ниже.",
         reply_markup=_goal_keyboard(business_id, next_action),

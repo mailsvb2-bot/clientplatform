@@ -135,57 +135,49 @@ def capability_projection(
     )
 
 
-def test_owner_menu_uses_five_human_groups_instead_of_26_buttons() -> None:
-    markup = admin._menu_keyboard(admin_context())
-
-    assert labels(markup) == [
-        "👥 Клиенты и работа",
-        "📣 Публикации и каналы",
-        "📈 Продвижение и продажи",
-        "👤 Сотрудники и тариф",
-        "🛠 Технические проверки",
-        "⬅️ Назад",
-    ]
-    assert all(
-        value is not None and value.startswith("cpa:")
-        for value in callbacks(markup)
-    )
+def test_legacy_admin_root_menu_is_not_exposed() -> None:
+    assert not hasattr(admin, "_menu_keyboard")
+    assert not hasattr(admin, "_render_menu")
 
 
 @pytest.mark.parametrize(
-    ("role", "present", "absent"),
+    ("role", "visible_groups", "hidden_groups"),
     [
         (
             PlatformRole.SUPPORT,
-            {"👥 Клиенты и работа", "📣 Публикации и каналы"},
-            {"📈 Продвижение и продажи", "👤 Сотрудники и тариф", "🛠 Технические проверки"},
+            {"menu-work", "menu-content"},
+            {"menu-growth", "menu-team", "menu-system"},
         ),
         (
             PlatformRole.MARKETER,
-            {"📣 Публикации и каналы", "📈 Продвижение и продажи"},
-            {"👥 Клиенты и работа", "👤 Сотрудники и тариф", "🛠 Технические проверки"},
+            {"menu-content", "menu-growth"},
+            {"menu-work", "menu-team", "menu-system"},
         ),
         (
             PlatformRole.CONTENT_MANAGER,
-            {"📣 Публикации и каналы", "📈 Продвижение и продажи"},
-            {"👥 Клиенты и работа", "👤 Сотрудники и тариф", "🛠 Технические проверки"},
+            {"menu-content", "menu-growth"},
+            {"menu-work", "menu-team", "menu-system"},
         ),
         (
             PlatformRole.ADMINISTRATOR,
-            {"👥 Клиенты и работа", "📣 Публикации и каналы", "📈 Продвижение и продажи", "🛠 Технические проверки"},
-            {"👤 Сотрудники и тариф"},
+            {"menu-work", "menu-content", "menu-growth", "menu-system"},
+            {"menu-team"},
         ),
     ],
 )
-def test_menu_is_filtered_by_live_business_role(
+def test_deep_admin_groups_remain_filtered_by_live_business_role(
     role: PlatformRole,
-    present: set[str],
-    absent: set[str],
+    visible_groups: set[str],
+    hidden_groups: set[str],
 ) -> None:
-    visible = set(labels(admin._menu_keyboard(admin_context(role))))
-
-    assert present <= visible
-    assert not (absent & visible)
+    ctx = admin_context(role)
+    actual = {
+        group
+        for group in admin._ADMIN_MENU_GROUPS
+        if admin._admin_group_items(ctx, group)
+    }
+    assert visible_groups <= actual
+    assert not (hidden_groups & actual)
 
 
 def test_callback_codec_supports_new_and_legacy_keyboards() -> None:
@@ -283,44 +275,6 @@ async def test_safe_edit_edits_the_existing_admin_message(
 
 
 @pytest.mark.asyncio
-async def test_render_menu_uses_exact_panel_header(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    answers: list[str] = []
-
-    async def answer(
-        _message: Message,
-        text: str,
-        **_kwargs: Any,
-    ) -> None:
-        answers.append(text)
-
-    monkeypatch.setattr(Message, "answer", answer)
-    state = fsm_context()
-
-    await admin._render_menu(
-        telegram_message(),
-        state,
-        admin_context(),
-        reset=True,
-    )
-
-    assert len(answers) == 1
-    text = answers[0]
-    assert text.startswith("⚙️ Управление бизнесом\n\nСантехник · Владелец\n\nЕсли Вам нужно:\n")
-    for label in (
-        "👥 Клиенты и работа",
-        "📣 Публикации и каналы",
-        "📈 Продвижение и продажи",
-        "👤 Сотрудники и тариф",
-        "🛠 Технические проверки",
-    ):
-        assert f"«{label}»" in text
-    assert "Технические проверки вынесены отдельно" in text
-    assert (await state.get_data())["cp_admin_section"] == "menu"
-
-
-@pytest.mark.asyncio
 async def test_open_admin_command_handles_zero_one_and_multiple_businesses(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -350,13 +304,15 @@ async def test_open_admin_command_handles_zero_one_and_multiple_businesses(
         "list_accessible_businesses",
         lambda **_kwargs: [access],
     )
-    monkeypatch.setattr(
-        admin,
-        "_load_admin_context",
-        lambda **_kwargs: _async_value(admin_context()),
-    )
+    dashboard_calls: list[tuple[int, str]] = []
+
+    async def send_dashboard(_message: Message, *, user_id: int, business_id: str) -> None:
+        dashboard_calls.append((user_id, business_id))
+
+    monkeypatch.setattr(admin.control, "_send_dashboard", send_dashboard)
     await admin.open_admin_command(telegram_message(), fsm_context())
-    assert answers[-1][0].startswith("⚙️ Управление бизнесом")
+    assert dashboard_calls[-1] == (77, BUSINESS_ID)
+    assert all(not text.startswith("⚙️ Управление бизнесом") for text, _markup in answers)
 
     second_id = str(uuid4())
     monkeypatch.setattr(
@@ -707,6 +663,12 @@ async def test_add_member_input_is_validated_and_persisted(
         return SimpleNamespace(user_id=user_id, role=role)
 
     monkeypatch.setattr(admin, "grant_business_member", grant)
+    dashboard_calls: list[tuple[int, str]] = []
+
+    async def send_dashboard(_message: Message, *, user_id: int, business_id: str) -> None:
+        dashboard_calls.append((user_id, business_id))
+
+    monkeypatch.setattr(admin.control, "_send_dashboard", send_dashboard)
     state = fsm_context()
     await state.set_state(admin.ClientPlatformAdminState.waiting_member_user)
     await state.update_data(
@@ -727,6 +689,7 @@ async def test_add_member_input_is_validated_and_persisted(
     assert granted == [(88, PlatformRole.SUPPORT)]
     assert await state.get_state() is None
     assert any("Сотрудник добавлен" in item for item in answers)
+    assert dashboard_calls == [(77, BUSINESS_ID)]
 
 
 @pytest.mark.asyncio
@@ -820,9 +783,8 @@ async def test_admin_gate_routes_every_section_through_live_context(
     async def mark(name: str, *_args: Any, **_kwargs: Any) -> None:
         calls.append(name)
 
-    monkeypatch.setattr(admin, "_render_menu", lambda *a, **k: mark("menu"))
     monkeypatch.setattr(admin, "_navigate_back", lambda *a, **k: mark("back"))
-    monkeypatch.setattr(admin.control, "_send_dashboard", lambda *a, **k: mark("leave"))
+    monkeypatch.setattr(admin.control, "_send_dashboard", lambda *a, **k: mark("dashboard"))
     monkeypatch.setattr(admin, "_render_today", lambda *a, full, **k: mark(f"today:{full}"))
     monkeypatch.setattr(admin, "_render_customer_list", lambda *a, today_only, **k: mark(f"customers:{today_only}"))
     monkeypatch.setattr(admin, "_render_customer_card", lambda *a, **k: mark("customer"))

@@ -370,16 +370,6 @@ def _admin_group_items(
     )
 
 
-def _menu_keyboard(ctx: AdminContext) -> InlineKeyboardMarkup:
-    rows = [
-        [(title, _callback(ctx, group_action))]
-        for group_action, (title, _items) in _ADMIN_MENU_GROUPS.items()
-        if _admin_group_items(ctx, group_action)
-    ]
-    rows.append([("⬅️ Назад", _callback(ctx, "leave"))])
-    return _keyboard(rows)
-
-
 async def _load_admin_context(*, user_id: int, business_id: str) -> AdminContext:
     actor = await control._actor(user_id, business_id)
     accesses = await asyncio.to_thread(list_accessible_businesses, user_id=user_id)
@@ -448,37 +438,6 @@ async def _set_current_section(
         cp_admin_section=action,
         cp_admin_history=history,
     )
-
-
-async def _render_menu(
-    target: Message | CallbackQuery,
-    state: FSMContext,
-    ctx: AdminContext,
-    *,
-    reset: bool,
-) -> None:
-    if reset:
-        await state.update_data(cp_admin_section="menu", cp_admin_history=[])
-    visible_groups = [
-        (group_action, title)
-        for group_action, (title, _items) in _ADMIN_MENU_GROUPS.items()
-        if _admin_group_items(ctx, group_action)
-    ]
-    guidance = "\n".join(
-        f"• {_ADMIN_GROUP_NEEDS[group_action]} → «{title}»"
-        for group_action, title in visible_groups
-    )
-    text = (
-        "⚙️ Управление бизнесом\n\n"
-        f"{ctx.business_name} · {_role_label(ctx.role)}\n\n"
-        "Если Вам нужно:\n"
-        f"{guidance}\n\n"
-        "Обычные действия находятся выше. Технические проверки вынесены отдельно."
-    )
-    if isinstance(target, CallbackQuery):
-        await _safe_edit(target, text, _menu_keyboard(ctx))
-    else:
-        await target.answer(text, reply_markup=_menu_keyboard(ctx))
 
 
 async def _render_admin_group(
@@ -1377,7 +1336,11 @@ async def receive_member_user(message: Message, state: FSMContext) -> None:
         f"✅ Сотрудник добавлен: {member.user_id}\n"
         f"Роль: {_role_label(member.role)}"
     )
-    await _render_menu(message, state, ctx, reset=True)
+    await control._send_dashboard(
+        message,
+        user_id=ctx.user_id,
+        business_id=ctx.business_id,
+    )
 
 
 async def _navigate_back(callback: CallbackQuery, state: FSMContext, ctx: AdminContext) -> None:
@@ -1395,8 +1358,13 @@ async def _navigate_back(callback: CallbackQuery, state: FSMContext, ctx: AdminC
     elif action == "add-member":
         await _begin_add_member(callback, state, ctx)
     else:
-        action = "menu"
-        await _render_menu(callback, state, ctx, reset=False)
+        await state.clear()
+        await control._send_dashboard(
+            control._callback_message(callback),
+            user_id=ctx.user_id,
+            business_id=ctx.business_id,
+        )
+        return
     await state.update_data(cp_admin_history=history, cp_admin_section=action)
 
 
@@ -1408,11 +1376,11 @@ async def open_admin_command(message: Message, state: FSMContext) -> None:
         await message.answer("Сначала создайте бизнес через /start.")
         return
     if len(accesses) == 1:
-        ctx = await _load_admin_context(
+        await control._send_dashboard(
+            message,
             user_id=user_id,
             business_id=str(accesses[0].business.id),
         )
-        await _render_menu(message, state, ctx, reset=True)
         return
     await message.answer(
         "Для какого бизнеса открыть админку?",
@@ -1464,21 +1432,15 @@ async def admin_gate(callback: CallbackQuery, state: FSMContext) -> None:
             else:
                 _assert_section_allowed(ctx, action)
 
-        legacy_callback = str(callback.data or "").startswith(
-            ("cpa:home:", "cpa:formats:", "cpa:back:")
-        )
+        legacy_formats_callback = str(callback.data or "").startswith("cpa:formats:")
+
         if action == "menu":
             await state.clear()
-            if legacy_callback:
-                await control._callback_message(callback).answer(
-                    "⚙️ Управление бизнесом\n\n"
-                    f"{ctx.business_name} · {_role_label(ctx.role)}\n\n"
-                    "Выберите раздел по тому, что Вам нужно сделать. Если название непонятно, "
-                    "откройте раздел — внутри каждое действие описано простыми словами.",
-                    reply_markup=_menu_keyboard(ctx),
-                )
-            else:
-                await _render_menu(callback, state, ctx, reset=True)
+            await control._send_dashboard(
+                control._callback_message(callback),
+                user_id=ctx.user_id,
+                business_id=ctx.business_id,
+            )
         elif action == "back":
             await _navigate_back(callback, state, ctx)
         elif action in _ADMIN_MENU_GROUPS:
@@ -1532,7 +1494,7 @@ async def admin_gate(callback: CallbackQuery, state: FSMContext) -> None:
         }:
             await _render_admin_report(callback, state, ctx, action)
         elif action == "formats":
-            if legacy_callback:
+            if legacy_formats_callback:
                 await state.clear()
                 await control._send_capability_setup(
                     control._callback_message(callback),
@@ -1627,18 +1589,15 @@ async def send_admin_panel(
 ) -> None:
     """Compatibility entry used by production probes and earlier extensions."""
 
-    ctx = await _load_admin_context(user_id=user_id, business_id=business_id)
-    await message.answer(
-        "⚙️ Управление бизнесом\n\n"
-        f"{ctx.business_name} · {_role_label(ctx.role)}\n\n"
-        "Выберите, чем хотите заняться. Редкие и технические функции спрятаны "
-        "внутри соответствующих разделов.",
-        reply_markup=_menu_keyboard(ctx),
+    await control._send_dashboard(
+        message,
+        user_id=user_id,
+        business_id=business_id,
     )
 
 
 def install_admin_dashboard_button(control_module: ModuleType) -> None:
-    """Add the ClientPlatform-style panel entry to every business dashboard."""
+    """Add a compatibility entry that resolves to the canonical owner dashboard."""
 
     if bool(getattr(control_module, "_admin_dashboard_installed", False)):
         return
