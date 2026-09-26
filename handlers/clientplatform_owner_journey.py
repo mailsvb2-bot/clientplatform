@@ -38,10 +38,12 @@ from clientplatform.application.owner_booking_journey import (
     get_owner_booking_slot,
     replace_owner_booking_slot,
 )
+from clientplatform.domain.activity_directions import DirectionSubjectKind
 from clientplatform.domain.bookings import BookingSlotStatus, BookingSlotView
 from clientplatform.presentation import owner_navigation as nav
 
 control = importlib.import_module(".clientplatform_control", __package__)
+direction_context = importlib.import_module(".clientplatform_direction_context", __package__)
 simple = importlib.import_module(".clientplatform_simple_experience", __package__)
 entry = importlib.import_module(".clientplatform_entry", __package__)
 
