@@ -2315,7 +2315,11 @@ def _next_message(actor: TenantContext) -> CustomerInteractionMessage:
             advertising_loader=lambda **_kwargs: None,
         )
         actions = snapshot.actions[:5]
-    except (TenantAccessDenied, TenantPermissionDenied, ValueError, OSError, RuntimeError):
+    except (TenantAccessDenied, TenantPermissionDenied, ValueError):
+        actions = ()
+    except OSError:
+        actions = ()
+    except RuntimeError:
         actions = ()
 
     rows: list[tuple[CustomerInteractionButton, ...]] = []

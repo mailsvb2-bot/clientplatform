@@ -592,7 +592,11 @@ async def open_next_actions(callback: CallbackQuery) -> None:
     try:
         snapshot = await asyncio.to_thread(_growth_snapshot_without_ads, actor)
         actions = snapshot.actions
-    except (TenantPermissionDenied, ValueError, OSError, RuntimeError):
+    except (TenantPermissionDenied, ValueError):
+        actions = ()
+    except OSError:
+        actions = ()
+    except RuntimeError:
         actions = ()
 
     rows: list[list[tuple[str, str]]] = []
