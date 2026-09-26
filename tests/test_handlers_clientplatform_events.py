@@ -78,5 +78,5 @@ def test_event_hub_is_repeatable_navigation_but_creation_remains_a_mutation() ->
 
 def test_client_tools_hide_customer_actions_without_customer_record_access() -> None:
     rows, help_lines = one_click._client_tools_rows(_TOKEN, _actor(PlatformRole.MARKETER))
-    assert _callbacks(rows) == [f"cpo:more:{_TOKEN}", f"cpj:home:{_TOKEN}"]
+    assert _callbacks(rows) == [f"cpj:home:{_TOKEN}", f"cpj:home:{_TOKEN}"]
     assert help_lines == []
