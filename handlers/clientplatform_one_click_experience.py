@@ -1528,9 +1528,13 @@ async def open_ad_materials(
     business_id = control._token_uuid(token)
     actor = await control._actor(int(callback.from_user.id), business_id)
     actor.assert_can_manage_promotions()
-    context = await direction_context.read_direction_context(
-        state,
-        business_id=business_id,
+    context = (
+        None
+        if state is None
+        else await direction_context.read_direction_context(
+            state,
+            business_id=business_id,
+        )
     )
     await control._callback_message(callback).answer(
         direction_context.direction_heading(context)
