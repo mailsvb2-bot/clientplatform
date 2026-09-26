@@ -153,7 +153,7 @@ else:
 
         assert await quick(through_limiter, first, {}) == 'ok'
         assert await quick(through_limiter, second, {}) is None
-        assert second.answer.calls == [(('Секунду…',), {})]
+        assert second.answer.calls == [(('Секунду…',), {'show_alert': False})]
 
 
     @pytest.mark.asyncio
