@@ -156,7 +156,6 @@ class QuickAckCallbackMiddleware(BaseMiddleware):
         "cpo:sources:",
         "cpo:integrations:",
         "cpo:ad-materials:",
-        "cpo:start:",
         "cps:firstgoal:",
     )
 
