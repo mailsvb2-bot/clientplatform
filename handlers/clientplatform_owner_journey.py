@@ -25,6 +25,7 @@ from aiogram.types import (
     Message,
 )
 
+from clientplatform.application.activity_directions import list_activity_direction_bindings
 from clientplatform.application.pagination import paginate
 from clientplatform.domain.booking_calendar import (
     booking_calendar_filename,
@@ -351,6 +352,7 @@ async def _render_calendar(
     business_id: str,
     days: int,
     page: object = 0,
+    context=None,
 ) -> None:
     actor = await control._actor(int(callback.from_user.id), business_id)
     slots = await asyncio.to_thread(
@@ -358,6 +360,15 @@ async def _render_calendar(
         actor=actor,
         include_unavailable=True,
     )
+    if context is not None:
+        bindings = await asyncio.to_thread(
+            list_activity_direction_bindings,
+            actor=actor,
+            direction_id=context.direction_id,
+            subject_kind=DirectionSubjectKind.OFFERING,
+        )
+        offering_ids = {item.subject_id for item in bindings}
+        slots = [slot for slot in slots if slot.slot.offering_id in offering_ids]
     horizon = datetime.now(timezone.utc) + timedelta(days=days)
     visible = [
         slot
@@ -410,14 +421,18 @@ async def _render_calendar(
     )
     await callback.answer()
     await control._callback_message(callback).answer(
-        f"📅 Мой календарь\n\n{lines}\n\nСтраница {current.index + 1}/{current.count}\n\n"
+        direction_context.direction_heading(context)
+        + f"📅 Мой календарь\n\n{lines}\n\nСтраница {current.index + 1}/{current.count}\n\n"
         "Нажмите на время, чтобы проверить, изменить или снять его.",
         reply_markup=control._keyboard(rows),
     )
 
 
 @simple.router.callback_query(F.data.startswith("cpj:calendar:"))
-async def open_owner_calendar(callback: CallbackQuery) -> None:
+async def open_owner_calendar(
+    callback: CallbackQuery,
+    state: FSMContext | None = None,
+) -> None:
     parts = str(callback.data or "").split(":")
     if len(parts) not in {4, 5}:
         await callback.answer("Кнопка устарела. Откройте календарь заново.", show_alert=True)
@@ -428,11 +443,21 @@ async def open_owner_calendar(callback: CallbackQuery) -> None:
     except ValueError:
         await callback.answer("Кнопка устарела. Откройте календарь заново.", show_alert=True)
         return
+    business_id = control._token_uuid(business_token)
+    context = (
+        None
+        if state is None
+        else await direction_context.read_direction_context(
+            state,
+            business_id=business_id,
+        )
+    )
     await _render_calendar(
         callback,
-        business_id=control._token_uuid(business_token),
+        business_id=business_id,
         days=days,
         page=raw_page[0] if raw_page else 0,
+        context=context,
     )
 
 
@@ -616,7 +641,10 @@ async def cancel_owner_slot(callback: CallbackQuery) -> None:
 
 
 @simple.router.callback_query(F.data.startswith("cpj:services:"))
-async def open_owner_services(callback: CallbackQuery) -> None:
+async def open_owner_services(
+    callback: CallbackQuery,
+    state: FSMContext | None = None,
+) -> None:
     business_token = str(callback.data).split(":", 2)[2]
     business_id = control._token_uuid(business_token)
     actor = await control._actor(int(callback.from_user.id), business_id)
@@ -625,6 +653,24 @@ async def open_owner_services(callback: CallbackQuery) -> None:
         _all_offerings(actor, capabilities),
         asyncio.to_thread(control.list_booking_slots, actor=actor, include_unavailable=True),
     )
+    context = (
+        None
+        if state is None
+        else await direction_context.read_direction_context(
+            state,
+            business_id=business_id,
+        )
+    )
+    if context is not None:
+        bindings = await asyncio.to_thread(
+            list_activity_direction_bindings,
+            actor=actor,
+            direction_id=context.direction_id,
+            subject_kind=DirectionSubjectKind.OFFERING,
+        )
+        offering_ids = {item.subject_id for item in bindings}
+        offerings = [offering for offering in offerings if offering.id in offering_ids]
+        slots = [slot for slot in slots if slot.slot.offering_id in offering_ids]
     open_counts: dict[str, int] = {}
     for slot in slots:
         if slot.slot.status == BookingSlotStatus.OPEN:
@@ -669,7 +715,8 @@ async def open_owner_services(callback: CallbackQuery) -> None:
     )
     await callback.answer()
     await control._callback_message(callback).answer(
-        f"🧰 Мои услуги\n\n{lines}",
+        direction_context.direction_heading(context)
+        + f"🧰 Мои услуги\n\n{lines}",
         reply_markup=control._keyboard(rows),
     )
 
