@@ -417,6 +417,72 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
                 self.assertIn("недоступен", message.text.casefold())
                 self.assertEqual(["cpm:menu"], _commands(message))
 
+    def test_new_native_owner_navigation_covers_permissions_errors_and_deduplication(self) -> None:
+        owner = _actor(PlatformRole.OWNER)
+        content_manager = _actor(PlatformRole.CONTENT_MANAGER)
+        support = _actor(PlatformRole.SUPPORT)
+
+        self.assertIn("недоступен", ui._ads_message(support).text.casefold())
+        self.assertIn("недоступен", ui._clients_sales_message(content_manager).text.casefold())
+        self.assertIn("недоступен", ui._ad_materials_message(support).text.casefold())
+
+        material_commands = _commands(ui._ad_materials_message(owner))
+        self.assertEqual(
+            ["cpm:copy", "cpm:ai-visuals", "cpm:acquire", "cpm:ads"],
+            material_commands,
+        )
+        content_material_commands = _commands(ui._ad_materials_message(content_manager))
+        self.assertIn("cpm:ai-visuals", content_material_commands)
+
+        action_a = SimpleNamespace(title="A", reason="reason-a", action_key="economic_open_slots")
+        action_b = SimpleNamespace(title="B", reason="reason-b", action_key="economic_open_slots")
+        snapshot = SimpleNamespace(actions=(action_a, action_b))
+        with (
+            patch.object(ui, "get_growth_cockpit", return_value=snapshot),
+            patch.object(
+                ui,
+                "_native_growth_action_button",
+                return_value=ui._button("Открыть время", "cpm:bookings"),
+            ),
+        ):
+            message = ui._next_message(owner)
+        self.assertEqual(1, _commands(message).count("cpm:bookings"))
+        self.assertIn("A — reason-a", message.text)
+        self.assertNotIn("B — reason-b", message.text)
+
+        for error in (
+            ui.TenantAccessDenied("denied"),
+            ui.TenantPermissionDenied("denied"),
+            ValueError("bad"),
+            OSError("io"),
+            RuntimeError("runtime"),
+            ui.sqlite3.OperationalError("db"),
+        ):
+            with (
+                self.subTest(error=type(error).__name__),
+                patch.object(ui, "get_growth_cockpit", side_effect=error),
+                patch.object(
+                    ui,
+                    "_native_primary_action",
+                    return_value=ui._button("Продолжить", "cpm:today"),
+                ),
+            ):
+                fallback = ui._next_message(owner)
+                self.assertEqual("cpm:today", fallback.rows[0][0].command)
+                self.assertIn("Срочных действий", fallback.text)
+
+        for action in ("next", "ads", "ad-materials", "clients-sales"):
+            parsed = ui.parse_native_member_interaction(f"cpm:{action}")
+            self.assertEqual(action, parsed.action)
+            rendered = ui._render(
+                owner,
+                parsed,
+                linked=False,
+                setup_issuer=None,
+                setup_key="test",
+            )
+            self.assertTrue(rendered.rows)
+
     def test_parser_preserves_pagination_and_entity_arguments(self) -> None:
         parsed = ui.parse_native_member_interaction("cpm:customers:7")
         self.assertEqual("customers", parsed.action)
