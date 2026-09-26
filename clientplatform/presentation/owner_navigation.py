@@ -88,6 +88,6 @@ MAIN_MENU_LABEL = "🏠 В главное меню"
 # Telegram progressive-disclosure groups use the same human vocabulary.
 MONEY_RESULT = OwnerNavItem("💰 Деньги и результат", "посмотреть выручку, оплаты и общий результат")
 CLIENTS_SALES = OwnerNavItem("👥 Клиенты и продажи", "открыть заявки, клиентов или записи")
-SERVICES_BOOKING = OwnerNavItem("📅 Услуги и запись", "настроить услуги, календарь или страницу записи")
+SERVICES_BOOKING = OwnerNavItem("📅 Запись и календарь", "настроить услуги, календарь или страницу записи")
 CONTENT_PROMOTION = OwnerNavItem("📈 Продвижение и контент", "сделать публикацию, рекламу или партнёрский материал")
 BUSINESS_SETTINGS = OwnerNavItem("⚙️ Мой бизнес", "подключить каналы, сайт, точки входа, сотрудников или изменить профиль бизнеса")
