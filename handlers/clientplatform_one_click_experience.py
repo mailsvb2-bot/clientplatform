@@ -613,7 +613,7 @@ async def _start_slot_ad(
 
 async def _activate_direction_from_callback(
     callback: CallbackQuery,
-    state: FSMContext,
+    state: FSMContext | None,
     *,
     business_id: str,
     direction_token: str | None,
@@ -627,12 +627,20 @@ async def _activate_direction_from_callback(
         )
         if direction.status != ActivityDirectionStatus.ACTIVE:
             raise ValueError("activity direction is not active")
+        if state is None:
+            return direction_context.DirectionContext(
+                business_id=business_id,
+                direction_id=direction.id,
+                title=direction.title,
+            )
         return await direction_context.set_direction_context(
             state,
             business_id=business_id,
             direction_id=direction.id,
             title=direction.title,
         )
+    if state is None:
+        return None
     return await direction_context.read_direction_context(
         state,
         business_id=business_id,
@@ -752,9 +760,13 @@ async def choose_one_click_offering(callback: CallbackQuery, state: FSMContext) 
     offering_id = control._token_uuid(offering_token)
     actor = await control._actor(int(callback.from_user.id), business_id)
     actor.assert_can_manage_promotions()
-    context = await direction_context.read_direction_context(
-        state,
-        business_id=business_id,
+    context = (
+        None
+        if state is None
+        else await direction_context.read_direction_context(
+            state,
+            business_id=business_id,
+        )
     )
     offerings, slots = await asyncio.gather(
         _advertisable_offerings(
@@ -1297,7 +1309,10 @@ async def open_more(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("cpo:clients:"))
-async def open_client_tools(callback: CallbackQuery, state: FSMContext) -> None:
+async def open_client_tools(
+    callback: CallbackQuery,
+    state: FSMContext | None = None,
+) -> None:
     parts = str(callback.data).split(":")
     if len(parts) not in {3, 4}:
         await callback.answer("Кнопка устарела.", show_alert=True)
@@ -1369,7 +1384,10 @@ async def open_integration_tools(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("cpo:work:"))
-async def open_work_tools(callback: CallbackQuery, state: FSMContext) -> None:
+async def open_work_tools(
+    callback: CallbackQuery,
+    state: FSMContext | None = None,
+) -> None:
     parts = str(callback.data).split(":")
     if len(parts) not in {3, 4}:
         await callback.answer("Кнопка устарела.", show_alert=True)
@@ -1496,7 +1514,10 @@ async def send_one_click_section(
     raise ValueError("unsupported cockpit section")
 
 @router.callback_query(F.data.startswith("cpo:ad-materials:"))
-async def open_ad_materials(callback: CallbackQuery, state: FSMContext) -> None:
+async def open_ad_materials(
+    callback: CallbackQuery,
+    state: FSMContext | None = None,
+) -> None:
     token = str(callback.data).split(":", 2)[2]
     business_id = control._token_uuid(token)
     actor = await control._actor(int(callback.from_user.id), business_id)
@@ -1523,7 +1544,10 @@ async def open_ad_materials(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.callback_query(F.data.startswith("cpo:ads:"))
-async def open_ad_tools(callback: CallbackQuery, state: FSMContext) -> None:
+async def open_ad_tools(
+    callback: CallbackQuery,
+    state: FSMContext | None = None,
+) -> None:
     parts = str(callback.data).split(":")
     if len(parts) not in {3, 4}:
         await callback.answer("Кнопка устарела.", show_alert=True)
@@ -1532,13 +1556,20 @@ async def open_ad_tools(callback: CallbackQuery, state: FSMContext) -> None:
     business_id = control._token_uuid(token)
     actor = await control._actor(int(callback.from_user.id), business_id)
     actor.assert_can_manage_promotions()
-    context = await _activate_direction_from_callback(
-        callback,
-        state,
-        business_id=business_id,
-        direction_token=parts[3] if len(parts) == 4 else None,
-    )
-    if context is None:
+    direction_token = parts[3] if len(parts) == 4 else None
+    force_all = direction_token == "all"
+    if force_all:
+        if state is not None:
+            await direction_context.clear_direction_context(state)
+        context = None
+    else:
+        context = await _activate_direction_from_callback(
+            callback,
+            state,
+            business_id=business_id,
+            direction_token=direction_token,
+        )
+    if context is None and not force_all:
         directions = await asyncio.to_thread(list_activity_directions, actor=actor)
         if len(directions) == 1:
             direction = directions[0]
@@ -1603,7 +1634,7 @@ async def open_all_business_ad_tools(
     token = str(callback.data).split(":", 2)[2]
     await direction_context.clear_direction_context(state)
     await open_ad_tools(
-        simple._routed_callback(callback, f"cpo:ads:{token}"),
+        simple._routed_callback(callback, f"cpo:ads:{token}:all"),
         state,
     )
 
