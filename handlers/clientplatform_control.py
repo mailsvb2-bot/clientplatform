@@ -380,13 +380,16 @@ async def _send_onboarding_review(message: Message, *, actor, business_id: str) 
 
 
 async def _send_onboarding_first_result(message: Message, *, business_id: str) -> None:
-    await message.answer(
-        "✅ Бизнес создан. Что подключим к нему?\n\n"
-        "• «Каналы общения» — Telegram, ВКонтакте и MAX.\n"
-        "• «Точки входа клиентов» — сайт / лендинг, страница записи и источники клиентов.\n"
-        "• «CRM и сервисы» — только реальные проверяемые API/webhook-подключения.\n\n"
-        "Можно подключить это сейчас или перейти к услугам и работе.",
-        reply_markup=_onboarding_first_result_keyboard(business_id),
+    """Enter the single canonical owner home after onboarding confirmation.
+
+    Connection, CRM and service setup remain available from the business settings.
+    They must not create a competing top-level dashboard after /start.
+    """
+
+    await _send_dashboard(
+        message,
+        user_id=_user_id(message),
+        business_id=business_id,
     )
 
 
