@@ -83,8 +83,12 @@ def install_dynamic_dashboard_dispatch(control_module: ModuleType) -> None:
                 actor=actor,
             )
             if structured.confirmed:
-                await control_module._send_onboarding_first_result(
+                # Confirmation is a one-time onboarding milestone. A later /start
+                # must resume the single canonical owner home instead of replaying
+                # the old connection-first onboarding surface forever.
+                await control_module._send_dashboard(
                     message,
+                    user_id=user_id,
                     business_id=business_id,
                 )
             else:
