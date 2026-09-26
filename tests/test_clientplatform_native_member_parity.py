@@ -217,7 +217,7 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
         ads = ui._ads_message(actor)
         self.assertEqual(
             [
-                "cpm:offers",
+                "cpm:ad-offers:0",
                 "cpm:ad-materials",
                 "cpm:ad-channels",
                 "cpm:ad-spend",
