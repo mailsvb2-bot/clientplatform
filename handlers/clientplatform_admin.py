@@ -370,16 +370,6 @@ def _admin_group_items(
     )
 
 
-def _menu_keyboard(ctx: AdminContext) -> InlineKeyboardMarkup:
-    rows = [
-        [(title, _callback(ctx, group_action))]
-        for group_action, (title, _items) in _ADMIN_MENU_GROUPS.items()
-        if _admin_group_items(ctx, group_action)
-    ]
-    rows.append([("⬅️ Назад", _callback(ctx, "leave"))])
-    return _keyboard(rows)
-
-
 async def _load_admin_context(*, user_id: int, business_id: str) -> AdminContext:
     actor = await control._actor(user_id, business_id)
     accesses = await asyncio.to_thread(list_accessible_businesses, user_id=user_id)
@@ -448,37 +438,6 @@ async def _set_current_section(
         cp_admin_section=action,
         cp_admin_history=history,
     )
-
-
-async def _render_menu(
-    target: Message | CallbackQuery,
-    state: FSMContext,
-    ctx: AdminContext,
-    *,
-    reset: bool,
-) -> None:
-    if reset:
-        await state.update_data(cp_admin_section="menu", cp_admin_history=[])
-    visible_groups = [
-        (group_action, title)
-        for group_action, (title, _items) in _ADMIN_MENU_GROUPS.items()
-        if _admin_group_items(ctx, group_action)
-    ]
-    guidance = "\n".join(
-        f"• {_ADMIN_GROUP_NEEDS[group_action]} → «{title}»"
-        for group_action, title in visible_groups
-    )
-    text = (
-        "⚙️ Управление бизнесом\n\n"
-        f"{ctx.business_name} · {_role_label(ctx.role)}\n\n"
-        "Если Вам нужно:\n"
-        f"{guidance}\n\n"
-        "Обычные действия находятся выше. Технические проверки вынесены отдельно."
-    )
-    if isinstance(target, CallbackQuery):
-        await _safe_edit(target, text, _menu_keyboard(ctx))
-    else:
-        await target.answer(text, reply_markup=_menu_keyboard(ctx))
 
 
 async def _render_admin_group(
@@ -1636,7 +1595,7 @@ async def send_admin_panel(
 
 
 def install_admin_dashboard_button(control_module: ModuleType) -> None:
-    """Add the ClientPlatform-style panel entry to every business dashboard."""
+    """Add a compatibility entry that resolves to the canonical owner dashboard."""
 
     if bool(getattr(control_module, "_admin_dashboard_installed", False)):
         return
