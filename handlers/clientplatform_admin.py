@@ -260,6 +260,56 @@ def _back_keyboard(ctx: AdminContext, *extra: tuple[str, str]) -> InlineKeyboard
     return _keyboard(rows)
 
 
+async def _root_back_callback(state: object, ctx: AdminContext) -> str:
+    """Return to the canonical parent when admin UI was opened as a child surface."""
+
+    get_data = getattr(state, "get_data", None)
+    if not callable(get_data):
+        return _callback(ctx, "back")
+    data = await get_data()
+    external = str(data.get("cp_admin_return_callback") or "").strip()
+    if external and len(external.encode("utf-8")) <= 64:
+        return external
+    return _callback(ctx, "back")
+
+
+async def _render_external_parent(
+    callback: CallbackQuery,
+    state: FSMContext,
+    ctx: AdminContext,
+    callback_data: str,
+) -> bool:
+    parts = str(callback_data or "").split(":", 2)
+    if len(parts) != 3 or parts[0] != "cpo":
+        return False
+    section, token = parts[1], parts[2]
+    if str(control._token_uuid(token)) != str(ctx.business_id):
+        raise TenantPermissionDenied("admin return target belongs to another business")
+
+    one_click = importlib.import_module(
+        ".clientplatform_one_click_experience",
+        __package__,
+    )
+    renderers = {
+        "clients": one_click._send_client_tools,
+        "content": one_click._send_content_tools,
+        "settings": one_click._send_settings_tools,
+        "business-more": one_click._send_business_more_tools,
+        "integrations": one_click._send_integration_tools,
+        "ad-materials": one_click._send_ad_materials,
+    }
+    renderer = renderers.get(section)
+    if renderer is None:
+        return False
+    await renderer(
+        control._callback_message(callback),
+        token=token,
+        actor=ctx.actor,
+    )
+    await state.update_data(cp_admin_section="menu", cp_admin_history=[])
+    return True
+
+
 _ADMIN_MENU_GROUPS: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
     "menu-work": (
         nav.WORK.label,
@@ -496,7 +546,7 @@ async def _render_admin_group(
     if push:
         await _set_current_section(state, action=group_action, push=True)
     rows = [[(label, _callback(ctx, action))] for label, action in visible]
-    rows.append([("⬅️ Назад", _callback(ctx, "back"))])
+    rows.append([("⬅️ Назад", await _root_back_callback(state, ctx))])
     guidance = "\n".join(
         f"• {_ADMIN_ACTION_NEEDS.get(action, 'открыть этот раздел')} → «{label}»"
         for label, action in visible
@@ -858,7 +908,7 @@ async def _render_messengers(callback: CallbackQuery, state: FSMContext, ctx: Ad
         text="🤖 Мой Telegram-бот", callback_data=f"cpb:o:{ctx.business_token}"
     )])
     rows.append([InlineKeyboardButton(
-        text="⬅️ Назад", callback_data=_callback(ctx, "back")
+        text="⬅️ Назад", callback_data=await _root_back_callback(state, ctx)
     )])
     await _safe_edit(
         callback, "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
@@ -1384,6 +1434,15 @@ async def _navigate_back(callback: CallbackQuery, state: FSMContext, ctx: AdminC
     data = await state.get_data()
     history = list(data.get("cp_admin_history") or [])
     action = str(history.pop() if history else "menu")
+    if action == "menu":
+        external = str(data.get("cp_admin_return_callback") or "").strip()
+        if external and await _render_external_parent(
+            callback,
+            state,
+            ctx,
+            external,
+        ):
+            return
     if action in _ADMIN_MENU_GROUPS:
         await _render_admin_group(callback, state, ctx, action, push=False)
     elif action == "customer-list":
