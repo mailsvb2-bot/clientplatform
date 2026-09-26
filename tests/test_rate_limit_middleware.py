@@ -73,18 +73,101 @@ else:
 
 
     @pytest.mark.asyncio
-    async def test_quick_ack_answers_callback_only_once_even_if_handler_replies_again():
+    async def test_quick_ack_answers_safe_navigation_before_handler():
         mw = QuickAckCallbackMiddleware()
-        cb = _make_callback(1, 'same')
+        cb = _make_callback(1, 'cpo:ads:business-1')
+        calls = []
+
+        async def handler(event, data):
+            calls.append(('handler', None))
+            await event.answer('later')
+            return 'ok'
+
+        original = cb.answer
+        async def tracked(*args, **kwargs):
+            calls.append(('answer', (args, kwargs)))
+            return await original(*args, **kwargs)
+        tracked.calls = original.calls
+        object.__setattr__(cb, 'answer', tracked)
+
+        assert await mw(handler, cb, {}) == 'ok'
+        assert calls[0][0] == 'answer'
+        assert calls[1][0] == 'handler'
+        assert len(cb.answer.calls) == 1
+        assert cb.answer.calls[0][1] == {'cache_time': 0}
+
+
+    @pytest.mark.asyncio
+    async def test_quick_ack_preserves_handler_alert_for_semantic_callback():
+        mw = QuickAckCallbackMiddleware()
+        cb = _make_callback(1, 'cpj:wizdate:business-1:2026-09-27')
+
+        async def handler(event, data):
+            await event.answer('Эта дата недоступна', show_alert=True)
+            return 'ok'
+
+        assert await mw(handler, cb, {}) == 'ok'
+        assert len(cb.answer.calls) == 1
+        assert cb.answer.calls[0][0] == ('Эта дата недоступна',)
+        assert cb.answer.calls[0][1] == {'show_alert': True}
+
+
+    @pytest.mark.asyncio
+    async def test_quick_ack_retries_failed_semantic_alert_with_same_payload():
+        mw = QuickAckCallbackMiddleware()
+        cb = _make_callback(1, 'cpj:wizdate:business-1:2026-09-27')
+        attempts = []
+
+        async def flaky_answer(*args, **kwargs):
+            attempts.append((args, kwargs))
+            if len(attempts) == 1:
+                raise TimeoutError()
+            return None
+
+        flaky_answer.calls = attempts
+        object.__setattr__(cb, 'answer', flaky_answer)
+
+        async def handler(event, data):
+            await event.answer('Эта дата недоступна', show_alert=True)
+            return 'ok'
+
+        assert await mw(handler, cb, {}) == 'ok'
+        assert attempts == [
+            (('Эта дата недоступна',), {'show_alert': True}),
+            (('Эта дата недоступна',), {'show_alert': True}),
+        ]
+
+
+    @pytest.mark.asyncio
+    async def test_quick_ack_and_rate_limit_preserve_semantic_feedback():
+        quick = QuickAckCallbackMiddleware()
+        limiter = SoftRateLimitMiddleware(callback_interval_sec=1.0, message_interval_sec=1.0)
+        first = _make_callback(1, 'cpj:wizdate:business-1:2026-09-27')
+        second = _make_callback(1, 'cpj:wizdate:business-1:2026-09-28')
+
+        async def business_handler(event, data):
+            return 'ok'
+
+        async def through_limiter(event, data):
+            return await limiter(business_handler, event, data)
+
+        assert await quick(through_limiter, first, {}) == 'ok'
+        assert await quick(through_limiter, second, {}) is None
+        assert second.answer.calls == [(('Секунду…',), {'show_alert': False})]
+
+
+    @pytest.mark.asyncio
+    async def test_quick_ack_closes_silent_semantic_callback_after_handler():
+        mw = QuickAckCallbackMiddleware()
+        cb = _make_callback(1, 'unknown:semantic')
         seen = []
 
         async def handler(event, data):
             seen.append('handled')
-            await event.answer('later')
-            await event.answer('again')
             return 'ok'
 
         assert await mw(handler, cb, {}) == 'ok'
         assert seen == ['handled']
         assert len(cb.answer.calls) == 1
+        assert cb.answer.calls[0][1] == {'cache_time': 0}
 
