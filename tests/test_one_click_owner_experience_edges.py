@@ -622,7 +622,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 labels(PlatformRole.SUPPORT),
-                ["👥 Клиенты и продажи", "📅 Услуги и запись", "⚙️ Мой бизнес", "⬅️ Назад", "🏠 В главное меню"],
+                ["👥 Клиенты и продажи", "📅 Запись и календарь", "⚙️ Мой бизнес", "⬅️ Назад", "🏠 В главное меню"],
             )
             self.assertEqual(
                 labels(PlatformRole.ANALYST),
