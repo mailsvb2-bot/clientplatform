@@ -1432,6 +1432,8 @@ async def admin_gate(callback: CallbackQuery, state: FSMContext) -> None:
             else:
                 _assert_section_allowed(ctx, action)
 
+        legacy_formats_callback = str(callback.data or "").startswith("cpa:formats:")
+
         if action == "menu":
             await state.clear()
             await control._send_dashboard(
@@ -1492,7 +1494,7 @@ async def admin_gate(callback: CallbackQuery, state: FSMContext) -> None:
         }:
             await _render_admin_report(callback, state, ctx, action)
         elif action == "formats":
-            if legacy_callback:
+            if legacy_formats_callback:
                 await state.clear()
                 await control._send_capability_setup(
                     control._callback_message(callback),
