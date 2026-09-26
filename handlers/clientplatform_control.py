@@ -448,11 +448,9 @@ async def _resume_business(message: Message, *, user_id: int, business_id: str, 
     await state.clear()
     if profile.status == BusinessProfileStatus.DRAFT:
         structured = await asyncio.to_thread(get_business_profile_details, actor=actor)
-        if structured.confirmed:
-            await _send_onboarding_first_result(message, business_id=business_id)
-        else:
+        if not structured.confirmed:
             await _send_onboarding_review(message, actor=actor, business_id=business_id)
-        return
+            return
     await _send_dashboard(message, user_id=user_id, business_id=business_id)
 
 
