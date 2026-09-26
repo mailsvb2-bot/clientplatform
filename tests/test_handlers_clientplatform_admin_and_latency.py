@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -1044,6 +1045,31 @@ async def test_messenger_root_back_returns_to_canonical_business_settings(
         for button in row
     }
     assert by_label["⬅️ Назад"] == "cpo:settings:business-token"
+
+
+@pytest.mark.asyncio
+async def test_admin_back_restores_saved_canonical_parent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    callback = telegram_callback(data="cpa:business-token:back")
+    state = fsm_context()
+    ctx = admin_context(PlatformRole.OWNER)
+    await state.update_data(
+        cp_admin_return_callback="cpo:content:business-token",
+        cp_admin_section="copy",
+        cp_admin_history=["menu"],
+    )
+    restore = AsyncMock(return_value=True)
+    monkeypatch.setattr(admin, "_render_external_parent", restore)
+
+    await admin._navigate_back(callback, state, ctx)
+
+    restore.assert_awaited_once_with(
+        callback,
+        state,
+        ctx,
+        "cpo:content:business-token",
+    )
 
 
 @pytest.mark.asyncio
