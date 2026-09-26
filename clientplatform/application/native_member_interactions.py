@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import logging
 import re
+import sqlite3
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -2320,6 +2321,8 @@ def _next_message(actor: TenantContext) -> CustomerInteractionMessage:
     except OSError:
         actions = ()
     except RuntimeError:
+        actions = ()
+    except sqlite3.OperationalError:
         actions = ()
 
     rows: list[tuple[CustomerInteractionButton, ...]] = []
