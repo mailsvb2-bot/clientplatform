@@ -775,7 +775,10 @@ async def receive_event_video_upload(message: Message, state: FSMContext) -> Non
 
 
 @router.callback_query(F.data.startswith("cpev:home:"))
-async def open_event_hub(callback: CallbackQuery, state: FSMContext) -> None:
+async def open_event_hub(
+    callback: CallbackQuery,
+    state: FSMContext | None = None,
+) -> None:
     parts = str(callback.data or "").split(":")
     if len(parts) not in {3, 4}:
         await callback.answer("Кнопка устарела.", show_alert=True)
@@ -783,9 +786,13 @@ async def open_event_hub(callback: CallbackQuery, state: FSMContext) -> None:
     token = parts[2]
     business_id = control._token_uuid(token)
     actor = await control._actor(int(callback.from_user.id), business_id)
-    context = await direction_context.read_direction_context(
-        state,
-        business_id=business_id,
+    context = (
+        None
+        if state is None
+        else await direction_context.read_direction_context(
+            state,
+            business_id=business_id,
+        )
     )
     if len(parts) == 4:
         direction = await asyncio.to_thread(
@@ -793,12 +800,19 @@ async def open_event_hub(callback: CallbackQuery, state: FSMContext) -> None:
             actor=actor,
             direction_id=control._token_uuid(parts[3]),
         )
-        context = await direction_context.set_direction_context(
-            state,
-            business_id=business_id,
-            direction_id=direction.id,
-            title=direction.title,
-        )
+        if state is None:
+            context = direction_context.DirectionContext(
+                business_id=business_id,
+                direction_id=direction.id,
+                title=direction.title,
+            )
+        else:
+            context = await direction_context.set_direction_context(
+                state,
+                business_id=business_id,
+                direction_id=direction.id,
+                title=direction.title,
+            )
     await callback.answer()
     from .clientplatform_cockpit_dispatch import send_cockpit_section
 
