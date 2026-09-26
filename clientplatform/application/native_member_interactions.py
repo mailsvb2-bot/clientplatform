@@ -3542,12 +3542,18 @@ def _acquisition_message(
             if actor.role in _BOOKING_MANAGEMENT_ROLES
             else (_button("📅 Проверить расписание", "cpm:bookings"),)
         )
-        selected = f" для «{offering_title}»" if offering_title else ""
-        return CustomerInteractionMessage(
-            text=(
-                f"🚀 Новые клиенты\n\nЧтобы рекламировать выбранное предложение{selected}, "
+        if offering_title:
+            empty_slot_text = (
+                f"🚀 Новые клиенты\n\nЧтобы рекламировать выбранное предложение «{offering_title}», "
                 "сначала добавьте для него хотя бы одно свободное время."
-            ),
+            )
+        else:
+            empty_slot_text = (
+                "🚀 Новые клиенты\n\nЧтобы приглашать клиентов на запись, "
+                "сначала добавьте хотя бы одно свободное время."
+            )
+        return CustomerInteractionMessage(
+            text=empty_slot_text,
             rows=(first_row, *_acquisition_tool_rows(actor), (_button("📈 Рост", "cpm:growth"),), _back_row()),
         )
     destination = prepared.destination
