@@ -16,6 +16,7 @@ from clientplatform.application.event_followup_settings import (
     get_business_event_followups_enabled,
 )
 from clientplatform.domain.event_followup import EVENT_FOLLOWUP_CHANNELS, EVENT_FOLLOWUP_SEGMENTS
+from clientplatform.infrastructure.activity_direction_repository import ActivityDirectionRepository
 from clientplatform.infrastructure.event_followup_settings_repository import event_followups_platform_enabled
 from clientplatform.application.event_growth import get_event_acquisition_breakdown_in_transaction
 from clientplatform.application.event_owner_flow import (
@@ -24,6 +25,7 @@ from clientplatform.application.event_owner_flow import (
 )
 from clientplatform.application.events import cancel_event
 from clientplatform.application.tenancy import resolve_tenant_context
+from clientplatform.domain.activity_directions import DirectionSubjectKind
 from clientplatform.domain.bookings import parse_local_booking_start
 from clientplatform.domain.events import validate_external_https_url
 from clientplatform.domain.money import settlement_currency_minor_unit_exponent
@@ -176,6 +178,7 @@ def resolve_events_snapshot(
     actor: TenantContext,
     business_name: str = "",
     limit: int = 30,
+    direction_id: str | None = None,
 ) -> CockpitEventsSnapshot:
     """Build the canonical event UI projection for any authenticated member surface."""
 
@@ -191,6 +194,14 @@ def resolve_events_snapshot(
 
     with get_db_ro() as conn:
         events = EventRepository(conn).list(actor=actor, limit=bounded_limit)
+        if direction_id is not None:
+            bindings = ActivityDirectionRepository(conn).list_bindings(
+                actor=actor,
+                direction_id=direction_id,
+                subject_kind=DirectionSubjectKind.EVENT,
+            )
+            event_ids = {item.subject_id for item in bindings}
+            events = [event for event in events if event.id in event_ids]
         items: list[CockpitEventItem] = []
         for event in events:
             funnel = get_event_funnel_in_transaction(conn, actor=actor, event_id=event.id)
@@ -284,6 +295,7 @@ def resolve_cockpit_events(
         actor=actor,
         business_name=business_name,
         limit=limit,
+        direction_id=direction_id,
     )
 
 
