@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from clientplatform.application import promotions
+from clientplatform.application import acquisition_destination, promotions
 from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.promotions import (
     PromotionChannel,
@@ -246,6 +246,52 @@ def _promotion_fixture() -> tuple[sqlite3.Connection, object, str, str]:
         now="2026-08-26T10:13:00+00:00",
     )
     return conn, actor, alias.source_token, claim.customer_id
+
+
+
+def test_selected_offering_filters_nearest_acquisition_slot(monkeypatch) -> None:
+    selected_offering = str(uuid4())
+    other_offering = str(uuid4())
+    selected_slot = str(uuid4())
+    other_slot = str(uuid4())
+    actor = SimpleNamespace()
+    slots = [
+        SimpleNamespace(slot=SimpleNamespace(id=other_slot, offering_id=other_offering, starts_at=1)),
+        SimpleNamespace(slot=SimpleNamespace(id=selected_slot, offering_id=selected_offering, starts_at=2)),
+    ]
+    monkeypatch.setattr(
+        acquisition_destination,
+        "list_promotable_slots",
+        lambda **_: slots,
+    )
+    created = {}
+
+    def create(**kwargs):
+        created.update(kwargs)
+        return SimpleNamespace(campaign=SimpleNamespace())
+
+    monkeypatch.setattr(acquisition_destination, "create_slot_promotion", create)
+    monkeypatch.setattr(
+        acquisition_destination,
+        "build_acquisition_destination",
+        lambda **_: SimpleNamespace(public_url="https://example.test"),
+    )
+
+    result = acquisition_destination.prepare_nearest_acquisition_destination(
+        actor=actor,
+        public_base_url="https://example.test",
+        offering_id=selected_offering,
+    )
+    assert result is not None
+    assert created["slot_id"] == selected_slot
+
+    missing = acquisition_destination.prepare_nearest_acquisition_destination(
+        actor=actor,
+        public_base_url="https://example.test",
+        offering_id=str(uuid4()),
+    )
+    assert missing is None
+
 
 
 def test_channel_promotion_captures_exact_alias_without_transport_state(monkeypatch) -> None:

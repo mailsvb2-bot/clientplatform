@@ -13,6 +13,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
 
 from clientplatform.application.cockpit import cockpit_navigation
+from clientplatform.application.growth_cockpit import GrowthAction, get_growth_cockpit
 from clientplatform.application.ad_connections import (
     ad_connections_enabled,
     create_managed_ad_publication_draft,
@@ -73,14 +74,46 @@ class OneClickOwnerState(StatesGroup):
 
 def _home_keyboard(business_id: str) -> InlineKeyboardMarkup:
     token = control._uuid_token(business_id)
+    # Keep the owner mental model stable across Telegram/VK/MAX. These are
+    # navigation doors only: every callback delegates to an already existing
+    # canonical business mechanism instead of duplicating domain logic.
     return control._keyboard(
         [
-            [(goal_contract.ACQUIRE_CLIENTS.label, goal_contract.ACQUIRE_CLIENTS.callback(token))],
-            [
-                ("👥 Клиенты и запись", f"cpj:bookings:{token}"),
-                ("⚙️ Ещё", f"cpo:more:{token}"),
-            ],
+            [(nav.MAIN_NEXT.label, f"cpo:next:{token}")],
+            [(nav.MAIN_BUSINESS.label, f"cpo:settings:{token}")],
+            [(nav.MAIN_ADS.label, f"cpo:ads:{token}")],
+            [(nav.MAIN_CLIENTS.label, f"cpo:clients:{token}")],
+            [(nav.MAIN_EVENTS.label, f"cpev:home:{token}")],
+            [(nav.MAIN_CALENDAR.label, f"cpo:work:{token}")],
         ]
+    )
+
+
+def _growth_action_button(action: GrowthAction, token: str) -> tuple[str, str] | None:
+    key = action.action_key
+    if key == "sales_handoff":
+        return ("🙋 Ответить клиентам", f"cps:sh:{token}")
+    if key.startswith("sales_plan:"):
+        return ("💬 Продолжить работу с клиентом", f"cps:sw:{token}")
+    if key.startswith("sales_lead:"):
+        lead_id = key.split(":", 1)[1]
+        return ("💬 Открыть клиента", f"cps:swv:{token}:{control._uuid_token(lead_id)}")
+    if key == "attribution_review":
+        return ("💰 Проверить источники оплат", f"cpy:a:{token}:7")
+    if key == "economic_reactivation":
+        return ("♻️ Вернуть клиентов без рекламы", f"cps:sr:{token}")
+    if key == "economic_open_slots":
+        return ("🕒 Открыть время", goal_contract.ACQUIRE_CLIENTS.callback(token))
+    if key == "economic_paid_acquisition":
+        return ("💳 Проверить безопасный запуск", f"cpsp:home:{token}")
+    return None
+
+
+def _growth_snapshot_without_ads(actor):
+    return get_growth_cockpit(
+        actor=actor,
+        period_days=7,
+        advertising_loader=lambda **_kwargs: None,
     )
 
 
@@ -101,8 +134,8 @@ async def send_one_click_dashboard(
     )
     await message.answer(
         f"🏠 {access.business.name}\n\n"
-        f"Нажмите «{goal_contract.ACQUIRE_CLIENTS.label}». Я сам проверю свободное время, рекламу "
-        "и прежние настройки. Спрошу только то, что нельзя определить безопасно.\n\n"
+        "Выберите, что хотите сделать. «✨ Что сделать сейчас» покажет текущий "
+        "рекомендуемый шаг, а остальные разделы всегда остаются на своих местах.\n\n"
         f"{status}",
         reply_markup=_home_keyboard(business_id),
     )
@@ -550,6 +583,44 @@ async def _start_slot_ad(
     )
 
 
+@router.callback_query(F.data.startswith("cpo:next:"))
+async def open_next_actions(callback: CallbackQuery) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    business_id = control._token_uuid(token)
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    await callback.answer()
+    try:
+        snapshot = await asyncio.to_thread(_growth_snapshot_without_ads, actor)
+        actions = snapshot.actions
+    except (TenantPermissionDenied, ValueError):
+        actions = ()
+    except OSError:
+        actions = ()
+    except RuntimeError:
+        actions = ()
+
+    rows: list[list[tuple[str, str]]] = []
+    details: list[str] = []
+    seen_callbacks: set[str] = set()
+    for action in actions[:5]:
+        routed = _growth_action_button(action, token)
+        if routed is None or routed[1] in seen_callbacks:
+            continue
+        seen_callbacks.add(routed[1])
+        rows.append([routed])
+        details.append(f"• {action.title} — {action.reason}")
+
+    if not rows:
+        rows.append([("✨ Настроить следующий полезный шаг", f"cps:next:{token}")])
+        details.append("• Срочных действий по текущим данным нет. Можно продолжить настройку рабочего сценария.")
+
+    rows.extend(_popup_navigation_rows(token, back_callback=f"cpj:home:{token}"))
+    await control._callback_message(callback).answer(
+        "✨ Что сделать сейчас\n\n" + "\n".join(details),
+        reply_markup=control._keyboard(rows),
+    )
+
+
 @router.callback_query(F.data.startswith("cpo:start:"))
 async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> None:
     token = str(callback.data).split(":", 2)[2]
@@ -558,33 +629,50 @@ async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> N
     actor.assert_can_manage_promotions()
     await state.clear()
     offerings = await _advertisable_offerings(actor)
-    await callback.answer()
-    if not offerings:
-        await control._callback_message(callback).answer(
-            "Сначала добавьте услугу или предложение, которое хотите рекламировать.",
-            reply_markup=control._keyboard(
-                [
-                    [("🧰 Мои услуги", f"cpj:services:{token}")],
-                    *_popup_navigation_rows(token, back_callback=f"cpo:ads:{token}"),
-                ]
-            ),
-        )
-        return
-    await control._callback_message(callback).answer(
-        "Что именно Вы хотите рекламировать?\n\n"
-        "Выберите одну из своих услуг — ClientPlatform больше не будет решать это за Вас.",
-        reply_markup=control._keyboard(
-            [
-                [
-                    (
-                        f"🧰 {offering.title[:48]}",
-                        f"cpo:offer:{token}:{control._uuid_token(offering.id)}",
-                    )
-                ]
-                for offering in offerings
-            ]
-            + _popup_navigation_rows(token, back_callback=f"cpo:ads:{token}"),
+    capabilities = await asyncio.to_thread(control.list_business_capabilities, actor=actor)
+    creation_capability = next(
+        (
+            item
+            for item in capabilities
+            if item.connector_key != "programs"
+            and item.status == control.CapabilityStatus.ACTIVE
         ),
+        None,
+    )
+    await callback.answer()
+    rows: list[list[tuple[str, str]]] = []
+    if creation_capability is not None and actor.role in {
+        PlatformRole.OWNER,
+        PlatformRole.ADMINISTRATOR,
+        PlatformRole.MANAGER,
+        PlatformRole.CONTENT_MANAGER,
+    }:
+        rows.append(
+            [
+                (
+                    "➕ Создать услугу / предложение",
+                    f"cp:offeradd:{token}:{control._uuid_token(creation_capability.id)}",
+                )
+            ]
+        )
+    rows.extend(
+        [
+            [
+                (
+                    f"🧰 {offering.title[:48]}",
+                    f"cpo:offer:{token}:{control._uuid_token(offering.id)}",
+                )
+            ]
+            for offering in offerings
+        ]
+    )
+    if not rows:
+        rows.append([("🧰 Настроить услуги", f"cpj:services:{token}")])
+    rows.extend(_popup_navigation_rows(token, back_callback=f"cpo:ads:{token}"))
+    await control._callback_message(callback).answer(
+        "🎯 Что рекламировать\n\n"
+        "Создайте новую услугу / предложение или выберите уже существующее.",
+        reply_markup=control._keyboard(rows),
     )
 
 
@@ -844,7 +932,7 @@ def _client_tools_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], 
     if allowed:
         rows.append([("🔎 Все клиенты", f"cpa:{token}:customer-list")])
         help_lines.append("• найти конкретного человека → «🔎 Все клиенты»")
-    rows.extend(_popup_navigation_rows(token, back_callback=f"cpo:more:{token}"))
+    rows.extend(_popup_navigation_rows(token, back_callback=f"cpj:home:{token}"))
     return rows, help_lines
 
 
@@ -941,7 +1029,7 @@ def _settings_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], list
         rows.append([("🧩 Возможности бизнеса", f"cps:advanced:{token}")])
         help_lines.append("• посмотреть услуги, форматы работы и возможности → «🧩 Возможности бизнеса»")
 
-    rows.extend(_popup_navigation_rows(token, back_callback=f"cpo:more:{token}"))
+    rows.extend(_popup_navigation_rows(token, back_callback=f"cpj:home:{token}"))
     return rows, help_lines
 
 
@@ -1084,12 +1172,12 @@ async def _send_work_tools(message: ClientPlatformMessageTarget, *, token: str, 
         or _allowed(actor, actor.assert_can_manage_programs)
     ):
         await message.answer(
-            "📅 Услуги и запись\n\nДля Вашей роли этот раздел недоступен.",
-            reply_markup=control._keyboard(_popup_navigation_rows(token, back_callback=f"cpo:more:{token}")),
+            "📅 Запись и календарь\n\nДля Вашей роли этот раздел недоступен.",
+            reply_markup=control._keyboard(_popup_navigation_rows(token, back_callback=f"cpj:home:{token}")),
         )
         return
     await message.answer(
-        "📅 Услуги и запись\n\n"
+        "📅 Запись и календарь\n\n"
         "Если Вам нужно:\n"
         "• настроить то, что можно заказать → «🧰 Мои услуги»\n"
         "• открыть или проверить время → «📅 Мой календарь»\n"
@@ -1099,7 +1187,7 @@ async def _send_work_tools(message: ClientPlatformMessageTarget, *, token: str, 
                 [("🧰 Мои услуги", f"cpj:services:{token}")],
                 [("📅 Мой календарь", f"cpj:calendar:{token}:30")],
                 [(nav.PUBLIC_PAGE.label, f"cpj:page:{token}")],
-                *_popup_navigation_rows(token, back_callback=f"cpo:more:{token}"),
+                *_popup_navigation_rows(token, back_callback=f"cpj:home:{token}"),
             ]
         ),
     )
@@ -1284,19 +1372,44 @@ async def send_one_click_section(
         return
     raise ValueError("unsupported cockpit section")
 
+@router.callback_query(F.data.startswith("cpo:ad-materials:"))
+async def open_ad_materials(callback: CallbackQuery) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    actor.assert_can_manage_promotions()
+    await control._callback_message(callback).answer(
+        "🎨 Рекламный материал\n\n"
+        "Сначала выберите, что хотите подготовить. Своё изображение или видео также "
+        "можно загрузить в безопасном мастере запуска рекламы.",
+        reply_markup=control._keyboard(
+            [
+                [("✍️ Подготовить текст", f"cpa:{token}:copy")],
+                [("🖼 Создать картинку", f"cpc:new:{token}")],
+                [("🎬 Создать видео", f"cpc:video:{token}")],
+                [("📎 Использовать своё медиа", f"cpo:start:{token}")],
+                *_popup_navigation_rows(token, back_callback=f"cpo:ads:{token}"),
+            ]
+        ),
+    )
+
+
 @router.callback_query(F.data.startswith("cpo:ads:"))
 async def open_ad_tools(callback: CallbackQuery) -> None:
     token = str(callback.data).split(":", 2)[2]
-    await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    actor.assert_can_manage_promotions()
     await control._callback_message(callback).answer(
-        f"📣 Реклама и продвижение\n\nОбычный путь — «{goal_contract.ACQUIRE_CLIENTS.label}».",
+        "📣 Реклама и продвижение\n\n"
+        "Идите сверху вниз: сначала выберите или создайте предложение, затем материал, "
+        "после этого рекламный канал, и только потом бюджет и запуск.",
         reply_markup=control._keyboard(
             [
-                [(goal_contract.ACQUIRE_CLIENTS.label, goal_contract.ACQUIRE_CLIENTS.callback(token))],
-                [("📣 Рекламные каналы", f"cpa:home:{token}")],
-                [("📊 Результаты Яндекс", f"cpy:a:{token}:30")],
-                [("📣 Партнёрские материалы", f"cpg:materials:{token}")],
-                *_popup_navigation_rows(token, back_callback=f"cpo:more:{token}"),
+                [("🎯 Что рекламировать", f"cpo:start:{token}")],
+                [("🎨 Рекламный материал", f"cpo:ad-materials:{token}")],
+                [("📡 Где рекламировать", f"cpa:home:{token}")],
+                [("💰 Бюджет и запуск", f"cpsp:home:{token}")],
+                [("📊 Что дала реклама", f"cpy:a:{token}:30")],
+                *_popup_navigation_rows(token, back_callback=f"cpj:home:{token}"),
             ]
         ),
     )

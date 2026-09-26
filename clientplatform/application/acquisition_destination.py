@@ -22,7 +22,7 @@ from clientplatform.application.promotions import (
     promotion_start_payload,
 )
 from clientplatform.domain.promotions import PromotionChannel
-from clientplatform.domain.tenancy import TenantContext
+from clientplatform.domain.tenancy import TenantContext, normalize_uuid
 from clientplatform.infrastructure.promotion_repository import PromotionRepository
 from services.db import get_db_ro
 
@@ -81,10 +81,18 @@ def prepare_nearest_acquisition_destination(
     actor: TenantContext,
     public_base_url: object,
     attribution_channel: PromotionChannel = PromotionChannel.WEBSITE,
+    offering_id: str | None = None,
 ) -> PreparedAcquisitionDestination | None:
     """Prepare the nearest promotable slot without coupling to staff transport."""
 
     slots = list_promotable_slots(actor=actor)
+    if offering_id is not None:
+        expected_offering_id = normalize_uuid(offering_id, field_name="offering_id")
+        slots = [
+            item
+            for item in slots
+            if str(item.slot.offering_id) == expected_offering_id
+        ]
     if not slots:
         return None
     slot = min(slots, key=lambda item: item.slot.starts_at)

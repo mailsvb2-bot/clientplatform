@@ -83,14 +83,17 @@ def _primary_action(business_id: str, next_action: GrowthAction | None = None) -
 
 
 def _goal_keyboard(business_id: str, next_action: GrowthAction | None = None):
-    """Show one result-first action and progressively disclose everything else."""
+    """Stable owner home: one smart CTA plus five permanent business sections."""
 
     token = control._uuid_token(business_id)
-    primary = _primary_action(business_id, next_action)
     return control._keyboard(
         [
-            [primary],
-            [(nav.ALL.label, f"cpo:more:{token}")],
+            [(nav.MAIN_NEXT.label, f"cpo:next:{token}")],
+            [(nav.MAIN_BUSINESS.label, f"cpo:settings:{token}")],
+            [(nav.MAIN_ADS.label, f"cpo:ads:{token}")],
+            [(nav.MAIN_CLIENTS.label, f"cpo:clients:{token}")],
+            [(nav.MAIN_EVENTS.label, f"cpev:home:{token}")],
+            [(nav.MAIN_CALENDAR.label, f"cpo:work:{token}")],
         ]
     )
 
@@ -117,19 +120,16 @@ async def send_goal_dashboard(
         main_reason = next_action.reason
 
     await message.answer(
-        one_click.simple.quick_menu_intro(business_name=access.business.name)
-        + f"\n\n{profile.activity_description}"
-        + "\n\nГлавное сейчас\n"
+        f"🏠 {access.business.name}\n\n"
+        + f"{profile.activity_description}\n\n"
+        + "Главное сейчас\n"
         + f"• {main_title}\n"
         + f"  {main_reason}\n\n"
         + f"Клиентов: {len(customers)} · свободных времён: {len(open_slots)} · "
-        + f"материалов и программ: {len(programs)}",
-        reply_markup=one_click.simple._simple_keyboard(
-            business_id,
-            activity_description=profile.activity_description,
-            capabilities=capabilities,
-            role=actor.role,
-        ),
+        + f"материалов и программ: {len(programs)}\n\n"
+        + "Нажмите «✨ Что сделать сейчас», чтобы перейти к рекомендуемому действию, "
+        + "или откройте нужный постоянный раздел ниже.",
+        reply_markup=_goal_keyboard(business_id, next_action),
     )
 
 

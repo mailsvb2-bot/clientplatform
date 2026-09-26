@@ -553,9 +553,150 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             ["🧩 Возможности бизнеса", "🧭 Направления деятельности", "🛠 Технические проверки", "➕ Добавить бизнес", "🗑 Удалить бизнес", "⬅️ Назад", "🏠 В главное меню"],
         )
         ad_labels = await labels_for(one_click.open_ad_tools, "cpo:ads:business-1")
-        self.assertIn("🚀 Найти новых клиентов", ad_labels)
+        self.assertEqual(
+            ad_labels,
+            [
+                "🎯 Что рекламировать",
+                "🎨 Рекламный материал",
+                "📡 Где рекламировать",
+                "💰 Бюджет и запуск",
+                "📊 Что дала реклама",
+                "⬅️ Назад",
+                "🏠 В главное меню",
+            ],
+        )
         self.assertNotIn("🚀 Получить клиентов", ad_labels)
-        self.assertIn("📣 Рекламные каналы", ad_labels)
+        material_labels = await labels_for(
+            one_click.open_ad_materials,
+            "cpo:ad-materials:business-1",
+        )
+        self.assertEqual(
+            material_labels,
+            [
+                "✍️ Подготовить текст",
+                "🖼 Создать картинку",
+                "🎬 Создать видео",
+                "📎 Использовать своё медиа",
+                "⬅️ Назад",
+                "🏠 В главное меню",
+            ],
+        )
+
+    def test_growth_action_router_covers_all_canonical_action_kinds(self):
+        token = "business-1"
+        lead_id = "33333333-3333-4333-8333-333333333333"
+        cases = [
+            ("sales_handoff", "cps:sh:business-1"),
+            ("sales_plan:any", "cps:sw:business-1"),
+            (f"sales_lead:{lead_id}", f"cps:swv:business-1:{one_click.control._uuid_token(lead_id)}"),
+            ("attribution_review", "cpy:a:business-1:7"),
+            ("economic_reactivation", "cps:sr:business-1"),
+            ("economic_open_slots", one_click.goal_contract.ACQUIRE_CLIENTS.callback(token)),
+            ("economic_paid_acquisition", "cpsp:home:business-1"),
+        ]
+        for action_key, expected_callback in cases:
+            action = one_click.GrowthAction(
+                title="Действие",
+                reason="Причина",
+                action_key=action_key,
+                source="test",
+            )
+            routed = one_click._growth_action_button(action, token)
+            self.assertIsNotNone(routed)
+            self.assertEqual(routed[1], expected_callback)
+
+        unknown = one_click.GrowthAction(
+            title="Неизвестно",
+            reason="Причина",
+            action_key="unknown",
+            source="test",
+        )
+        self.assertIsNone(one_click._growth_action_button(unknown, token))
+
+    async def test_next_actions_handles_duplicates_and_fail_safe_errors(self):
+        actor = tenant_actor()
+        target = out()
+        cb = callback("cpo:next:business-1", target)
+        duplicate = one_click.GrowthAction(
+            title="Ответить клиентам",
+            reason="Есть обращения",
+            action_key="sales_handoff",
+            source="test",
+        )
+        with (
+            patch.object(one_click.control, "_token_uuid", side_effect=lambda value: value),
+            patch.object(one_click.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(one_click.control, "_callback_message", return_value=target),
+            patch.object(
+                one_click.asyncio,
+                "to_thread",
+                new=AsyncMock(return_value=SimpleNamespace(actions=(duplicate, duplicate))),
+            ),
+        ):
+            await one_click.open_next_actions(cb)
+        labels = [
+            button.text
+            for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertEqual(labels.count("🙋 Ответить клиентам"), 1)
+
+        for error in (
+            TenantPermissionDenied("denied"),
+            ValueError("bad"),
+            OSError("io"),
+            RuntimeError("runtime"),
+        ):
+            target = out()
+            cb = callback("cpo:next:business-1", target)
+            with (
+                patch.object(one_click.control, "_token_uuid", side_effect=lambda value: value),
+                patch.object(one_click.control, "_actor", new=AsyncMock(return_value=actor)),
+                patch.object(one_click.control, "_callback_message", return_value=target),
+                patch.object(one_click.asyncio, "to_thread", new=AsyncMock(side_effect=error)),
+            ):
+                await one_click.open_next_actions(cb)
+            labels = [
+                button.text
+                for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+                for button in row
+            ]
+            self.assertIn("✨ Настроить следующий полезный шаг", labels)
+
+    async def test_work_section_denies_roles_without_booking_or_customer_access(self):
+        target = out()
+        await one_click._send_work_tools(
+            target,
+            token="business-1",
+            actor=tenant_actor(PlatformRole.MARKETER),
+        )
+        self.assertIn("недоступен", target.answer.await_args.args[0].casefold())
+        navigation = target.answer.await_args.kwargs["reply_markup"].inline_keyboard[-1]
+        self.assertEqual(
+            [button.callback_data for button in navigation],
+            ["cpj:home:business-1", "cpj:home:business-1"],
+        )
+
+    async def test_primary_owner_sections_return_to_canonical_home(self):
+        actor = tenant_actor(PlatformRole.OWNER)
+        expected = [
+            ("⬅️ Назад", "cpj:home:business-1"),
+            ("🏠 В главное меню", "cpj:home:business-1"),
+        ]
+
+        client_rows, _ = one_click._client_tools_rows("business-1", actor)
+        settings_rows, _ = one_click._settings_rows("business-1", actor)
+        self.assertEqual(client_rows[-1], expected)
+        self.assertEqual(settings_rows[-1], expected)
+
+        target = out()
+        await one_click._send_work_tools(target, token="business-1", actor=actor)
+        self.assertIn("📅 Запись и календарь", target.answer.await_args.args[0])
+        navigation = target.answer.await_args.kwargs["reply_markup"].inline_keyboard[-1]
+        self.assertEqual(
+            [(button.text, button.callback_data) for button in navigation],
+            expected,
+        )
 
     async def test_website_tools_without_confirmed_public_base_url(self):
         target = out()
@@ -597,7 +738,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 labels(PlatformRole.SUPPORT),
-                ["👥 Клиенты и продажи", "📅 Услуги и запись", "⚙️ Мой бизнес", "⬅️ Назад", "🏠 В главное меню"],
+                ["👥 Клиенты и продажи", "📅 Запись и календарь", "⚙️ Мой бизнес", "⬅️ Назад", "🏠 В главное меню"],
             )
             self.assertEqual(
                 labels(PlatformRole.ANALYST),

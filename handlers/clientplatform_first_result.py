@@ -29,11 +29,11 @@ def _replace_next_action(markup: InlineKeyboardMarkup) -> InlineKeyboardMarkup:
         buttons: list[InlineKeyboardButton] = []
         for button in row:
             callback_data = str(button.callback_data or "")
-            if callback_data.startswith("cps:next:"):
+            if callback_data.startswith(("cps:next:", "cpo:next:")):
                 token = callback_data.split(":", 2)[2]
                 buttons.append(
                     InlineKeyboardButton(
-                        text="✨ Помочь выбрать первый шаг",
+                        text=button.text or "✨ Что сделать сейчас",
                         callback_data=f"cps:firstgoal:{token}",
                     )
                 )
