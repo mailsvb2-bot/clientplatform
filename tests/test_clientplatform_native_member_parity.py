@@ -264,7 +264,7 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
 
         with patch.object(ui, "_native_all_offerings", return_value=[first, second]):
             stale = ui._ad_offer_message(actor, str(uuid4()))
-        self.assertIn("устар", stale.text.casefold())
+        self.assertIn("неактуальна", stale.text.casefold())
 
         parsed = ui.parse_native_member_interaction("cpm:ad-offers:0")
         self.assertEqual(parsed.action, "ad-offers")
