@@ -1377,7 +1377,11 @@ async def receive_member_user(message: Message, state: FSMContext) -> None:
         f"✅ Сотрудник добавлен: {member.user_id}\n"
         f"Роль: {_role_label(member.role)}"
     )
-    await _render_menu(message, state, ctx, reset=True)
+    await control._send_dashboard(
+        message,
+        user_id=ctx.user_id,
+        business_id=ctx.business_id,
+    )
 
 
 async def _navigate_back(callback: CallbackQuery, state: FSMContext, ctx: AdminContext) -> None:
