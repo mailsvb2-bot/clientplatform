@@ -229,15 +229,19 @@ class ClientPlatformZeroToFirstOutcomeTests(unittest.TestCase):
         self.assertEqual(review_calls, [business_id])
         self.assertEqual(guarded_calls, [])
 
-    def test_resume_confirmed_draft_offers_business_connections_first(self) -> None:
+    def test_resume_confirmed_draft_returns_to_canonical_owner_home(self) -> None:
         assert control is not None
         business_id = str(uuid4())
         actor = object()
         message = _Message()
         state = _State()
+        dashboard_calls: list[tuple[int, str]] = []
 
         async def fake_actor(_user_id: int, _business_id: str):
             return actor
+
+        async def fake_dashboard(_message, *, user_id: int, business_id: str):
+            dashboard_calls.append((user_id, business_id))
 
         with (
             patch.object(control, "_actor", fake_actor),
@@ -247,11 +251,7 @@ class ClientPlatformZeroToFirstOutcomeTests(unittest.TestCase):
                 "get_business_profile_details",
                 lambda **_kwargs: _structured(confirmed=True),
             ),
-            patch.object(
-                control,
-                "list_accessible_businesses",
-                lambda **_kwargs: [_business_access(business_id)],
-            ),
+            patch.object(control, "_send_dashboard", fake_dashboard),
         ):
             asyncio.run(
                 control._resume_business(
@@ -262,14 +262,61 @@ class ClientPlatformZeroToFirstOutcomeTests(unittest.TestCase):
                 )
             )
 
-        text, markup = message.answers[-1]
-        self.assertTrue(text.startswith("✅ Бизнес создан. Что подключим к нему?"))
-        callbacks = _button_callbacks(markup)
-        self.assertTrue(any(item.startswith("cpa:") and item.endswith(":messengers") for item in callbacks))
-        self.assertTrue(any(item.startswith("cpo:entrypoints:") for item in callbacks))
-        self.assertTrue(any(item.startswith("cpo:integrations:") for item in callbacks))
-        self.assertTrue(any(item.startswith("cp:onboardwork:") for item in callbacks))
-        self.assertFalse(any(item.startswith("cps:firstbook:") for item in callbacks))
+        self.assertTrue(state.cleared)
+        self.assertEqual(dashboard_calls, [(101, business_id)])
+        self.assertEqual(message.answers, [])
+
+    def test_composed_resume_confirmed_draft_uses_canonical_dashboard(self) -> None:
+        assert dashboard_dispatch is not None
+        assert button_surface_contract is not None
+        business_id = str(uuid4())
+        actor = object()
+        message = _Message(text="/start")
+        state = _State({"stale": "wizard"})
+        guarded_calls: list[str] = []
+        dashboard_calls: list[tuple[int, str]] = []
+
+        async def guarded_resume(*_args, **_kwargs):
+            guarded_calls.append("guarded")
+
+        async def fake_actor(_user_id: int, selected_business_id: str):
+            self.assertEqual(selected_business_id, business_id)
+            return actor
+
+        async def fake_dashboard(_message, *, user_id: int, business_id: str):
+            dashboard_calls.append((user_id, business_id))
+
+        fake_control = SimpleNamespace(
+            _resume_business=guarded_resume,
+            _actor=fake_actor,
+            _send_dashboard=fake_dashboard,
+            get_business_profile=lambda **_kwargs: _profile(),
+            get_business_profile_details=lambda **_kwargs: _structured(confirmed=True),
+            list_accessible_businesses=lambda **_kwargs: [_business_access(business_id)],
+            _send_onboarding_review=lambda *_args, **_kwargs: None,
+            _send_onboarding_first_result=lambda *_args, **_kwargs: None,
+            ActivityNotFound=ActivityNotFound,
+        )
+
+        with patch.object(
+            button_surface_contract,
+            "install_button_surface_contract",
+            lambda _module: None,
+        ):
+            dashboard_dispatch.install_dynamic_dashboard_dispatch(fake_control)
+            asyncio.run(
+                fake_control._resume_business(
+                    message,
+                    user_id=101,
+                    business_id=business_id,
+                    state=state,
+                )
+            )
+
+        self.assertTrue(state.cleared)
+        self.assertEqual(dashboard_calls, [(101, business_id)])
+        self.assertEqual(guarded_calls, [])
+
 
     def test_confirm_onboarding_is_tenant_checked_before_connection_choice(self) -> None:
         assert control is not None
