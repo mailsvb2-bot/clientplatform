@@ -27,7 +27,7 @@ from clientplatform.application.managed_bot_onboarding import (
 )
 from clientplatform.domain.activity import CapabilityStatus
 from clientplatform.domain.bookings import BookingSlotStatus
-from clientplatform.domain.tenancy import PlatformRole
+from clientplatform.domain.tenancy import PlatformRole, TenantPermissionDenied
 from clientplatform.presentation import owner_navigation as nav
 from clientplatform.presentation.owner_quick_menu import (
     build_owner_quick_actions,
@@ -144,16 +144,40 @@ def _telegram_share_url(url: str, text: str) -> str:
     return "https://t.me/share/url?" + urlencode({"url": url, "text": text})
 
 
-async def _business_snapshot(*, user_id: int, business_id: str):
+def _can_view_customer_records(actor: Any) -> bool:
+    try:
+        actor.assert_can_view_customer_records()
+    except TenantPermissionDenied:
+        return False
+    return True
+
+
+async def _business_snapshot(
+    *,
+    user_id: int,
+    business_id: str,
+    role_safe: bool = False,
+):
     actor = await control._actor(user_id, business_id)
-    profile, capabilities, customers, programs, slots, accesses = await asyncio.gather(
-        asyncio.to_thread(control.get_business_profile, actor=actor),
-        asyncio.to_thread(control.list_business_capabilities, actor=actor),
-        asyncio.to_thread(control.list_customers, actor=actor),
-        asyncio.to_thread(control.list_programs, actor=actor),
-        asyncio.to_thread(control.list_booking_slots, actor=actor),
-        asyncio.to_thread(control.list_accessible_businesses, user_id=user_id),
-    )
+    can_view_customers = _can_view_customer_records(actor)
+    if role_safe and not can_view_customers:
+        profile, capabilities, programs, accesses = await asyncio.gather(
+            asyncio.to_thread(control.get_business_profile, actor=actor),
+            asyncio.to_thread(control.list_business_capabilities, actor=actor),
+            asyncio.to_thread(control.list_programs, actor=actor),
+            asyncio.to_thread(control.list_accessible_businesses, user_id=user_id),
+        )
+        customers: list[Any] = []
+        slots: list[Any] = []
+    else:
+        profile, capabilities, customers, programs, slots, accesses = await asyncio.gather(
+            asyncio.to_thread(control.get_business_profile, actor=actor),
+            asyncio.to_thread(control.list_business_capabilities, actor=actor),
+            asyncio.to_thread(control.list_customers, actor=actor),
+            asyncio.to_thread(control.list_programs, actor=actor),
+            asyncio.to_thread(control.list_booking_slots, actor=actor),
+            asyncio.to_thread(control.list_accessible_businesses, user_id=user_id),
+        )
     access = next(item for item in accesses if item.business.id == business_id)
     return actor, access, profile, capabilities, customers, programs, slots
 
@@ -165,14 +189,24 @@ async def send_simple_dashboard(
     business_id: str,
 ) -> None:
     actor, access, profile, capabilities, customers, programs, slots = (
-        await _business_snapshot(user_id=user_id, business_id=business_id)
+        await _business_snapshot(
+            user_id=user_id,
+            business_id=business_id,
+            role_safe=True,
+        )
     )
-    open_slots = sum(item.slot.status == BookingSlotStatus.OPEN for item in slots)
+    stats = [f"программ: {len(programs)}"]
+    if _can_view_customer_records(actor):
+        open_slots = sum(item.slot.status == BookingSlotStatus.OPEN for item in slots)
+        stats = [
+            f"Клиентов: {len(customers)}",
+            *stats,
+            f"свободных времён: {open_slots}",
+        ]
     await message.answer(
         quick_menu_intro(business_name=access.business.name)
         + "\n\n"
-        + f"Клиентов: {len(customers)} · программ: {len(programs)} · "
-        + f"свободных времён: {open_slots}",
+        + " · ".join(stats),
         reply_markup=_simple_keyboard(
             business_id,
             activity_description=profile.activity_description,
