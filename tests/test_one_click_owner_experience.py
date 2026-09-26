@@ -807,6 +807,26 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("⚙️ CRM и сервисы", admin_labels)
         self.assertNotIn("👤 Сотрудники и доступы", admin_labels)
 
+    async def test_canonical_settings_records_admin_return_parent(self) -> None:
+        out = outbound_message()
+        cb = callback("cpo:settings:business-1", out)
+        state = FakeState()
+        with (
+            patch.object(one_click.control, "_actor", new=AsyncMock(return_value=tenant_actor())),
+            patch.object(one_click.control, "_token_uuid", side_effect=lambda value: value),
+            patch.object(one_click.control, "_callback_message", return_value=out),
+        ):
+            await one_click.open_settings_tools(cb, state)
+
+        self.assertEqual(
+            state.data["cp_admin_return_callback"],
+            "cpo:settings:business-1",
+        )
+        self.assertEqual(state.data["cp_admin_history"], [])
+        self.assertEqual(state.data["cp_admin_section"], "menu")
+        out.answer.assert_awaited_once()
+
+
     async def test_more_menu_hides_advanced_actions_from_home(self) -> None:
         out = outbound_message()
         cb = callback("cpo:more:business-1", out)
