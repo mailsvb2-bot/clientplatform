@@ -2375,7 +2375,7 @@ def _ad_materials_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role in (_CONTENT_ROLES | _MARKETING_ROLES):
         rows.append((_button("🖼 Картинка / 🎬 Видео", "cpm:ai-visuals"),))
     rows.append((_button("📎 Своё медиа — в мастере запуска", "cpm:acquire"),))
-    rows.append(_back_row())
+    rows.append((_button(nav.BACK.label, "cpm:ads"),))
     return CustomerInteractionMessage(
         text=(
             "🎨 Рекламный материал\n\n"
