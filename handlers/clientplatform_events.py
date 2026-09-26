@@ -12,7 +12,10 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from clientplatform.application.activity import get_business_profile
-from clientplatform.application.activity_directions import list_activity_directions
+from clientplatform.application.activity_directions import (
+    get_activity_direction,
+    list_activity_directions,
+)
 from clientplatform.application.cockpit_events import resolve_cockpit_events
 from clientplatform.application.event_announcements import draft_event_announcement
 from clientplatform.application.event_content_plans import (
@@ -67,6 +70,7 @@ from clientplatform.presentation.event_ui import (
 from config.settings import settings
 
 from . import clientplatform_control as control
+from . import clientplatform_direction_context as direction_context
 from .clientplatform_program_media import ProgramMediaIngestError, materialize_program_content
 
 log = logging.getLogger(__name__)
@@ -771,9 +775,30 @@ async def receive_event_video_upload(message: Message, state: FSMContext) -> Non
 
 
 @router.callback_query(F.data.startswith("cpev:home:"))
-async def open_event_hub(callback: CallbackQuery) -> None:
-    token = str(callback.data or "").split(":", 2)[2]
+async def open_event_hub(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = str(callback.data or "").split(":")
+    if len(parts) not in {3, 4}:
+        await callback.answer("Кнопка устарела.", show_alert=True)
+        return
+    token = parts[2]
     business_id = control._token_uuid(token)
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    context = await direction_context.read_direction_context(
+        state,
+        business_id=business_id,
+    )
+    if len(parts) == 4:
+        direction = await asyncio.to_thread(
+            get_activity_direction,
+            actor=actor,
+            direction_id=control._token_uuid(parts[3]),
+        )
+        context = await direction_context.set_direction_context(
+            state,
+            business_id=business_id,
+            direction_id=direction.id,
+            title=direction.title,
+        )
     await callback.answer()
     from .clientplatform_cockpit_dispatch import send_cockpit_section
 
@@ -782,6 +807,8 @@ async def open_event_hub(callback: CallbackQuery) -> None:
         user_id=int(callback.from_user.id),
         business_id=business_id,
         section="events",
+        direction_id=context.direction_id if context is not None else None,
+        direction_title=context.title if context is not None else None,
     )
 
 
@@ -1233,9 +1260,36 @@ async def start_event_wizard(callback: CallbackQuery, state: FSMContext) -> None
         asyncio.to_thread(get_business_profile, actor=actor),
         asyncio.to_thread(list_activity_directions, actor=actor),
     )
+    context = await direction_context.read_direction_context(
+        state,
+        business_id=business_id,
+    )
+    selected_direction_id = (
+        context.direction_id
+        if context is not None and context.direction_id in {item.id for item in directions}
+        else None
+    )
     await state.clear()
-    await state.update_data(event_business_id=business_id)
+    await state.update_data(
+        event_business_id=business_id,
+        event_direction_id=selected_direction_id,
+    )
+    if context is not None and selected_direction_id is not None:
+        await direction_context.set_direction_context(
+            state,
+            business_id=business_id,
+            direction_id=selected_direction_id,
+            title=context.title,
+        )
     await callback.answer()
+    if selected_direction_id is not None:
+        await state.set_state(ClientPlatformEventState.waiting_details)
+        await control._callback_message(callback).answer(
+            direction_context.direction_heading(context)
+            + event_creation_prompt(profile.timezone),
+            reply_markup=_cancel_keyboard(business_id),
+        )
+        return
     if directions:
         rows = [
             [
