@@ -824,11 +824,13 @@ async def start_offering(callback: CallbackQuery, state: FSMContext) -> None:
         else None
     )
     await state.clear()
-    await state.update_data(
-        business_id=business_id,
-        capability_id=_token_uuid(capability_token),
-        direction_id=selected_direction_id,
-    )
+    state_data = {
+        "business_id": business_id,
+        "capability_id": _token_uuid(capability_token),
+    }
+    if selected_direction_id is not None:
+        state_data["direction_id"] = selected_direction_id
+    await state.update_data(**state_data)
     await callback.answer()
     if selected_direction_id is not None or not directions:
         await state.set_state(ClientPlatformControlState.offering_title)
