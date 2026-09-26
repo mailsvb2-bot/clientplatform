@@ -249,11 +249,11 @@ async def open_activity_direction(callback: CallbackQuery, state: FSMContext) ->
         f"{direction.description}\n\n"
         "Что хотите сделать с этим направлением?\n\n"
         "Связано сейчас:\n"
-        f"• материалов и программ: {counts['program']}\n"
+        f"• материалов: {counts['program']}\n"
         f"• услуг и предложений: {counts['offering']}\n"
-        f"• событий и вебинаров: {counts['event']}\n\n"
-        "Направление остаётся частью одной организации: общий бренд, сотрудники, "
-        "клиенты и подключения не дублируются.",
+        f"• событий: {counts['event']}\n\n"
+        "Направление — часть организации, а не отдельная организация: общий бренд, "
+        "сотрудники, клиенты и подключения не дублируются.",
         reply_markup=control._keyboard(rows),
     )
 
