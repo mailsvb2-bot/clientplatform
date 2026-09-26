@@ -379,7 +379,7 @@ async def _send_onboarding_review(message: Message, *, actor, business_id: str) 
     )
 
 
-async def _send_onboarding_first_result(message: Message, *, business_id: str) -> None:
+async def _send_onboarding_first_result(\n    message: Message,\n    *,\n    user_id: int,\n    business_id: str,\n) -> None:
     """Enter the single canonical owner home after onboarding confirmation.
 
     Connection, CRM and service setup remain available from the business settings.
@@ -452,7 +452,7 @@ async def _resume_business(message: Message, *, user_id: int, business_id: str, 
     if profile.status == BusinessProfileStatus.DRAFT:
         structured = await asyncio.to_thread(get_business_profile_details, actor=actor)
         if structured.confirmed:
-            await _send_onboarding_first_result(message, business_id=business_id)
+            await _send_onboarding_first_result(\n                message,\n                user_id=user_id,\n                business_id=business_id,\n            )
         else:
             await _send_onboarding_review(message, actor=actor, business_id=business_id)
         return
