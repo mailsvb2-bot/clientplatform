@@ -1023,7 +1023,7 @@ async def test_messenger_root_back_returns_to_canonical_business_settings(
         "get_business_capability_projection",
         lambda **_kwargs: capability_projection(),
     )
-    monkeypatch.setattr(admin, "available_staff_messenger_switches", return_value=())
+    monkeypatch.setattr(admin, "available_staff_messenger_switches", lambda _actor: ())
     state = fsm_context()
     await state.update_data(
         cp_admin_return_callback="cpo:settings:business-token",
