@@ -1404,13 +1404,14 @@ async def send_one_click_section(
         return
     raise ValueError("unsupported cockpit section")
 
-@router.callback_query(F.data.startswith("cpo:ad-materials:"))
-async def open_ad_materials(callback: CallbackQuery, state: FSMContext | None = None) -> None:
-    token = str(callback.data).split(":", 2)[2]
-    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
-    await _remember_admin_parent(state, f"cpo:ad-materials:{token}")
+async def _send_ad_materials(
+    message: ClientPlatformMessageTarget,
+    *,
+    token: str,
+    actor,
+) -> None:
     actor.assert_can_manage_promotions()
-    await control._callback_message(callback).answer(
+    await message.answer(
         "🎨 Рекламный материал\n\n"
         "Сначала выберите, что хотите подготовить. Своё изображение или видео также "
         "можно загрузить в безопасном мастере запуска рекламы.",
@@ -1423,6 +1424,18 @@ async def open_ad_materials(callback: CallbackQuery, state: FSMContext | None = 
                 *_popup_navigation_rows(token, back_callback=f"cpo:ads:{token}"),
             ]
         ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:ad-materials:"))
+async def open_ad_materials(callback: CallbackQuery, state: FSMContext | None = None) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    await _remember_admin_parent(state, f"cpo:ad-materials:{token}")
+    await _send_ad_materials(
+        control._callback_message(callback),
+        token=token,
+        actor=actor,
     )
 
 
