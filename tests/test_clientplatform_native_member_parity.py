@@ -471,17 +471,29 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
                 self.assertEqual("cpm:today", fallback.rows[0][0].command)
                 self.assertIn("Срочных действий", fallback.text)
 
-        for action in ("next", "ads", "ad-materials", "clients-sales"):
+        render_cases = (
+            ("next", "_next_message"),
+            ("ads", "_ads_message"),
+            ("ad-materials", "_ad_materials_message"),
+            ("clients-sales", "_clients_sales_message"),
+        )
+        for action, target_name in render_cases:
             parsed = ui.parse_native_member_interaction(f"cpm:{action}")
             self.assertEqual(action, parsed.action)
-            rendered = ui._render(
-                owner,
-                parsed,
-                linked=False,
-                setup_issuer=None,
-                setup_key="test",
+            expected = ui.CustomerInteractionMessage(
+                text=f"rendered:{action}",
+                rows=((ui._button("ok", "cpm:menu"),),),
             )
-            self.assertTrue(rendered.rows)
+            with patch.object(ui, target_name, return_value=expected) as target:
+                rendered = ui._render(
+                    owner,
+                    parsed,
+                    linked=False,
+                    setup_issuer=None,
+                    setup_key="test",
+                )
+            target.assert_called_once_with(owner)
+            self.assertIs(expected, rendered)
 
     def test_parser_preserves_pagination_and_entity_arguments(self) -> None:
         parsed = ui.parse_native_member_interaction("cpm:customers:7")
