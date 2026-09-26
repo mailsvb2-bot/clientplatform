@@ -110,10 +110,11 @@ async def test_every_top_level_section_back_returns_to_admin_menu(
 ) -> None:
     calls: list[str] = []
 
-    async def render_menu(*_args: Any, **_kwargs: Any) -> None:
-        calls.append("menu")
+    async def send_dashboard(*_args: Any, **_kwargs: Any) -> None:
+        calls.append("dashboard")
 
-    monkeypatch.setattr(admin, "_render_menu", render_menu)
+    monkeypatch.setattr(admin.control, "_callback_message", lambda callback: callback)
+    monkeypatch.setattr(admin.control, "_send_dashboard", send_dashboard)
     state = FakeState(
         {
             "cp_admin_history": ["menu"],
@@ -126,9 +127,8 @@ async def test_every_top_level_section_back_returns_to_admin_menu(
         _ctx(),
     )
 
-    assert calls == ["menu"]
-    assert state.data["cp_admin_history"] == []
-    assert state.data["cp_admin_section"] == "menu"
+    assert calls == ["dashboard"]
+    assert state.data == {}
 
 
 @pytest.mark.asyncio
