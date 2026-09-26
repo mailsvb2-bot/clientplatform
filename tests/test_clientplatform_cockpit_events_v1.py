@@ -158,3 +158,44 @@ def test_event_tables_have_explicit_privacy_dispositions() -> None:
     assert TENANT_POLICIES["clientplatform_event_commercial_consent_events"].disposition == "erase"
     assert TENANT_POLICIES["clientplatform_event_commercial_channel_state"].disposition == "erase"
     assert TENANT_POLICIES["clientplatform_event_owner_requests"].disposition == "retain"
+
+
+def test_direction_event_projection_applies_direction_before_limit() -> None:
+    actor = _actor()
+    direction_id = "33333333-3333-4333-8333-333333333333"
+    calls: list[tuple[str, object]] = []
+
+    class EventRepo:
+        def __init__(self, _conn):
+            pass
+
+        def list(self, **_kwargs):
+            calls.append(("list", _kwargs))
+            return []
+
+        def list_for_direction(self, **kwargs):
+            calls.append(("list_for_direction", kwargs))
+            return []
+
+    with (
+        patch.object(cockpit_events, "get_business_profile", return_value=SimpleNamespace(timezone="Europe/Moscow")),
+        patch.object(cockpit_events, "_public_base_url", return_value=None),
+        patch.object(cockpit_events, "get_db_ro", return_value=nullcontext(object())),
+        patch.object(cockpit_events, "EventRepository", EventRepo),
+        patch.object(cockpit_events, "get_business_event_followup_settings", return_value=None),
+        patch.object(cockpit_events, "event_followups_platform_enabled", return_value=False),
+    ):
+        snapshot = cockpit_events.resolve_events_snapshot(
+            actor=actor,
+            business_name="Практика",
+            limit=5,
+            direction_id=direction_id,
+        )
+
+    assert snapshot.items == ()
+    assert calls == [
+        (
+            "list_for_direction",
+            {"actor": actor, "direction_id": direction_id, "limit": 5},
+        )
+    ]
