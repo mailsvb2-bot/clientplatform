@@ -73,18 +73,57 @@ else:
 
 
     @pytest.mark.asyncio
-    async def test_quick_ack_answers_callback_only_once_even_if_handler_replies_again():
+    async def test_quick_ack_answers_safe_navigation_before_handler():
         mw = QuickAckCallbackMiddleware()
-        cb = _make_callback(1, 'same')
+        cb = _make_callback(1, 'cpo:ads:business-1')
+        calls = []
+
+        async def handler(event, data):
+            calls.append(('handler', None))
+            await event.answer('later')
+            return 'ok'
+
+        original = cb.answer
+        async def tracked(*args, **kwargs):
+            calls.append(('answer', (args, kwargs)))
+            return await original(*args, **kwargs)
+        tracked.calls = original.calls
+        object.__setattr__(cb, 'answer', tracked)
+
+        assert await mw(handler, cb, {}) == 'ok'
+        assert calls[0][0] == 'answer'
+        assert calls[1][0] == 'handler'
+        assert len(cb.answer.calls) == 1
+        assert cb.answer.calls[0][1] == {'cache_time': 0}
+
+
+    @pytest.mark.asyncio
+    async def test_quick_ack_preserves_handler_alert_for_semantic_callback():
+        mw = QuickAckCallbackMiddleware()
+        cb = _make_callback(1, 'cpj:wizdate:business-1:2026-09-27')
+
+        async def handler(event, data):
+            await event.answer('Эта дата недоступна', show_alert=True)
+            return 'ok'
+
+        assert await mw(handler, cb, {}) == 'ok'
+        assert len(cb.answer.calls) == 1
+        assert cb.answer.calls[0][0] == ('Эта дата недоступна',)
+        assert cb.answer.calls[0][1] == {'show_alert': True}
+
+
+    @pytest.mark.asyncio
+    async def test_quick_ack_closes_silent_semantic_callback_after_handler():
+        mw = QuickAckCallbackMiddleware()
+        cb = _make_callback(1, 'unknown:semantic')
         seen = []
 
         async def handler(event, data):
             seen.append('handled')
-            await event.answer('later')
-            await event.answer('again')
             return 'ok'
 
         assert await mw(handler, cb, {}) == 'ok'
         assert seen == ['handled']
         assert len(cb.answer.calls) == 1
+        assert cb.answer.calls[0][1] == {'cache_time': 0}
 
