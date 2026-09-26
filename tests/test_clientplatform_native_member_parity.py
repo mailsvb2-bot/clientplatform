@@ -234,6 +234,42 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
             next_message = ui._next_message(actor)
         self.assertEqual("cpm:sales", next_message.rows[0][0].command)
 
+    def test_native_advertising_can_create_or_select_existing_offering(self) -> None:
+        actor = _actor(PlatformRole.OWNER)
+        first = SimpleNamespace(id=str(uuid4()), title="Консультация")
+        second = SimpleNamespace(id=str(uuid4()), title="Вебинар")
+        with patch.object(ui, "_native_all_offerings", return_value=[first, second]):
+            message = ui._ad_offers_message(actor, 0)
+        commands = _commands(message)
+        self.assertIn("cpm:offering-new", commands)
+        self.assertIn(f"cpm:ad-offer:{first.id}", commands)
+        self.assertIn(f"cpm:ad-offer:{second.id}", commands)
+        self.assertEqual(commands[-1], "cpm:ads")
+
+        expected = ui.CustomerInteractionMessage(
+            text="selected",
+            rows=((ui._button("ok", "cpm:menu"),),),
+        )
+        with (
+            patch.object(ui, "_native_all_offerings", return_value=[first, second]),
+            patch.object(ui, "_acquisition_message", return_value=expected) as acquisition,
+        ):
+            selected = ui._ad_offer_message(actor, first.id)
+        acquisition.assert_called_once_with(
+            actor,
+            offering_id=first.id,
+            offering_title=first.title,
+        )
+        self.assertIs(selected, expected)
+
+        stale = ui._ad_offer_message(actor, str(uuid4()))
+        self.assertIn("устар", stale.text.casefold())
+
+        parsed = ui.parse_native_member_interaction("cpm:ad-offers:0")
+        self.assertEqual(parsed.action, "ad-offers")
+        parsed = ui.parse_native_member_interaction(f"cpm:ad-offer:{first.id}")
+        self.assertEqual(parsed.action, "ad-offer")
+
     def test_native_home_falls_back_to_role_safe_manual_read_when_cockpit_is_unavailable(self) -> None:
         marketer = _actor(PlatformRole.MARKETER)
         with patch.object(
