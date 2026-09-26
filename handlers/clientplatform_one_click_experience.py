@@ -948,9 +948,14 @@ def _client_tools_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], 
     return rows, help_lines
 
 
-async def _remember_admin_parent(state: FSMContext, callback_data: str) -> None:
+async def _remember_admin_parent(
+    state: FSMContext | None,
+    callback_data: str,
+) -> None:
     """Keep admin-backed child screens inside the canonical owner navigation."""
 
+    if state is None:
+        return
     await state.update_data(
         cp_admin_return_callback=callback_data,
         cp_admin_section="menu",
@@ -1228,7 +1233,7 @@ async def open_more(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("cpo:clients:"))
-async def open_client_tools(callback: CallbackQuery, state: FSMContext) -> None:
+async def open_client_tools(callback: CallbackQuery, state: FSMContext | None = None) -> None:
     token = str(callback.data).split(":", 2)[2]
     actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await _remember_admin_parent(state, f"cpo:clients:{token}")
@@ -1236,7 +1241,7 @@ async def open_client_tools(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.callback_query(F.data.startswith("cpo:content:"))
-async def open_content_tools(callback: CallbackQuery, state: FSMContext) -> None:
+async def open_content_tools(callback: CallbackQuery, state: FSMContext | None = None) -> None:
     token = str(callback.data).split(":", 2)[2]
     actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await _remember_admin_parent(state, f"cpo:content:{token}")
@@ -1244,7 +1249,7 @@ async def open_content_tools(callback: CallbackQuery, state: FSMContext) -> None
 
 
 @router.callback_query(F.data.startswith("cpo:settings:"))
-async def open_settings_tools(callback: CallbackQuery, state: FSMContext) -> None:
+async def open_settings_tools(callback: CallbackQuery, state: FSMContext | None = None) -> None:
     token = str(callback.data).split(":", 2)[2]
     actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await _remember_admin_parent(state, f"cpo:settings:{token}")
@@ -1259,7 +1264,7 @@ async def open_entry_point_tools(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("cpo:business-more:"))
-async def open_business_more_tools(callback: CallbackQuery, state: FSMContext) -> None:
+async def open_business_more_tools(callback: CallbackQuery, state: FSMContext | None = None) -> None:
     token = str(callback.data).split(":", 2)[2]
     actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await _remember_admin_parent(state, f"cpo:business-more:{token}")
@@ -1281,7 +1286,7 @@ async def open_source_tools(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("cpo:integrations:"))
-async def open_integration_tools(callback: CallbackQuery, state: FSMContext) -> None:
+async def open_integration_tools(callback: CallbackQuery, state: FSMContext | None = None) -> None:
     token = str(callback.data).split(":", 2)[2]
     actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await _remember_admin_parent(state, f"cpo:integrations:{token}")
@@ -1400,7 +1405,7 @@ async def send_one_click_section(
     raise ValueError("unsupported cockpit section")
 
 @router.callback_query(F.data.startswith("cpo:ad-materials:"))
-async def open_ad_materials(callback: CallbackQuery, state: FSMContext) -> None:
+async def open_ad_materials(callback: CallbackQuery, state: FSMContext | None = None) -> None:
     token = str(callback.data).split(":", 2)[2]
     actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await _remember_admin_parent(state, f"cpo:ad-materials:{token}")
