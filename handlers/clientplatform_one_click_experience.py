@@ -932,7 +932,7 @@ def _client_tools_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], 
     if allowed:
         rows.append([("🔎 Все клиенты", f"cpa:{token}:customer-list")])
         help_lines.append("• найти конкретного человека → «🔎 Все клиенты»")
-    rows.extend(_popup_navigation_rows(token, back_callback=f"cpo:more:{token}"))
+    rows.extend(_popup_navigation_rows(token, back_callback=f"cpj:home:{token}"))
     return rows, help_lines
 
 
@@ -1029,7 +1029,7 @@ def _settings_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], list
         rows.append([("🧩 Возможности бизнеса", f"cps:advanced:{token}")])
         help_lines.append("• посмотреть услуги, форматы работы и возможности → «🧩 Возможности бизнеса»")
 
-    rows.extend(_popup_navigation_rows(token, back_callback=f"cpo:more:{token}"))
+    rows.extend(_popup_navigation_rows(token, back_callback=f"cpj:home:{token}"))
     return rows, help_lines
 
 
@@ -1172,12 +1172,12 @@ async def _send_work_tools(message: ClientPlatformMessageTarget, *, token: str, 
         or _allowed(actor, actor.assert_can_manage_programs)
     ):
         await message.answer(
-            "📅 Услуги и запись\n\nДля Вашей роли этот раздел недоступен.",
-            reply_markup=control._keyboard(_popup_navigation_rows(token, back_callback=f"cpo:more:{token}")),
+            "📅 Запись и календарь\n\nДля Вашей роли этот раздел недоступен.",
+            reply_markup=control._keyboard(_popup_navigation_rows(token, back_callback=f"cpj:home:{token}")),
         )
         return
     await message.answer(
-        "📅 Услуги и запись\n\n"
+        "📅 Запись и календарь\n\n"
         "Если Вам нужно:\n"
         "• настроить то, что можно заказать → «🧰 Мои услуги»\n"
         "• открыть или проверить время → «📅 Мой календарь»\n"
