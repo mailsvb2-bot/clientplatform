@@ -632,6 +632,9 @@ async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> N
     actor = await control._actor(int(callback.from_user.id), business_id)
     actor.assert_can_manage_promotions()
     await state.clear()
+    # Preserve permission/error feedback before acknowledging the callback, then
+    # close the Telegram spinner before the heavier capability/offering reads.
+    await callback.answer()
     capabilities = await asyncio.to_thread(
         control.list_business_capabilities,
         actor=actor,
@@ -649,7 +652,6 @@ async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> N
         ),
         None,
     )
-    await callback.answer()
     rows: list[list[tuple[str, str]]] = []
     if creation_capability is not None and actor.role in {
         PlatformRole.OWNER,
