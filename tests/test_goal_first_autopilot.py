@@ -37,7 +37,7 @@ class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
             offering_title="Консультация",
         )
         snapshot = (
-            SimpleNamespace(role=PlatformRole.OWNER),
+            SimpleNamespace(\n            role=PlatformRole.OWNER,\n            assert_can_view_customer_records=lambda: None,\n        ),
             SimpleNamespace(business=SimpleNamespace(name="Мой бизнес")),
             SimpleNamespace(activity_description="Помогаю клиентам решать задачи"),
             [],
