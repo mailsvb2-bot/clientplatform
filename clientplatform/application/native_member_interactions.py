@@ -1318,7 +1318,6 @@ def _canonical_home_rows(actor: TenantContext) -> tuple[tuple[CustomerInteractio
         rows.append((_button(nav.MAIN_EVENTS.label, "cpm:events"),))
     if actor.role in _BOOKING_MANAGEMENT_ROLES:
         rows.append((_button(nav.MAIN_CALENDAR.label, "cpm:bookings"),))
-    rows.append((_button(nav.ALL.label, "cpm:menu-all"),))
     return tuple(rows)
 
 

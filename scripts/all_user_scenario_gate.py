@@ -67,6 +67,8 @@ OWNER_RUNTIME_TESTS = (
     "tests/test_clientplatform_runtime_ownership.py",
     "tests/test_clientplatform_health_readiness.py",
     "tests/test_clientplatform_native_runtime_policy.py",
+    "tests/test_one_click_owner_experience.py",
+    "tests/test_one_click_owner_experience_edges.py",
 )
 
 OMNICHANNEL_TESTS = (
@@ -75,6 +77,7 @@ OMNICHANNEL_TESTS = (
     "tests/test_clientplatform_native_messenger_onboarding.py",
     "tests/test_clientplatform_native_customer_interactions.py",
     "tests/test_clientplatform_native_member_full_parity.py",
+    "tests/test_clientplatform_native_member_parity.py",
     "tests/test_clientplatform_dual_role_entry.py",
     "tests/test_clientplatform_channel_neutral_invites.py",
     "tests/test_clientplatform_messenger_switching.py",

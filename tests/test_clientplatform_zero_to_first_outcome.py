@@ -407,11 +407,12 @@ class ClientPlatformZeroToFirstOutcomeTests(unittest.TestCase):
         async def active_service(_actor):
             nonlocal active_calls
             active_calls += 1
-            return None if active_calls == 1 else capability
+            return None
 
         async def prepare(selected_actor, *, connector_key: str):
             self.assertIs(selected_actor, actor)
             prepared.append(connector_key)
+            return capability
 
         with (
             patch.object(first_result.control, "_actor", fake_actor),
@@ -424,7 +425,7 @@ class ClientPlatformZeroToFirstOutcomeTests(unittest.TestCase):
             asyncio.run(first_result.setup_first_booking(callback, state))
 
         self.assertEqual(prepared, ["services"])
-        self.assertEqual(active_calls, 2)
+        self.assertEqual(active_calls, 1)
         self.assertEqual(state.state, control.ClientPlatformControlState.offering_title)
         self.assertEqual(state.data["business_id"], business_id)
         self.assertEqual(state.data["capability_id"], capability.id)

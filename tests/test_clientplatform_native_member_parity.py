@@ -50,11 +50,25 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
                 "cpm:clients-sales",
                 "cpm:events",
                 "cpm:bookings",
-                "cpm:menu-all",
             ],
             _commands(message),
         )
-        self.assertEqual(sum(len(row) for row in message.rows), 7)
+        self.assertEqual(
+            [
+                button.label
+                for row in message.rows
+                for button in row
+            ],
+            [
+                "✨ Что сделать сейчас",
+                "⚙️ Мой бизнес",
+                "📣 Реклама и продвижение",
+                "👥 Клиенты и продажи",
+                "🎥 Вебинары и видеозвонки",
+                "📅 Запись и календарь",
+            ],
+        )
+        self.assertEqual(sum(len(row) for row in message.rows), 6)
         self.assertIn("Выберите, что хотите сделать", message.text)
         primary.assert_not_called()
 
@@ -173,7 +187,7 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
         self.assertIn("Выберите, что хотите сделать", message.text)
         self.assertNotIn("Не знаете, что нажать?", message.text)
         self.assertIn("cpm:bookings", _commands(message))
-        self.assertIn("cpm:menu-all", _commands(message))
+        self.assertNotIn("cpm:menu-all", _commands(message))
 
     def test_support_home_is_personalized_without_exposing_management_actions(self) -> None:
         actor = _actor(PlatformRole.SUPPORT)
@@ -192,7 +206,7 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
         ):
             message = ui._menu_message(actor, linked=False)
         self.assertEqual(
-            ["cpm:next", "cpm:clients-sales", "cpm:menu-all"],
+            ["cpm:next", "cpm:clients-sales"],
             _commands(message),
         )
         self.assertNotIn("cpm:bookings", _commands(message))
@@ -210,7 +224,6 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
                 "cpm:clients-sales",
                 "cpm:events",
                 "cpm:bookings",
-                "cpm:menu-all",
             ],
             _commands(home),
         )

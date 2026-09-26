@@ -72,7 +72,7 @@ def install_first_result(owner_module: ModuleType) -> None:
     owner_module._first_result_installed = True
 
 
-async def _prepare_first_result(actor, *, connector_key: str) -> None:
+async def _prepare_first_result(actor, *, connector_key: str):
     """Activate only the explicitly chosen capability and complete a confirmed draft."""
 
     profile = await asyncio.to_thread(control.get_business_profile, actor=actor)
@@ -87,13 +87,14 @@ async def _prepare_first_result(actor, *, connector_key: str) -> None:
     )
     selected = next((item for item in capabilities if item.connector_key == connector_key), None)
     if selected is None or selected.status != CapabilityStatus.ACTIVE:
-        await asyncio.to_thread(
+        selected = await asyncio.to_thread(
             control.enable_business_capability,
             actor=actor,
             connector_key=connector_key,
         )
     if profile.status == BusinessProfileStatus.DRAFT:
         await asyncio.to_thread(control.complete_business_profile, actor=actor)
+    return selected
 
 
 @router.callback_query(F.data.startswith("cps:firstgoal:"))
@@ -155,8 +156,7 @@ async def setup_first_booking(callback: CallbackQuery, state: FSMContext) -> Non
     actor = await control._actor(int(callback.from_user.id), business_id)
     capability = await _active_service_capability(actor)
     if capability is None:
-        await _prepare_first_result(actor, connector_key="services")
-        capability = await _active_service_capability(actor)
+        capability = await _prepare_first_result(actor, connector_key="services")
     else:
         profile = await asyncio.to_thread(control.get_business_profile, actor=actor)
         if profile.status == BusinessProfileStatus.DRAFT:
