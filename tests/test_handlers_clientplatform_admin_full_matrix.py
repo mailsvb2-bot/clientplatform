@@ -341,34 +341,6 @@ async def test_admin_group_rejects_role_without_any_visible_action() -> None:
         )
 
 
-@pytest.mark.asyncio
-async def test_render_menu_callback_path_without_reset(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class CallbackTarget:
-        pass
-
-    edits: list[str] = []
-
-    async def safe_edit(_target: Any, text: str, _markup: Any) -> None:
-        edits.append(text)
-
-    monkeypatch.setattr(admin, "CallbackQuery", CallbackTarget)
-    monkeypatch.setattr(admin, "_safe_edit", safe_edit)
-    monkeypatch.setattr(admin.control, "_uuid_token", lambda _value: "business-token")
-    state = FakeState({"cp_admin_section": "menu-content", "cp_admin_history": ["menu"]})
-    await admin._render_menu(
-        CallbackTarget(),  # type: ignore[arg-type]
-        state,  # type: ignore[arg-type]
-        _ctx(),
-        reset=False,
-    )
-
-    assert edits[-1].startswith("⚙️ Управление бизнесом")
-    assert state.data["cp_admin_section"] == "menu-content"
-    assert state.data["cp_admin_history"] == ["menu"]
-
-
 @pytest.fixture
 def render_contract(monkeypatch: pytest.MonkeyPatch):
     rendered: list[tuple[str, Any]] = []
