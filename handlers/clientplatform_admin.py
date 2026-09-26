@@ -260,6 +260,16 @@ def _back_keyboard(ctx: AdminContext, *extra: tuple[str, str]) -> InlineKeyboard
     return _keyboard(rows)
 
 
+async def _root_back_callback(state: FSMContext, ctx: AdminContext) -> str:
+    """Return to the canonical parent when admin UI was opened as a child surface."""
+
+    data = await state.get_data()
+    external = str(data.get("cp_admin_return_callback") or "").strip()
+    if external and len(external.encode("utf-8")) <= 64:
+        return external
+    return _callback(ctx, "back")
+
+
 _ADMIN_MENU_GROUPS: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
     "menu-work": (
         nav.WORK.label,
@@ -496,7 +506,7 @@ async def _render_admin_group(
     if push:
         await _set_current_section(state, action=group_action, push=True)
     rows = [[(label, _callback(ctx, action))] for label, action in visible]
-    rows.append([("⬅️ Назад", _callback(ctx, "back"))])
+    rows.append([("⬅️ Назад", await _root_back_callback(state, ctx))])
     guidance = "\n".join(
         f"• {_ADMIN_ACTION_NEEDS.get(action, 'открыть этот раздел')} → «{label}»"
         for label, action in visible
@@ -858,7 +868,7 @@ async def _render_messengers(callback: CallbackQuery, state: FSMContext, ctx: Ad
         text="🤖 Мой Telegram-бот", callback_data=f"cpb:o:{ctx.business_token}"
     )])
     rows.append([InlineKeyboardButton(
-        text="⬅️ Назад", callback_data=_callback(ctx, "back")
+        text="⬅️ Назад", callback_data=await _root_back_callback(state, ctx)
     )])
     await _safe_edit(
         callback, "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
