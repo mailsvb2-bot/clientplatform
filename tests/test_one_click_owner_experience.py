@@ -318,6 +318,42 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(buttons[1].text, "🧰 Консультация")
         self.assertTrue(str(buttons[1].callback_data).startswith("cpo:offer:"))
 
+    async def test_advertising_chooser_acks_after_auth_before_capability_reads(self) -> None:
+        out = outbound_message()
+        cb = callback("cpo:start:business-1", out)
+        patches = self.common_patches(out)
+        observed_answer_counts = []
+        capabilities = [
+            SimpleNamespace(
+                id="cap-1",
+                connector_key="services",
+                status=one_click.control.CapabilityStatus.ACTIVE,
+            )
+        ]
+
+        def load_capabilities(*, actor):
+            observed_answer_counts.append(cb.answer.await_count)
+            return capabilities
+
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4],
+            patch.object(
+                one_click.control,
+                "list_business_capabilities",
+                side_effect=load_capabilities,
+            ),
+            patch.object(
+                one_click,
+                "_advertisable_offerings",
+                new=AsyncMock(return_value=[offering()]),
+            ),
+        ):
+            await one_click.get_clients_one_click(cb, FakeState())
+
+        self.assertEqual(observed_answer_counts, [1])
+        cb.answer.assert_awaited_once_with()
+
+
     async def test_advertising_chooser_reuses_single_capability_snapshot(self) -> None:
         out = outbound_message()
         cb = callback("cpo:start:business-1", out)
