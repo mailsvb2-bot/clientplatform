@@ -785,7 +785,6 @@ async def open_event_hub(
         return
     token = parts[2]
     business_id = control._token_uuid(token)
-    actor = await control._actor(int(callback.from_user.id), business_id)
     context = (
         None
         if state is None
@@ -795,6 +794,7 @@ async def open_event_hub(
         )
     )
     if len(parts) == 4:
+        actor = await control._actor(int(callback.from_user.id), business_id)
         direction = await asyncio.to_thread(
             get_activity_direction,
             actor=actor,
@@ -1284,10 +1284,10 @@ async def start_event_wizard(callback: CallbackQuery, state: FSMContext) -> None
         else None
     )
     await state.clear()
-    await state.update_data(
-        event_business_id=business_id,
-        event_direction_id=selected_direction_id,
-    )
+    event_state = {"event_business_id": business_id}
+    if selected_direction_id is not None:
+        event_state["event_direction_id"] = selected_direction_id
+    await state.update_data(**event_state)
     if context is not None and selected_direction_id is not None:
         await direction_context.set_direction_context(
             state,
