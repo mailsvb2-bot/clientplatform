@@ -167,7 +167,7 @@ async def test_owner_dashboard_keeps_status_and_separates_acquisition_from_sales
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     business_id = str(uuid4())
-    actor = SimpleNamespace(role=PlatformRole.OWNER)
+    actor = SimpleNamespace(\n            role=PlatformRole.OWNER,\n            assert_can_view_customer_records=lambda: None,\n        )
     capability = SimpleNamespace(
         id=str(uuid4()),
         connector_key="services",
