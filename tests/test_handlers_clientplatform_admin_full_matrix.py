@@ -74,32 +74,17 @@ def _ctx() -> Any:
     )
 
 
-def test_owner_menu_groups_all_sections_without_surface_sprawl(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(admin.control, "_uuid_token", lambda _value: "business-token")
-    markup = admin._menu_keyboard(_ctx())
-    labels = [button.text for row in markup.inline_keyboard for button in row]
-    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
-
-    assert labels == [
-        "👥 Клиенты и работа",
-        "📣 Публикации и каналы",
-        "📈 Продвижение и продажи",
-        "👤 Сотрудники и тариф",
-        "🛠 Технические проверки",
-        "⬅️ Назад",
-    ]
-    group_actions = [str(value).split(":")[2] for value in callbacks[:-1]]
-    assert group_actions == list(admin._ADMIN_MENU_GROUPS)
+def test_deep_admin_groups_preserve_all_extended_actions() -> None:
+    ctx = _ctx()
     reachable = {
         action
-        for group_action in group_actions
-        for _title, action in admin._admin_group_items(_ctx(), group_action)
+        for group_action in admin._ADMIN_MENU_GROUPS
+        for _title, action in admin._admin_group_items(ctx, group_action)
     }
+
     assert reachable == set(OWNER_ACTIONS)
-    assert len(markup.inline_keyboard) == 6
-    assert str(markup.inline_keyboard[-1][0].callback_data).endswith(":leave")
+    assert not hasattr(admin, "_menu_keyboard")
+    assert not hasattr(admin, "_render_menu")
 
 
 @pytest.mark.asyncio
