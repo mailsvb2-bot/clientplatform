@@ -86,8 +86,11 @@ class ClientPlatformFirstResultUiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("📅 Принимать записи", labels)
         self.assertIn("📚 Выдавать материалы", labels)
         self.assertIn("👥 Подключить клиента", labels)
-        self.assertIn("🤖 Настроить Telegram-бота", labels)
+        self.assertIn("💬 Подключить мессенджер", labels)
         self.assertNotIn("Создать программу", labels)
+        messenger_button = next(button for row in markup.inline_keyboard for button in row if button.text == "💬 Подключить мессенджер")
+        self.assertTrue(str(messenger_button.callback_data).startswith("cpa:"))
+        self.assertTrue(str(messenger_button.callback_data).endswith(":messengers"))
 
 
 if __name__ == "__main__":
