@@ -113,6 +113,32 @@ else:
 
 
     @pytest.mark.asyncio
+    async def test_quick_ack_retries_failed_semantic_alert_with_same_payload():
+        mw = QuickAckCallbackMiddleware()
+        cb = _make_callback(1, 'cpj:wizdate:business-1:2026-09-27')
+        attempts = []
+
+        async def flaky_answer(*args, **kwargs):
+            attempts.append((args, kwargs))
+            if len(attempts) == 1:
+                raise TimeoutError()
+            return None
+
+        flaky_answer.calls = attempts
+        object.__setattr__(cb, 'answer', flaky_answer)
+
+        async def handler(event, data):
+            await event.answer('Эта дата недоступна', show_alert=True)
+            return 'ok'
+
+        assert await mw(handler, cb, {}) == 'ok'
+        assert attempts == [
+            (('Эта дата недоступна',), {'show_alert': True}),
+            (('Эта дата недоступна',), {'show_alert': True}),
+        ]
+
+
+    @pytest.mark.asyncio
     async def test_quick_ack_and_rate_limit_preserve_semantic_feedback():
         quick = QuickAckCallbackMiddleware()
         limiter = SoftRateLimitMiddleware(callback_interval_sec=1.0, message_interval_sec=1.0)
