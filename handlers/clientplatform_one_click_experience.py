@@ -432,8 +432,12 @@ async def _choose_connection(
     )
 
 
-async def _advertisable_offerings(actor) -> list:
-    capabilities = await asyncio.to_thread(control.list_business_capabilities, actor=actor)
+async def _advertisable_offerings(actor, *, capabilities=None) -> list:
+    if capabilities is None:
+        capabilities = await asyncio.to_thread(
+            control.list_business_capabilities,
+            actor=actor,
+        )
     groups = await asyncio.gather(
         *[
             asyncio.to_thread(
@@ -628,8 +632,14 @@ async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> N
     actor = await control._actor(int(callback.from_user.id), business_id)
     actor.assert_can_manage_promotions()
     await state.clear()
-    offerings = await _advertisable_offerings(actor)
-    capabilities = await asyncio.to_thread(control.list_business_capabilities, actor=actor)
+    capabilities = await asyncio.to_thread(
+        control.list_business_capabilities,
+        actor=actor,
+    )
+    offerings = await _advertisable_offerings(
+        actor,
+        capabilities=capabilities,
+    )
     creation_capability = next(
         (
             item
