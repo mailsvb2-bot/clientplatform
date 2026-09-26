@@ -70,7 +70,7 @@ class GoalFirstAutopilotHardeningTests(unittest.IsolatedAsyncioTestCase):
     async def test_dashboard_preserves_status_when_no_time_is_open(self) -> None:
         out = target()
         snapshot = (
-            SimpleNamespace(role=PlatformRole.OWNER),
+            SimpleNamespace(\n            role=PlatformRole.OWNER,\n            assert_can_view_customer_records=lambda: None,\n        ),
             SimpleNamespace(business=SimpleNamespace(name="Мой бизнес")),
             SimpleNamespace(activity_description="Помогаю клиентам"),
             [],
