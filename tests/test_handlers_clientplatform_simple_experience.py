@@ -273,6 +273,14 @@ async def test_simple_routes_preserve_program_booking_and_advanced_surfaces(monk
     advanced.assert_awaited_once()
 
 
+def test_customer_record_permission_fallback_uses_canonical_tenancy_policy() -> None:
+    owner = SimpleNamespace(role=PlatformRole.OWNER)
+    marketer = SimpleNamespace(role=PlatformRole.MARKETER)
+
+    assert simple._can_view_customer_records(owner) is True
+    assert simple._can_view_customer_records(marketer) is False
+
+
 @pytest.mark.asyncio
 async def test_simple_dashboard_is_role_safe_for_staff_without_customer_access(
     monkeypatch: pytest.MonkeyPatch,
