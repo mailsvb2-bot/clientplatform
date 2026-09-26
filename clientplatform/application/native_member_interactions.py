@@ -996,6 +996,7 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "direction-goal",
             "direction-settings",
             "direction-ad-offers",
+            "direction-programs",
             "direction-new",
             "direction-create-text",
             "direction-edit",
@@ -3484,9 +3485,27 @@ def _ad_offers_message(
     )
     pagination: list[CustomerInteractionButton] = []
     if safe_page > 0:
-        pagination.append(_button("⬅️ Ранее", f"cpm:ad-offers:{safe_page - 1}"))
+        pagination.append(
+            _button(
+                "⬅️ Ранее",
+                (
+                    f"cpm:direction-ad-offers:{direction_id}:{safe_page - 1}"
+                    if direction_id is not None
+                    else f"cpm:ad-offers:{safe_page - 1}"
+                ),
+            )
+        )
     if safe_page + 1 < page_count:
-        pagination.append(_button("Далее ➡️", f"cpm:ad-offers:{safe_page + 1}"))
+        pagination.append(
+            _button(
+                "Далее ➡️",
+                (
+                    f"cpm:direction-ad-offers:{direction_id}:{safe_page + 1}"
+                    if direction_id is not None
+                    else f"cpm:ad-offers:{safe_page + 1}"
+                ),
+            )
+        )
     if pagination:
         rows.append(tuple(pagination))
     rows.append((_button(nav.BACK.label, "cpm:ads"),))
@@ -4002,6 +4021,40 @@ def _direction_subject_ids(
     }
 
 
+def _direction_results_message(
+    actor: TenantContext,
+    direction_id: str,
+) -> CustomerInteractionMessage:
+    direction = get_activity_direction(actor=actor, direction_id=direction_id)
+    program_ids = _direction_subject_ids(
+        actor,
+        direction.id,
+        DirectionSubjectKind.PROGRAM,
+    )
+    progress = [
+        item
+        for item in list_business_program_progress(actor=actor, limit=100)
+        if item.program_id in program_ids
+    ]
+    progress_lines = "\n".join(
+        f"• {item.customer_display_name or 'Клиент'}: {item.program_title} — "
+        f"{item.completed_lessons}/{item.total_lessons} ({item.percent_complete}%)"
+        for item in progress[:15]
+    ) or "По программам этого направления пока нет прогресса."
+    return CustomerInteractionMessage(
+        text=(
+            f"📊 Результаты\n\n"
+            f"Связано программ: {len(program_ids)}\n"
+            f"Клиентов с прогрессом: {len({item.customer_id for item in progress})}\n\n"
+            f"Прогресс клиентов\n{progress_lines}"
+        ),
+        rows=(
+            (_button("🧭 К направлению", f"cpm:direction:{direction.id}"),),
+            _back_row(),
+        ),
+    )
+
+
 def _direction_goal_message(
     actor: TenantContext,
     goal: str,
@@ -4030,7 +4083,7 @@ def _direction_goal_message(
     elif goal == "programs":
         base = _programs_message(actor, 0, direction_id=direction.id)
     elif goal == "results":
-        base = _growth_analysis_message(actor)
+        base = _direction_results_message(actor, direction.id)
     else:
         return _stale_message()
     return CustomerInteractionMessage(
@@ -6325,9 +6378,27 @@ def _programs_message(
             rows.append((_button("📤 Выдать клиенту", f"cpm:program-deliver:{item.id}"),))
     pagination: list[CustomerInteractionButton] = []
     if page > 0:
-        pagination.append(_button("◀️ Предыдущая страница", f"cpm:programs:{page - 1}"))
+        pagination.append(
+            _button(
+                "◀️ Предыдущая страница",
+                (
+                    f"cpm:direction-programs:{direction_id}:{page - 1}"
+                    if direction_id is not None
+                    else f"cpm:programs:{page - 1}"
+                ),
+            )
+        )
     if page + 1 < page_count:
-        pagination.append(_button("Вперёд ➡️", f"cpm:programs:{page + 1}"))
+        pagination.append(
+            _button(
+                "Вперёд ➡️",
+                (
+                    f"cpm:direction-programs:{direction_id}:{page + 1}"
+                    if direction_id is not None
+                    else f"cpm:programs:{page + 1}"
+                ),
+            )
+        )
     if pagination:
         rows.append(tuple(pagination))
     rows.append(_back_row())
@@ -7864,6 +7935,14 @@ def _render(
             if len(parsed.args) != 2:
                 return _stale_message()
             return _ad_offers_message(
+                actor,
+                _page_number((parsed.args[1],)),
+                direction_id=parsed.args[0],
+            )
+        if parsed.action == "direction-programs":
+            if len(parsed.args) != 2:
+                return _stale_message()
+            return _programs_message(
                 actor,
                 _page_number((parsed.args[1],)),
                 direction_id=parsed.args[0],
