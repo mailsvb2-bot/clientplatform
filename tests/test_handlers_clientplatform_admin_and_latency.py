@@ -350,13 +350,15 @@ async def test_open_admin_command_handles_zero_one_and_multiple_businesses(
         "list_accessible_businesses",
         lambda **_kwargs: [access],
     )
-    monkeypatch.setattr(
-        admin,
-        "_load_admin_context",
-        lambda **_kwargs: _async_value(admin_context()),
-    )
+    dashboard_calls: list[tuple[int, str]] = []
+
+    async def send_dashboard(_message: Message, *, user_id: int, business_id: str) -> None:
+        dashboard_calls.append((user_id, business_id))
+
+    monkeypatch.setattr(admin.control, "_send_dashboard", send_dashboard)
     await admin.open_admin_command(telegram_message(), fsm_context())
-    assert answers[-1][0].startswith("⚙️ Управление бизнесом")
+    assert dashboard_calls[-1] == (77, BUSINESS_ID)
+    assert all(not text.startswith("⚙️ Управление бизнесом") for text, _markup in answers)
 
     second_id = str(uuid4())
     monkeypatch.setattr(
@@ -820,9 +822,9 @@ async def test_admin_gate_routes_every_section_through_live_context(
     async def mark(name: str, *_args: Any, **_kwargs: Any) -> None:
         calls.append(name)
 
-    monkeypatch.setattr(admin, "_render_menu", lambda *a, **k: mark("menu"))
+    monkeypatch.setattr(admin, "_render_menu", lambda *a, **k: mark("legacy-menu"))
     monkeypatch.setattr(admin, "_navigate_back", lambda *a, **k: mark("back"))
-    monkeypatch.setattr(admin.control, "_send_dashboard", lambda *a, **k: mark("leave"))
+    monkeypatch.setattr(admin.control, "_send_dashboard", lambda *a, **k: mark("dashboard"))
     monkeypatch.setattr(admin, "_render_today", lambda *a, full, **k: mark(f"today:{full}"))
     monkeypatch.setattr(admin, "_render_customer_list", lambda *a, today_only, **k: mark(f"customers:{today_only}"))
     monkeypatch.setattr(admin, "_render_customer_card", lambda *a, **k: mark("customer"))
