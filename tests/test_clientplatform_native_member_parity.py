@@ -50,7 +50,6 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
                 "cpm:clients-sales",
                 "cpm:events",
                 "cpm:bookings",
-                "cpm:menu-all",
             ],
             _commands(message),
         )
@@ -67,10 +66,9 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
                 "👥 Клиенты и продажи",
                 "🎥 Вебинары и видеозвонки",
                 "📅 Запись и календарь",
-                "🧭 Все разделы",
             ],
         )
-        self.assertEqual(sum(len(row) for row in message.rows), 7)
+        self.assertEqual(sum(len(row) for row in message.rows), 6)
         self.assertIn("Выберите, что хотите сделать", message.text)
         primary.assert_not_called()
 
