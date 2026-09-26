@@ -376,3 +376,36 @@ async def test_business_snapshot_keeps_permission_checks_for_action_flows(
             user_id=101,
             business_id=business_id,
         )
+
+
+@pytest.mark.asyncio
+async def test_advanced_dashboard_renders_yandex_direct_when_projection_exposes_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    actor = SimpleNamespace(role=PlatformRole.OWNER)
+    profile = SimpleNamespace(activity_description="Консультирую")
+    capability = SimpleNamespace(title="Консультации")
+    access = SimpleNamespace(business=SimpleNamespace(id=business_id, name="Практика"))
+    external = SimpleNamespace(
+        messengers=[],
+        yandex_direct=SimpleNamespace(availability=simple.CapabilityAvailability.ACTIVE),
+    )
+
+    monkeypatch.setattr(control, "_actor", AsyncMock(return_value=actor))
+    monkeypatch.setattr(control, "get_business_profile", lambda **_kwargs: profile)
+    monkeypatch.setattr(control, "list_business_capabilities", lambda **_kwargs: [capability])
+    monkeypatch.setattr(control, "list_accessible_businesses", lambda **_kwargs: [access])
+    monkeypatch.setattr(simple, "get_business_capability_projection", lambda **_kwargs: external)
+    monkeypatch.setattr(simple, "_ADVANCED_KEYBOARD", lambda *_args, **_kwargs: control._keyboard([]))
+
+    message = FakeMessage()
+    await simple.send_advanced_dashboard(
+        message,
+        user_id=101,
+        business_id=business_id,
+    )
+
+    text, _kwargs = message.answers[-1]
+    assert "Продвижение:" in text
+    assert "Яндекс Директ — ✅ работает" in text
