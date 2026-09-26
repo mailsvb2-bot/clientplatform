@@ -85,6 +85,7 @@ def install_dynamic_dashboard_dispatch(control_module: ModuleType) -> None:
             if structured.confirmed:
                 await control_module._send_onboarding_first_result(
                     message,
+                    user_id=user_id,
                     business_id=business_id,
                 )
             else:

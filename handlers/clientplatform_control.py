@@ -379,14 +379,22 @@ async def _send_onboarding_review(message: Message, *, actor, business_id: str) 
     )
 
 
-async def _send_onboarding_first_result(message: Message, *, business_id: str) -> None:
-    await message.answer(
-        "✅ Бизнес создан. Что подключим к нему?\n\n"
-        "• «Каналы общения» — Telegram, ВКонтакте и MAX.\n"
-        "• «Точки входа клиентов» — сайт / лендинг, страница записи и источники клиентов.\n"
-        "• «CRM и сервисы» — только реальные проверяемые API/webhook-подключения.\n\n"
-        "Можно подключить это сейчас или перейти к услугам и работе.",
-        reply_markup=_onboarding_first_result_keyboard(business_id),
+async def _send_onboarding_first_result(
+    message: Message,
+    *,
+    user_id: int,
+    business_id: str,
+) -> None:
+    """Enter the single canonical owner home after onboarding confirmation.
+
+    Connection, CRM and service setup remain available from the business settings.
+    They must not create a competing top-level dashboard after /start.
+    """
+
+    await _send_dashboard(
+        message,
+        user_id=user_id,
+        business_id=business_id,
     )
 
 
@@ -449,7 +457,11 @@ async def _resume_business(message: Message, *, user_id: int, business_id: str, 
     if profile.status == BusinessProfileStatus.DRAFT:
         structured = await asyncio.to_thread(get_business_profile_details, actor=actor)
         if structured.confirmed:
-            await _send_onboarding_first_result(message, business_id=business_id)
+            await _send_onboarding_first_result(
+                message,
+                user_id=user_id,
+                business_id=business_id,
+            )
         else:
             await _send_onboarding_review(message, actor=actor, business_id=business_id)
         return
@@ -575,6 +587,7 @@ async def confirm_onboarding_profile(callback: CallbackQuery, state: FSMContext)
     await callback.answer("Подтверждено")
     await _send_onboarding_first_result(
         _callback_message(callback),
+        user_id=_callback_actor_user_id(callback),
         business_id=business_id,
     )
 
