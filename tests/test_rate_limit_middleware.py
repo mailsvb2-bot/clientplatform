@@ -113,6 +113,24 @@ else:
 
 
     @pytest.mark.asyncio
+    async def test_quick_ack_and_rate_limit_preserve_semantic_feedback():
+        quick = QuickAckCallbackMiddleware()
+        limiter = SoftRateLimitMiddleware(callback_interval_sec=1.0, message_interval_sec=1.0)
+        first = _make_callback(1, 'cpj:wizdate:business-1:2026-09-27')
+        second = _make_callback(1, 'cpj:wizdate:business-1:2026-09-28')
+
+        async def business_handler(event, data):
+            return 'ok'
+
+        async def through_limiter(event, data):
+            return await limiter(business_handler, event, data)
+
+        assert await quick(through_limiter, first, {}) == 'ok'
+        assert await quick(through_limiter, second, {}) is None
+        assert second.answer.calls == [(('Секунду…',), {})]
+
+
+    @pytest.mark.asyncio
     async def test_quick_ack_closes_silent_semantic_callback_after_handler():
         mw = QuickAckCallbackMiddleware()
         cb = _make_callback(1, 'unknown:semantic')
