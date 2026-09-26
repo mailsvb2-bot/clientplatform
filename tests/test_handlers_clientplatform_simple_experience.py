@@ -11,10 +11,12 @@ import pytest
 
 from clientplatform.domain.activity import CapabilityStatus
 from clientplatform.domain.bookings import BookingSlotStatus
+from clientplatform.domain.tenancy import PlatformRole, TenantPermissionDenied
 
 simple = importlib.import_module("handlers.clientplatform_simple_experience")
 control = importlib.import_module("handlers.clientplatform_control")
 builder = importlib.import_module("handlers.clientplatform_program_builder")
+goal_dashboard = importlib.import_module("handlers.clientplatform_goal_dashboard")
 
 
 class FakeUser:
@@ -269,3 +271,100 @@ async def test_simple_routes_preserve_program_booking_and_advanced_surfaces(monk
     monkeypatch.setattr(simple, "send_advanced_dashboard", advanced)
     await simple.open_advanced_dashboard(FakeCallback(f"cps:advanced:{token}"), FakeState())
     advanced.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_simple_dashboard_is_role_safe_for_staff_without_customer_access(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+
+    class RestrictedActor:
+        role = PlatformRole.MARKETER
+
+        def assert_can_view_customer_records(self) -> None:
+            raise TenantPermissionDenied("customer records are restricted")
+
+    actor = RestrictedActor()
+    access = SimpleNamespace(business=SimpleNamespace(id=business_id, name="Практика"))
+    profile = SimpleNamespace(activity_description="Продвигаю практику")
+    capability = SimpleNamespace(
+        id=str(uuid4()),
+        connector_key="programs",
+        status=CapabilityStatus.ACTIVE,
+        title="Программы",
+    )
+    customer_reads = 0
+    booking_reads = 0
+
+    monkeypatch.setattr(control, "_actor", AsyncMock(return_value=actor))
+    monkeypatch.setattr(goal_dashboard, "_owner_next_action", lambda _actor: None)
+    monkeypatch.setattr(control, "get_business_profile", lambda **_kwargs: profile)
+    monkeypatch.setattr(control, "list_business_capabilities", lambda **_kwargs: [capability])
+    monkeypatch.setattr(control, "list_programs", lambda **_kwargs: [object()])
+    monkeypatch.setattr(control, "list_accessible_businesses", lambda **_kwargs: [access])
+
+    def list_customers(**_kwargs: Any) -> list[Any]:
+        nonlocal customer_reads
+        customer_reads += 1
+        raise AssertionError("restricted dashboard must not read customer records")
+
+    def list_booking_slots(**_kwargs: Any) -> list[Any]:
+        nonlocal booking_reads
+        booking_reads += 1
+        raise AssertionError("restricted dashboard must not read booking slots")
+
+    monkeypatch.setattr(control, "list_customers", list_customers)
+    monkeypatch.setattr(control, "list_booking_slots", list_booking_slots)
+
+    message = FakeMessage()
+    await simple.send_simple_dashboard(
+        message,
+        user_id=101,
+        business_id=business_id,
+    )
+
+    text, _kwargs = message.answers[-1]
+    assert "программ: 1" in text
+    assert "Клиентов:" not in text
+    assert "свободных времён:" not in text
+    assert customer_reads == 0
+    assert booking_reads == 0
+
+
+@pytest.mark.asyncio
+async def test_business_snapshot_keeps_permission_checks_for_action_flows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+
+    class RestrictedActor:
+        role = PlatformRole.ANALYST
+
+        def assert_can_view_customer_records(self) -> None:
+            raise TenantPermissionDenied("customer records are restricted")
+
+    actor = RestrictedActor()
+    monkeypatch.setattr(control, "_actor", AsyncMock(return_value=actor))
+    monkeypatch.setattr(control, "get_business_profile", lambda **_kwargs: SimpleNamespace())
+    monkeypatch.setattr(control, "list_business_capabilities", lambda **_kwargs: [])
+    monkeypatch.setattr(control, "list_programs", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        control,
+        "list_accessible_businesses",
+        lambda **_kwargs: [SimpleNamespace(business=SimpleNamespace(id=business_id))],
+    )
+    monkeypatch.setattr(
+        control,
+        "list_customers",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            TenantPermissionDenied("customer records are restricted")
+        ),
+    )
+    monkeypatch.setattr(control, "list_booking_slots", lambda **_kwargs: [])
+
+    with pytest.raises(TenantPermissionDenied):
+        await simple._business_snapshot(
+            user_id=101,
+            business_id=business_id,
+        )
