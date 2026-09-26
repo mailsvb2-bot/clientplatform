@@ -270,6 +270,43 @@ async def _root_back_callback(state: FSMContext, ctx: AdminContext) -> str:
     return _callback(ctx, "back")
 
 
+async def _render_external_parent(
+    callback: CallbackQuery,
+    state: FSMContext,
+    ctx: AdminContext,
+    callback_data: str,
+) -> bool:
+    parts = str(callback_data or "").split(":", 2)
+    if len(parts) != 3 or parts[0] != "cpo":
+        return False
+    section, token = parts[1], parts[2]
+    if str(control._token_uuid(token)) != str(ctx.business_id):
+        raise TenantPermissionDenied("admin return target belongs to another business")
+
+    one_click = importlib.import_module(
+        ".clientplatform_one_click_experience",
+        __package__,
+    )
+    renderers = {
+        "clients": one_click._send_client_tools,
+        "content": one_click._send_content_tools,
+        "settings": one_click._send_settings_tools,
+        "business-more": one_click._send_business_more_tools,
+        "integrations": one_click._send_integration_tools,
+        "ad-materials": one_click._send_ad_materials,
+    }
+    renderer = renderers.get(section)
+    if renderer is None:
+        return False
+    await renderer(
+        control._callback_message(callback),
+        token=token,
+        actor=ctx.actor,
+    )
+    await state.update_data(cp_admin_section="menu", cp_admin_history=[])
+    return True
+
+
 _ADMIN_MENU_GROUPS: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
     "menu-work": (
         nav.WORK.label,
@@ -1394,6 +1431,15 @@ async def _navigate_back(callback: CallbackQuery, state: FSMContext, ctx: AdminC
     data = await state.get_data()
     history = list(data.get("cp_admin_history") or [])
     action = str(history.pop() if history else "menu")
+    if action == "menu":
+        external = str(data.get("cp_admin_return_callback") or "").strip()
+        if external and await _render_external_parent(
+            callback,
+            state,
+            ctx,
+            external,
+        ):
+            return
     if action in _ADMIN_MENU_GROUPS:
         await _render_admin_group(callback, state, ctx, action, push=False)
     elif action == "customer-list":
