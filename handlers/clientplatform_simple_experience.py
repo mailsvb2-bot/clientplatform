@@ -27,7 +27,7 @@ from clientplatform.application.managed_bot_onboarding import (
 )
 from clientplatform.domain.activity import CapabilityStatus
 from clientplatform.domain.bookings import BookingSlotStatus
-from clientplatform.domain.tenancy import PlatformRole, TenantPermissionDenied
+from clientplatform.domain.tenancy import PlatformRole, TenantContext, TenantPermissionDenied
 from clientplatform.presentation import owner_navigation as nav
 from clientplatform.presentation.owner_quick_menu import (
     build_owner_quick_actions,
@@ -145,8 +145,12 @@ def _telegram_share_url(url: str, text: str) -> str:
 
 
 def _can_view_customer_records(actor: Any) -> bool:
+    checker = getattr(actor, "assert_can_view_customer_records", None)
     try:
-        actor.assert_can_view_customer_records()
+        if callable(checker):
+            checker()
+        else:
+            TenantContext.assert_can_view_customer_records(actor)
     except TenantPermissionDenied:
         return False
     return True
