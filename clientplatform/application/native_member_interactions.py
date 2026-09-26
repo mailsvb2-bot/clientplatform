@@ -939,6 +939,8 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "reactivate-approve",
             "ad-spend",
             "ad-spend-launch",
+            "ad-offers",
+            "ad-offer",
             "ad-channels",
             "ad-channel",
             "ad-console",
@@ -2396,7 +2398,7 @@ def _ads_message(actor: TenantContext) -> CustomerInteractionMessage:
             "бюджет и запуск → результат."
         ),
         rows=(
-            (_button("🎯 Что рекламировать", "cpm:offers"),),
+            (_button("🎯 Что рекламировать", "cpm:ad-offers:0"),),
             (_button("🎨 Рекламный материал", "cpm:ad-materials"),),
             (_button("📡 Где рекламировать", "cpm:ad-channels"),),
             (_button("💰 Бюджет и запуск", "cpm:ad-spend"),),
@@ -3434,6 +3436,58 @@ def _ai_visuals_message(actor: TenantContext) -> CustomerInteractionMessage:
     return CustomerInteractionMessage(text="\n".join(lines), rows=tuple(rows))
 
 
+
+_AD_OFFER_PAGE_SIZE = 6
+
+
+def _ad_offers_message(actor: TenantContext, page: int) -> CustomerInteractionMessage:
+    if actor.role not in _ACQUISITION_ROLES:
+        return _permission_message()
+    offerings = _native_all_offerings(actor)
+    page_count = max(1, (len(offerings) + _AD_OFFER_PAGE_SIZE - 1) // _AD_OFFER_PAGE_SIZE)
+    safe_page = min(max(0, page), page_count - 1)
+    start = safe_page * _AD_OFFER_PAGE_SIZE
+    shown = offerings[start : start + _AD_OFFER_PAGE_SIZE]
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    if actor.role in _PROGRAM_MANAGEMENT_ROLES:
+        rows.append((_button("➕ Создать услугу / предложение", "cpm:offering-new"),))
+    rows.extend(
+        (_button(f"🎯 {item.title[:34]}", f"cpm:ad-offer:{item.id}"),)
+        for item in shown
+    )
+    pagination: list[CustomerInteractionButton] = []
+    if safe_page > 0:
+        pagination.append(_button("⬅️ Ранее", f"cpm:ad-offers:{safe_page - 1}"))
+    if safe_page + 1 < page_count:
+        pagination.append(_button("Далее ➡️", f"cpm:ad-offers:{safe_page + 1}"))
+    if pagination:
+        rows.append(tuple(pagination))
+    rows.append((_button(nav.BACK.label, "cpm:ads"),))
+    return CustomerInteractionMessage(
+        text=(
+            "🎯 Что рекламировать\n\n"
+            "Создайте новую услугу / предложение или выберите уже существующее."
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _ad_offer_message(actor: TenantContext, offering_id: str) -> CustomerInteractionMessage:
+    if actor.role not in _ACQUISITION_ROLES:
+        return _permission_message()
+    offering = next(
+        (item for item in _native_all_offerings(actor) if str(item.id) == str(offering_id)),
+        None,
+    )
+    if offering is None:
+        return _stale_message()
+    return _acquisition_message(
+        actor,
+        offering_id=str(offering.id),
+        offering_title=str(offering.title),
+    )
+
+
 def _acquisition_tool_rows(
     actor: TenantContext,
 ) -> tuple[tuple[CustomerInteractionButton, ...], ...]:
@@ -3445,7 +3499,12 @@ def _acquisition_tool_rows(
     return tuple(rows)
 
 
-def _acquisition_message(actor: TenantContext) -> CustomerInteractionMessage:
+def _acquisition_message(
+    actor: TenantContext,
+    *,
+    offering_id: str | None = None,
+    offering_title: str | None = None,
+) -> CustomerInteractionMessage:
     if actor.role not in _ACQUISITION_ROLES:
         return _permission_message()
     public_base = str(getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "") or "").strip()
@@ -3462,6 +3521,7 @@ def _acquisition_message(actor: TenantContext) -> CustomerInteractionMessage:
             actor=actor,
             public_base_url=public_base,
             attribution_channel=PromotionChannel.WEBSITE,
+            offering_id=offering_id,
         )
     except (PromotionError, TenantPermissionDenied, ValueError):
         return CustomerInteractionMessage(
@@ -3473,14 +3533,20 @@ def _acquisition_message(actor: TenantContext) -> CustomerInteractionMessage:
         )
     if prepared is None:
         first_row = (
-            (_button("🕒 Добавить время", "cpm:booking-open"),)
+            (
+                _button(
+                    "🕒 Добавить время",
+                    f"cpm:booking-open-for:{offering_id}" if offering_id else "cpm:booking-open",
+                ),
+            )
             if actor.role in _BOOKING_MANAGEMENT_ROLES
             else (_button("📅 Проверить расписание", "cpm:bookings"),)
         )
+        selected = f" для «{offering_title}»" if offering_title else ""
         return CustomerInteractionMessage(
             text=(
-                "🚀 Новые клиенты\n\nЧтобы приглашать клиентов на запись, сначала "
-                "добавьте хотя бы одно свободное время."
+                f"🚀 Новые клиенты\n\nЧтобы рекламировать выбранное предложение{selected}, "
+                "сначала добавьте для него хотя бы одно свободное время."
             ),
             rows=(first_row, *_acquisition_tool_rows(actor), (_button("📈 Рост", "cpm:growth"),), _back_row()),
         )
@@ -7585,6 +7651,12 @@ def _render(
             return _event_join_result(actor, parsed.args[0], parsed.args[1])
         if parsed.action == "acquire":
             return _acquisition_message(actor)
+        if parsed.action == "ad-offers":
+            return _ad_offers_message(actor, _page_number(parsed.args))
+        if parsed.action == "ad-offer":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _ad_offer_message(actor, parsed.args[0])
         if parsed.action == "ad-channels":
             return _ad_channels_message(actor)
         if parsed.action == "ad-channel":
