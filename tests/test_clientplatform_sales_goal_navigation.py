@@ -120,7 +120,10 @@ class ClientPlatformSalesGoalNavigationTests(unittest.IsolatedAsyncioTestCase):
         )
         message = SimpleNamespace(answer=AsyncMock())
         snapshot = (
-            SimpleNamespace(\n            role=PlatformRole.OWNER,\n            assert_can_view_customer_records=lambda: None,\n        ),
+            SimpleNamespace(
+            role=PlatformRole.OWNER,
+            assert_can_view_customer_records=lambda: None,
+        ),
             SimpleNamespace(business=SimpleNamespace(name="Практика")),
             SimpleNamespace(activity_description="Помогаю клиентам"),
             [],
