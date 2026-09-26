@@ -816,14 +816,22 @@ async def open_event_hub(
     await callback.answer()
     from .clientplatform_cockpit_dispatch import send_cockpit_section
 
-    await send_cockpit_section(
-        control._callback_message(callback),
-        user_id=int(callback.from_user.id),
-        business_id=business_id,
-        section="events",
-        direction_id=context.direction_id if context is not None else None,
-        direction_title=context.title if context is not None else None,
-    )
+    if context is None:
+        await send_cockpit_section(
+            control._callback_message(callback),
+            user_id=int(callback.from_user.id),
+            business_id=business_id,
+            section="events",
+        )
+    else:
+        await send_cockpit_section(
+            control._callback_message(callback),
+            user_id=int(callback.from_user.id),
+            business_id=business_id,
+            section="events",
+            direction_id=context.direction_id,
+            direction_title=context.title,
+        )
 
 
 @router.callback_query(F.data.startswith("cpev:content:"))
