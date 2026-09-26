@@ -9,6 +9,10 @@ from clientplatform.domain.tenancy import TenantAccessDenied
 from clientplatform.runtime import admin_observability
 from core import telegram_multi_egress
 from handlers import clientplatform_admin_extension as extension
+from handlers import clientplatform_control as control
+from handlers import clientplatform_goal_dashboard as goal_dashboard
+from handlers import clientplatform_owner_journey as owner_journey
+from handlers import clientplatform_simple_experience as simple_experience
 
 # These contracts protect the release gate from test-order-dependent runtime state.
 
@@ -67,3 +71,9 @@ def test_admin_observability_readiness_is_explicitly_opt_in(
         "1",
     )
     assert admin_observability._monitor_readiness_required() is True
+
+
+def test_final_owner_runtime_uses_canonical_goal_dashboard() -> None:
+    assert control._send_dashboard is goal_dashboard.send_goal_dashboard
+    assert owner_journey.send_owner_dashboard is goal_dashboard.send_goal_dashboard
+    assert simple_experience.send_simple_dashboard is goal_dashboard.send_goal_dashboard
