@@ -318,6 +318,42 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(buttons[1].text, "🧰 Консультация")
         self.assertTrue(str(buttons[1].callback_data).startswith("cpo:offer:"))
 
+    async def test_advertising_chooser_reuses_single_capability_snapshot(self) -> None:
+        out = outbound_message()
+        cb = callback("cpo:start:business-1", out)
+        patches = self.common_patches(out)
+        capabilities = [
+            SimpleNamespace(
+                id="cap-1",
+                connector_key="services",
+                status=one_click.control.CapabilityStatus.ACTIVE,
+            )
+        ]
+        received_snapshots = []
+
+        async def load_offerings(_actor, *, capabilities=None):
+            received_snapshots.append(capabilities)
+            return [offering()]
+
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4],
+            patch.object(
+                one_click.control,
+                "list_business_capabilities",
+                return_value=capabilities,
+            ) as load_capabilities,
+            patch.object(
+                one_click,
+                "_advertisable_offerings",
+                side_effect=load_offerings,
+            ),
+        ):
+            await one_click.get_clients_one_click(cb, FakeState())
+
+        self.assertEqual(load_capabilities.call_count, 1)
+        self.assertEqual(len(received_snapshots), 1)
+        self.assertIs(received_snapshots[0], capabilities)
+
     async def test_advertisable_offerings_excludes_programs_and_deduplicates(self) -> None:
         actor = tenant_actor()
         active = one_click.control.CapabilityStatus.ACTIVE
