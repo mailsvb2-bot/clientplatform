@@ -260,10 +260,13 @@ def _back_keyboard(ctx: AdminContext, *extra: tuple[str, str]) -> InlineKeyboard
     return _keyboard(rows)
 
 
-async def _root_back_callback(state: FSMContext, ctx: AdminContext) -> str:
+async def _root_back_callback(state: object, ctx: AdminContext) -> str:
     """Return to the canonical parent when admin UI was opened as a child surface."""
 
-    data = await state.get_data()
+    get_data = getattr(state, "get_data", None)
+    if not callable(get_data):
+        return _callback(ctx, "back")
+    data = await get_data()
     external = str(data.get("cp_admin_return_callback") or "").strip()
     if external and len(external.encode("utf-8")) <= 64:
         return external
