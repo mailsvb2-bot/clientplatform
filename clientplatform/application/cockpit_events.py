@@ -285,7 +285,11 @@ def resolve_events_snapshot(
 
 
 def resolve_cockpit_events(
-    *, telegram_user_id: int, requested_business_id: str | None = None, limit: int = 30
+    *,
+    telegram_user_id: int,
+    requested_business_id: str | None = None,
+    limit: int = 30,
+    direction_id: str | None = None,
 ) -> CockpitEventsSnapshot:
     actor, business_name = _resolve_actor(
         telegram_user_id=telegram_user_id,
