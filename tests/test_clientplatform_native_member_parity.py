@@ -54,6 +54,22 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
             ],
             _commands(message),
         )
+        self.assertEqual(
+            [
+                button.text
+                for row in message.rows
+                for button in row
+            ],
+            [
+                "✨ Что сделать сейчас",
+                "⚙️ Мой бизнес",
+                "📣 Реклама и продвижение",
+                "👥 Клиенты и продажи",
+                "🎥 Вебинары и видеозвонки",
+                "📅 Запись и календарь",
+                "🧭 Все разделы",
+            ],
+        )
         self.assertEqual(sum(len(row) for row in message.rows), 7)
         self.assertIn("Выберите, что хотите сделать", message.text)
         primary.assert_not_called()
