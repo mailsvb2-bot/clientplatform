@@ -98,6 +98,31 @@ else:
 
 
     @pytest.mark.asyncio
+    async def test_quick_ack_answers_ad_offering_navigation_before_handler():
+        mw = QuickAckCallbackMiddleware()
+        cb = _make_callback(1, 'cpo:start:business-1')
+        calls = []
+
+        original = cb.answer
+
+        async def tracked(*args, **kwargs):
+            calls.append(('answer', (args, kwargs)))
+            return await original(*args, **kwargs)
+
+        tracked.calls = original.calls
+        object.__setattr__(cb, 'answer', tracked)
+
+        async def handler(event, data):
+            calls.append(('handler', None))
+            return 'ok'
+
+        assert await mw(handler, cb, {}) == 'ok'
+        assert calls[0][0] == 'answer'
+        assert calls[1][0] == 'handler'
+        assert cb.answer.calls == [((), {'cache_time': 0})]
+
+
+    @pytest.mark.asyncio
     async def test_quick_ack_preserves_handler_alert_for_semantic_callback():
         mw = QuickAckCallbackMiddleware()
         cb = _make_callback(1, 'cpj:wizdate:business-1:2026-09-27')
