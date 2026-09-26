@@ -283,44 +283,6 @@ async def test_safe_edit_edits_the_existing_admin_message(
 
 
 @pytest.mark.asyncio
-async def test_render_menu_uses_exact_panel_header(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    answers: list[str] = []
-
-    async def answer(
-        _message: Message,
-        text: str,
-        **_kwargs: Any,
-    ) -> None:
-        answers.append(text)
-
-    monkeypatch.setattr(Message, "answer", answer)
-    state = fsm_context()
-
-    await admin._render_menu(
-        telegram_message(),
-        state,
-        admin_context(),
-        reset=True,
-    )
-
-    assert len(answers) == 1
-    text = answers[0]
-    assert text.startswith("⚙️ Управление бизнесом\n\nСантехник · Владелец\n\nЕсли Вам нужно:\n")
-    for label in (
-        "👥 Клиенты и работа",
-        "📣 Публикации и каналы",
-        "📈 Продвижение и продажи",
-        "👤 Сотрудники и тариф",
-        "🛠 Технические проверки",
-    ):
-        assert f"«{label}»" in text
-    assert "Технические проверки вынесены отдельно" in text
-    assert (await state.get_data())["cp_admin_section"] == "menu"
-
-
-@pytest.mark.asyncio
 async def test_open_admin_command_handles_zero_one_and_multiple_businesses(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -709,6 +671,12 @@ async def test_add_member_input_is_validated_and_persisted(
         return SimpleNamespace(user_id=user_id, role=role)
 
     monkeypatch.setattr(admin, "grant_business_member", grant)
+    dashboard_calls: list[tuple[int, str]] = []
+
+    async def send_dashboard(_message: Message, *, user_id: int, business_id: str) -> None:
+        dashboard_calls.append((user_id, business_id))
+
+    monkeypatch.setattr(admin.control, "_send_dashboard", send_dashboard)
     state = fsm_context()
     await state.set_state(admin.ClientPlatformAdminState.waiting_member_user)
     await state.update_data(
@@ -729,6 +697,7 @@ async def test_add_member_input_is_validated_and_persisted(
     assert granted == [(88, PlatformRole.SUPPORT)]
     assert await state.get_state() is None
     assert any("Сотрудник добавлен" in item for item in answers)
+    assert dashboard_calls == [(77, BUSINESS_ID)]
 
 
 @pytest.mark.asyncio
@@ -822,7 +791,6 @@ async def test_admin_gate_routes_every_section_through_live_context(
     async def mark(name: str, *_args: Any, **_kwargs: Any) -> None:
         calls.append(name)
 
-    monkeypatch.setattr(admin, "_render_menu", lambda *a, **k: mark("legacy-menu"))
     monkeypatch.setattr(admin, "_navigate_back", lambda *a, **k: mark("back"))
     monkeypatch.setattr(admin.control, "_send_dashboard", lambda *a, **k: mark("dashboard"))
     monkeypatch.setattr(admin, "_render_today", lambda *a, full, **k: mark(f"today:{full}"))
