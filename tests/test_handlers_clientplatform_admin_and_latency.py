@@ -1014,6 +1014,39 @@ async def test_messenger_owner_gets_secure_telegram_vk_max_setup_links(
 
 
 @pytest.mark.asyncio
+async def test_messenger_root_back_returns_to_canonical_business_settings(
+    monkeypatch: pytest.MonkeyPatch,
+    capture_edits: list[tuple[str, InlineKeyboardMarkup]],
+) -> None:
+    monkeypatch.setattr(
+        admin,
+        "get_business_capability_projection",
+        lambda **_kwargs: capability_projection(),
+    )
+    monkeypatch.setattr(admin, "available_staff_messenger_switches", return_value=())
+    state = fsm_context()
+    await state.update_data(
+        cp_admin_return_callback="cpo:settings:business-token",
+        cp_admin_section="menu",
+        cp_admin_history=[],
+    )
+
+    await admin._render_messengers(
+        telegram_callback(),
+        state,
+        admin_context(PlatformRole.OWNER),
+    )
+
+    markup = capture_edits[-1][1]
+    by_label = {
+        button.text: button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+    }
+    assert by_label["⬅️ Назад"] == "cpo:settings:business-token"
+
+
+@pytest.mark.asyncio
 async def test_messenger_setup_actions_are_hidden_when_omnichannel_ingress_is_off(
     monkeypatch: pytest.MonkeyPatch,
     capture_edits: list[tuple[str, InlineKeyboardMarkup]],
