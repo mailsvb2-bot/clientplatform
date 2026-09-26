@@ -139,10 +139,33 @@ class SlowHandlerLogMiddleware(BaseMiddleware):
 
 
 class QuickAckCallbackMiddleware(BaseMiddleware):
-    """Answer callbacks quickly while allowing retry after a failed acknowledgement."""
+    """Keep navigation instant without swallowing handler-owned alerts."""
+
+    _SAFE_NAVIGATION_PREFIXES = (
+        "cpj:home:",
+        "cpo:next:",
+        "cpo:settings:",
+        "cpo:ads:",
+        "cpo:clients:",
+        "cpo:work:",
+        "cpo:more:",
+        "cpo:content:",
+        "cpo:entrypoints:",
+        "cpo:business-more:",
+        "cpo:website:",
+        "cpo:sources:",
+        "cpo:integrations:",
+        "cpo:ad-materials:",
+        "cps:firstgoal:",
+    )
+
+    @classmethod
+    def _should_quick_ack(cls, event: CallbackQuery) -> bool:
+        payload = str(getattr(event, "data", "") or "")
+        return payload.startswith(cls._SAFE_NAVIGATION_PREFIXES)
 
     @staticmethod
-    def _patch_callback_answer(event: CallbackQuery) -> None:
+    def _patch_callback_answer(event: CallbackQuery) -> Callable[[], bool]:
         original_answer = event.answer
         answered = False
         answer_lock = asyncio.Lock()
@@ -167,7 +190,7 @@ class QuickAckCallbackMiddleware(BaseMiddleware):
         if hasattr(original_answer, "calls"):
             _safe_answer.calls = original_answer.calls  # type: ignore[attr-defined]
         object.__setattr__(event, "answer", _safe_answer)  # type: ignore[arg-type]
-
+        return lambda: answered
 
     async def __call__(
         self,
@@ -175,10 +198,17 @@ class QuickAckCallbackMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        if isinstance(event, CallbackQuery):
-            self._patch_callback_answer(event)
+        if not isinstance(event, CallbackQuery):
+            return await handler(event, data)
+
+        is_answered = self._patch_callback_answer(event)
+        if self._should_quick_ack(event):
             await event.answer(cache_time=0)
-        return await handler(event, data)
+        try:
+            return await handler(event, data)
+        finally:
+            if not is_answered():
+                await event.answer(cache_time=0)
 
 
 class SoftRateLimitMiddleware(BaseMiddleware):
