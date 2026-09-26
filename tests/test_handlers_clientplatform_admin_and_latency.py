@@ -135,57 +135,49 @@ def capability_projection(
     )
 
 
-def test_owner_menu_uses_five_human_groups_instead_of_26_buttons() -> None:
-    markup = admin._menu_keyboard(admin_context())
-
-    assert labels(markup) == [
-        "👥 Клиенты и работа",
-        "📣 Публикации и каналы",
-        "📈 Продвижение и продажи",
-        "👤 Сотрудники и тариф",
-        "🛠 Технические проверки",
-        "⬅️ Назад",
-    ]
-    assert all(
-        value is not None and value.startswith("cpa:")
-        for value in callbacks(markup)
-    )
+def test_legacy_admin_root_menu_is_not_exposed() -> None:
+    assert not hasattr(admin, "_menu_keyboard")
+    assert not hasattr(admin, "_render_menu")
 
 
 @pytest.mark.parametrize(
-    ("role", "present", "absent"),
+    ("role", "visible_groups", "hidden_groups"),
     [
         (
             PlatformRole.SUPPORT,
-            {"👥 Клиенты и работа", "📣 Публикации и каналы"},
-            {"📈 Продвижение и продажи", "👤 Сотрудники и тариф", "🛠 Технические проверки"},
+            {"menu-work", "menu-content"},
+            {"menu-growth", "menu-team", "menu-system"},
         ),
         (
             PlatformRole.MARKETER,
-            {"📣 Публикации и каналы", "📈 Продвижение и продажи"},
-            {"👥 Клиенты и работа", "👤 Сотрудники и тариф", "🛠 Технические проверки"},
+            {"menu-content", "menu-growth"},
+            {"menu-work", "menu-team", "menu-system"},
         ),
         (
             PlatformRole.CONTENT_MANAGER,
-            {"📣 Публикации и каналы", "📈 Продвижение и продажи"},
-            {"👥 Клиенты и работа", "👤 Сотрудники и тариф", "🛠 Технические проверки"},
+            {"menu-content", "menu-growth"},
+            {"menu-work", "menu-team", "menu-system"},
         ),
         (
             PlatformRole.ADMINISTRATOR,
-            {"👥 Клиенты и работа", "📣 Публикации и каналы", "📈 Продвижение и продажи", "🛠 Технические проверки"},
-            {"👤 Сотрудники и тариф"},
+            {"menu-work", "menu-content", "menu-growth", "menu-system"},
+            {"menu-team"},
         ),
     ],
 )
-def test_menu_is_filtered_by_live_business_role(
+def test_deep_admin_groups_remain_filtered_by_live_business_role(
     role: PlatformRole,
-    present: set[str],
-    absent: set[str],
+    visible_groups: set[str],
+    hidden_groups: set[str],
 ) -> None:
-    visible = set(labels(admin._menu_keyboard(admin_context(role))))
-
-    assert present <= visible
-    assert not (absent & visible)
+    ctx = admin_context(role)
+    actual = {
+        group
+        for group in admin._ADMIN_MENU_GROUPS
+        if admin._admin_group_items(ctx, group)
+    }
+    assert visible_groups <= actual
+    assert not (hidden_groups & actual)
 
 
 def test_callback_codec_supports_new_and_legacy_keyboards() -> None:
