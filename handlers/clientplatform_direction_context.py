@@ -22,6 +22,8 @@ async def read_direction_context(
     business_id: str,
 ) -> DirectionContext | None:
     data = await state.get_data()
+    if not isinstance(data, dict):
+        return None
     if str(data.get(_DIRECTION_BUSINESS_KEY) or "") != str(business_id):
         return None
     direction_id = str(data.get(_DIRECTION_ID_KEY) or "").strip()
