@@ -27,6 +27,8 @@ async def send_cockpit_section(
     user_id: int,
     business_id: str,
     section: str,
+    direction_id: str | None = None,
+    direction_title: str | None = None,
 ) -> None:
     """Render one Cockpit section through the existing canonical Telegram UI."""
 
@@ -43,6 +45,7 @@ async def send_cockpit_section(
             telegram_user_id=user_id,
             requested_business_id=business_id,
             limit=5,
+            direction_id=direction_id,
         )
         token = one_click.control._uuid_token(business_id)
         rows: list[list[tuple[str, str]]] = []
@@ -66,8 +69,13 @@ async def send_cockpit_section(
             rows.append([(action.label, callback)])
         rows.append([(BACK_TO_GROWTH_LABEL, f"cpo:content:{token}")])
         rows.append([(nav.HOME.label, f"cpj:home:{token}")])
+        heading = (
+            f"🧭 Направление: {direction_title}\n\n"
+            if direction_id is not None and str(direction_title or "").strip()
+            else ""
+        )
         await target.answer(
-            event_hub_text(snapshot),
+            heading + event_hub_text(snapshot),
             reply_markup=one_click.control._keyboard(rows),
         )
         return
