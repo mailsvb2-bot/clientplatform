@@ -229,15 +229,19 @@ class ClientPlatformZeroToFirstOutcomeTests(unittest.TestCase):
         self.assertEqual(review_calls, [business_id])
         self.assertEqual(guarded_calls, [])
 
-    def test_resume_confirmed_draft_offers_business_connections_first(self) -> None:
+    def test_resume_confirmed_draft_opens_canonical_owner_dashboard(self) -> None:
         assert control is not None
         business_id = str(uuid4())
         actor = object()
         message = _Message()
         state = _State()
+        dashboard_calls: list[tuple[int, str]] = []
 
         async def fake_actor(_user_id: int, _business_id: str):
             return actor
+
+        async def fake_dashboard(_message, *, user_id: int, business_id: str):
+            dashboard_calls.append((user_id, business_id))
 
         with (
             patch.object(control, "_actor", fake_actor),
@@ -252,6 +256,7 @@ class ClientPlatformZeroToFirstOutcomeTests(unittest.TestCase):
                 "list_accessible_businesses",
                 lambda **_kwargs: [_business_access(business_id)],
             ),
+            patch.object(control, "_send_dashboard", fake_dashboard),
         ):
             asyncio.run(
                 control._resume_business(
@@ -262,16 +267,10 @@ class ClientPlatformZeroToFirstOutcomeTests(unittest.TestCase):
                 )
             )
 
-        text, markup = message.answers[-1]
-        self.assertTrue(text.startswith("✅ Бизнес создан. Что подключим к нему?"))
-        callbacks = _button_callbacks(markup)
-        self.assertTrue(any(item.startswith("cpa:") and item.endswith(":messengers") for item in callbacks))
-        self.assertTrue(any(item.startswith("cpo:entrypoints:") for item in callbacks))
-        self.assertTrue(any(item.startswith("cpo:integrations:") for item in callbacks))
-        self.assertTrue(any(item.startswith("cp:onboardwork:") for item in callbacks))
-        self.assertFalse(any(item.startswith("cps:firstbook:") for item in callbacks))
+        self.assertEqual(dashboard_calls, [(101, business_id)])
+        self.assertEqual(message.answers, [])
 
-    def test_confirm_onboarding_is_tenant_checked_before_connection_choice(self) -> None:
+    def test_confirm_onboarding_is_tenant_checked_before_canonical_home(self) -> None:
         assert control is not None
         business_id = str(uuid4())
         token = control._uuid_token(business_id)
@@ -280,6 +279,7 @@ class ClientPlatformZeroToFirstOutcomeTests(unittest.TestCase):
         callback = _Callback(data=f"cp:onboardconfirm:{token}", message=message)
         state = _State({"untrusted": "state"})
         calls: list[str] = []
+        dashboard_calls: list[tuple[int, str]] = []
 
         async def fake_actor(_user_id: int, selected_business_id: str):
             self.assertEqual(selected_business_id, business_id)
@@ -290,20 +290,21 @@ class ClientPlatformZeroToFirstOutcomeTests(unittest.TestCase):
             calls.append("confirm")
             return _structured(confirmed=True)
 
+        async def fake_dashboard(_message, *, user_id: int, business_id: str):
+            dashboard_calls.append((user_id, business_id))
+
         with (
             patch.object(control, "_actor", fake_actor),
             patch.object(control, "_callback_message", lambda _callback: message),
             patch.object(control, "confirm_business_profile_details", confirm),
+            patch.object(control, "_send_dashboard", fake_dashboard),
         ):
             asyncio.run(control.confirm_onboarding_profile(callback, state))
 
         self.assertEqual(calls, ["actor", "confirm"])
         self.assertEqual(callback.answers, [("Подтверждено", False)])
-        text, markup = message.answers[-1]
-        self.assertTrue(text.startswith("✅ Бизнес создан. Что подключим к нему?"))
-        callbacks = _button_callbacks(markup)
-        self.assertTrue(any(item.startswith("cpo:entrypoints:") for item in callbacks))
-        self.assertTrue(any(item.startswith("cp:onboardwork:") for item in callbacks))
+        self.assertEqual(dashboard_calls, [(101, business_id)])
+        self.assertEqual(message.answers, [])
 
     def test_onboarding_work_continuation_preserves_existing_first_result_choices(self) -> None:
         assert control is not None
