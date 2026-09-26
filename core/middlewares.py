@@ -165,32 +165,49 @@ class QuickAckCallbackMiddleware(BaseMiddleware):
         return payload.startswith(cls._SAFE_NAVIGATION_PREFIXES)
 
     @staticmethod
-    def _patch_callback_answer(event: CallbackQuery) -> Callable[[], bool]:
+    def _patch_callback_answer(
+        event: CallbackQuery,
+    ) -> tuple[Callable[[], bool], Callable[[], Awaitable[Any]]]:
         original_answer = event.answer
         answered = False
+        pending_answer: tuple[tuple[Any, ...], dict[str, Any]] | None = None
         answer_lock = asyncio.Lock()
 
+        async def _attempt_answer(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+            nonlocal answered, pending_answer
+            try:
+                result = await original_answer(*args, **kwargs)
+            except (
+                TelegramBadRequest,
+                TelegramNetworkError,
+                TelegramAPIError,
+                asyncio.TimeoutError,
+            ):
+                pending_answer = (args, dict(kwargs))
+                return None
+            answered = True
+            pending_answer = None
+            return result
+
         async def _safe_answer(*args: Any, **kwargs: Any) -> Any:
-            nonlocal answered
             async with answer_lock:
                 if answered:
                     return None
-                try:
-                    result = await original_answer(*args, **kwargs)
-                except (
-                    TelegramBadRequest,
-                    TelegramNetworkError,
-                    TelegramAPIError,
-                    asyncio.TimeoutError,
-                ):
+                return await _attempt_answer(args, kwargs)
+
+        async def _retry_pending_or_ack() -> Any:
+            async with answer_lock:
+                if answered:
                     return None
-                answered = True
-                return result
+                if pending_answer is not None:
+                    args, kwargs = pending_answer
+                    return await _attempt_answer(args, kwargs)
+                return await _attempt_answer((), {"cache_time": 0})
 
         if hasattr(original_answer, "calls"):
             _safe_answer.calls = original_answer.calls  # type: ignore[attr-defined]
         object.__setattr__(event, "answer", _safe_answer)  # type: ignore[arg-type]
-        return lambda: answered
+        return lambda: answered, _retry_pending_or_ack
 
     async def __call__(
         self,
@@ -201,14 +218,14 @@ class QuickAckCallbackMiddleware(BaseMiddleware):
         if not isinstance(event, CallbackQuery):
             return await handler(event, data)
 
-        is_answered = self._patch_callback_answer(event)
+        is_answered, retry_pending_or_ack = self._patch_callback_answer(event)
         if self._should_quick_ack(event):
             await event.answer(cache_time=0)
         try:
             return await handler(event, data)
         finally:
             if not is_answered():
-                await event.answer(cache_time=0)
+                await retry_pending_or_ack()
 
 
 class SoftRateLimitMiddleware(BaseMiddleware):
