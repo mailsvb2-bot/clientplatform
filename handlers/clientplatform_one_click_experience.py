@@ -702,11 +702,17 @@ async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> N
         control.list_business_capabilities,
         actor=actor,
     )
-    offerings = await _advertisable_offerings(
-        actor,
-        capabilities=capabilities,
-        direction_id=context.direction_id if context is not None else None,
-    )
+    if context is None:
+        offerings = await _advertisable_offerings(
+            actor,
+            capabilities=capabilities,
+        )
+    else:
+        offerings = await _advertisable_offerings(
+            actor,
+            capabilities=capabilities,
+            direction_id=context.direction_id,
+        )
     creation_capability = next(
         (
             item
@@ -1569,7 +1575,7 @@ async def open_ad_tools(
             business_id=business_id,
             direction_token=direction_token,
         )
-    if context is None and not force_all:
+    if context is None and not force_all and state is not None:
         directions = await asyncio.to_thread(list_activity_directions, actor=actor)
         if len(directions) == 1:
             direction = directions[0]
