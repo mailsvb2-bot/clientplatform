@@ -111,7 +111,7 @@ async def choose_first_result(callback: CallbackQuery, state: FSMContext) -> Non
                 [("📅 Принимать записи", f"cps:firstbook:{business_token}")],
                 [("📚 Выдавать материалы", f"cps:firstmat:{business_token}")],
                 [("👥 Подключить клиента", f"cps:firstclient:{business_token}")],
-                [("🤖 Настроить Telegram-бота", f"cpb:o:{business_token}")],
+                [("💬 Подключить мессенджер", f"cpa:{business_token}:messengers")],
                 [("🏠 В кабинет", f"cpj:home:{business_token}")],
             ]
         ),
