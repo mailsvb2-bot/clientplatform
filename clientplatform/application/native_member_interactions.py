@@ -2529,12 +2529,19 @@ def _events_message(
     direction_id: str | None = None,
 ) -> CustomerInteractionMessage:
     try:
-        snapshot = resolve_events_snapshot(
-            actor=actor,
-            business_name=_business_name(actor),
-            limit=5,
-            direction_id=direction_id,
-        )
+        if direction_id is None:
+            snapshot = resolve_events_snapshot(
+                actor=actor,
+                business_name=_business_name(actor),
+                limit=5,
+            )
+        else:
+            snapshot = resolve_events_snapshot(
+                actor=actor,
+                business_name=_business_name(actor),
+                limit=5,
+                direction_id=direction_id,
+            )
         rows: list[tuple[CustomerInteractionButton, ...]] = []
         for action in event_hub_actions(snapshot):
             rows.append((_button(action.label, _event_action_command(action)),))
