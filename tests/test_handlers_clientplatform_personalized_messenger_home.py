@@ -66,7 +66,7 @@ class TelegramComposedOwnerDashboardTests(unittest.IsolatedAsyncioTestCase):
         import handlers.clientplatform_owner_journey as owner
 
         business_id = str(uuid4())
-        actor = SimpleNamespace(role=PlatformRole.OWNER)
+        actor = SimpleNamespace(\n            role=PlatformRole.OWNER,\n            assert_can_view_customer_records=lambda: None,\n        )
         access = SimpleNamespace(business=SimpleNamespace(name="Практика", id=business_id))
         profile = SimpleNamespace(activity_description="Психолог, консультации и вебинары")
         capabilities = [SimpleNamespace(connector_key="consultations", status=CapabilityStatus.ACTIVE)]
