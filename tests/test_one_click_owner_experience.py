@@ -218,6 +218,67 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_main_ad_entry_offers_real_directions_and_all_business(self) -> None:
+        out = outbound_message()
+        cb = callback("cpo:ads:business-1", out)
+        state = FakeState()
+        directions = [
+            SimpleNamespace(id="direction-1", title="Консультации"),
+            SimpleNamespace(id="direction-2", title="Обучение психологов"),
+        ]
+        patches = self.common_patches(out)
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4],
+            patch.object(one_click, "list_activity_directions", return_value=directions),
+        ):
+            await one_click.open_ad_tools(cb, state)
+        labels = [
+            button.text
+            for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertEqual(
+            labels[:3],
+            ["🌐 Весь бизнес", "🧭 Консультации", "🧭 Обучение психологов"],
+        )
+        self.assertNotIn("🎯 Что рекламировать", labels)
+
+    async def test_direction_scoped_offerings_only_include_bound_offerings(self) -> None:
+        actor = tenant_actor()
+        capabilities = [
+            SimpleNamespace(
+                id="cap-1",
+                connector_key="services",
+                status=one_click.control.CapabilityStatus.ACTIVE,
+            )
+        ]
+        offerings = [
+            offering(offering_id="offering-1", title="Консультация"),
+            offering(offering_id="offering-2", title="Курс"),
+        ]
+        bindings = [
+            SimpleNamespace(subject_id="offering-2"),
+        ]
+        with (
+            patch.object(one_click.asyncio, "to_thread", new=immediate_to_thread),
+            patch.object(
+                one_click.control,
+                "list_business_offerings",
+                return_value=offerings,
+            ),
+            patch.object(
+                one_click,
+                "list_activity_direction_bindings",
+                return_value=bindings,
+            ),
+        ):
+            scoped = await one_click._advertisable_offerings(
+                actor,
+                capabilities=capabilities,
+                direction_id="direction-1",
+            )
+        self.assertEqual([item.id for item in scoped], ["offering-2"])
+
     async def test_what_to_do_now_lists_real_growth_actions_before_navigation(self) -> None:
         out = outbound_message()
         cb = callback("cpo:next:business-1", out)
