@@ -12,6 +12,11 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
 
+from clientplatform.application.activity_directions import (
+    get_activity_direction,
+    list_activity_direction_bindings,
+    list_activity_directions,
+)
 from clientplatform.application.cockpit import cockpit_navigation
 from clientplatform.application.growth_cockpit import GrowthAction, get_growth_cockpit
 from clientplatform.application.ad_connections import (
@@ -25,6 +30,7 @@ from clientplatform.application.ad_connections import (
 from clientplatform.application.promotions import create_slot_promotion, promotion_public_url
 from clientplatform.application.public_business_entry import public_business_entry_url
 from clientplatform.domain.ad_connections import AdConnectionError, AdConnectionStatus
+from clientplatform.domain.activity_directions import ActivityDirectionStatus, DirectionSubjectKind
 from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
 from clientplatform.domain.tenancy import PlatformRole, TenantPermissionDenied
@@ -35,6 +41,7 @@ from config.settings import settings
 
 from . import clientplatform_ad_connections as ad
 from . import clientplatform_control as control
+from . import clientplatform_direction_context as direction_context
 from . import clientplatform_goal_first_safety as goal_contract
 from . import clientplatform_simple_experience as simple
 from .clientplatform_message_target import ClientPlatformMessageTarget
@@ -432,7 +439,12 @@ async def _choose_connection(
     )
 
 
-async def _advertisable_offerings(actor, *, capabilities=None) -> list:
+async def _advertisable_offerings(
+    actor,
+    *,
+    capabilities=None,
+    direction_id: str | None = None,
+) -> list:
     if capabilities is None:
         capabilities = await asyncio.to_thread(
             control.list_business_capabilities,
@@ -450,11 +462,23 @@ async def _advertisable_offerings(actor, *, capabilities=None) -> list:
             and capability.status == control.CapabilityStatus.ACTIVE
         ]
     )
+    allowed_ids: set[str] | None = None
+    if direction_id is not None:
+        bindings = await asyncio.to_thread(
+            list_activity_direction_bindings,
+            actor=actor,
+            direction_id=direction_id,
+            subject_kind=DirectionSubjectKind.OFFERING,
+        )
+        allowed_ids = {item.subject_id for item in bindings}
+
     seen: set[str] = set()
     result = []
     for group in groups:
         for offering in group:
             if offering.id in seen:
+                continue
+            if allowed_ids is not None and offering.id not in allowed_ids:
                 continue
             seen.add(offering.id)
             result.append(offering)
@@ -584,6 +608,34 @@ async def _start_slot_ad(
             ]
             + _popup_navigation_rows(token, back_callback=f"cpo:ads:{token}"),
         ),
+    )
+
+
+async def _activate_direction_from_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    business_id: str,
+    direction_token: str | None,
+):
+    if direction_token:
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        direction = await asyncio.to_thread(
+            get_activity_direction,
+            actor=actor,
+            direction_id=control._token_uuid(direction_token),
+        )
+        if direction.status != ActivityDirectionStatus.ACTIVE:
+            raise ValueError("activity direction is not active")
+        return await direction_context.set_direction_context(
+            state,
+            business_id=business_id,
+            direction_id=direction.id,
+            title=direction.title,
+        )
+    return await direction_context.read_direction_context(
+        state,
+        business_id=business_id,
     )
 
 
@@ -948,11 +1000,19 @@ def _client_tools_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], 
     return rows, help_lines
 
 
-async def _send_client_tools(message: ClientPlatformMessageTarget, *, token: str, actor) -> None:
+async def _send_client_tools(
+    message: ClientPlatformMessageTarget,
+    *,
+    token: str,
+    actor,
+    context=None,
+) -> None:
     rows, help_lines = _client_tools_rows(token, actor)
     body = "\n".join(line for line in help_lines if line) or "Для Вашей роли здесь сейчас нет доступных действий."
     await message.answer(
-        "👥 Клиенты и продажи\n\nЕсли Вам нужно:\n" + body,
+        direction_context.direction_heading(context)
+        + "👥 Клиенты и продажи\n\nЕсли Вам нужно:\n"
+        + body,
         reply_markup=control._keyboard(rows),
     )
 
@@ -1178,7 +1238,13 @@ async def _send_integration_tools(message: ClientPlatformMessageTarget, *, token
     )
 
 
-async def _send_work_tools(message: ClientPlatformMessageTarget, *, token: str, actor) -> None:
+async def _send_work_tools(
+    message: ClientPlatformMessageTarget,
+    *,
+    token: str,
+    actor,
+    context=None,
+) -> None:
     if not (
         _allowed(actor, actor.assert_can_view_customer_records)
         or _allowed(actor, actor.assert_can_manage_programs)
@@ -1189,7 +1255,8 @@ async def _send_work_tools(message: ClientPlatformMessageTarget, *, token: str, 
         )
         return
     await message.answer(
-        "📅 Запись и календарь\n\n"
+        direction_context.direction_heading(context)
+        + "📅 Запись и календарь\n\n"
         "Если Вам нужно:\n"
         "• настроить то, что можно заказать → «🧰 Мои услуги»\n"
         "• открыть или проверить время → «📅 Мой календарь»\n"
