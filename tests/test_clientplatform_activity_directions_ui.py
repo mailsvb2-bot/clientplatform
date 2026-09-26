@@ -166,8 +166,40 @@ class ActivityDirectionsUiTests(unittest.IsolatedAsyncioTestCase):
             )
             text = open_callback.message.answers[-1][0]
             self.assertIn("Корпоративное направление", text)
+            self.assertIn("Что хотите сделать с этим направлением?", text)
             self.assertIn("часть организации, а не отдельная организация", text)
             self.assertNotIn("образователь", text.lower())
+            labels = [
+                button.text
+                for row in open_callback.message.answers[-1][1]["reply_markup"].inline_keyboard
+                for button in row
+            ]
+            self.assertEqual(
+                labels,
+                [
+                    "📣 Продвижение и реклама",
+                    "👥 Клиенты и продажи",
+                    "🎥 Вебинары и мероприятия",
+                    "📅 Запись и календарь",
+                    "🎓 Материалы и программы",
+                    "📊 Результаты",
+                    "⚙️ Настроить направление",
+                    "⬅️ К направлениям",
+                ],
+            )
+            settings = FakeCallback(
+                f"cp:dirset:{token}:{directions_ui.control._uuid_token(direction_id)}"
+            )
+            await directions_ui.open_activity_direction_settings(settings, FakeState())
+            settings_labels = [
+                button.text
+                for row in settings.message.answers[-1][1]["reply_markup"].inline_keyboard
+                for button in row
+            ]
+            self.assertEqual(
+                settings_labels,
+                ["✏️ Изменить", "🗑 Удалить направление", "⬅️ К направлению"],
+            )
 
     async def test_active_direction_can_be_renamed_without_losing_identity(self) -> None:
         assert directions_ui is not None
