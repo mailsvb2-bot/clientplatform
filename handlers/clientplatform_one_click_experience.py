@@ -1187,7 +1187,7 @@ async def _send_work_tools(message: ClientPlatformMessageTarget, *, token: str, 
                 [("🧰 Мои услуги", f"cpj:services:{token}")],
                 [("📅 Мой календарь", f"cpj:calendar:{token}:30")],
                 [(nav.PUBLIC_PAGE.label, f"cpj:page:{token}")],
-                *_popup_navigation_rows(token, back_callback=f"cpo:more:{token}"),
+                *_popup_navigation_rows(token, back_callback=f"cpj:home:{token}"),
             ]
         ),
     )
