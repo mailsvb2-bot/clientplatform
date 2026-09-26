@@ -1395,8 +1395,13 @@ async def _navigate_back(callback: CallbackQuery, state: FSMContext, ctx: AdminC
     elif action == "add-member":
         await _begin_add_member(callback, state, ctx)
     else:
-        action = "menu"
-        await _render_menu(callback, state, ctx, reset=False)
+        await state.clear()
+        await control._send_dashboard(
+            control._callback_message(callback),
+            user_id=ctx.user_id,
+            business_id=ctx.business_id,
+        )
+        return
     await state.update_data(cp_admin_history=history, cp_admin_section=action)
 
 
@@ -1408,11 +1413,11 @@ async def open_admin_command(message: Message, state: FSMContext) -> None:
         await message.answer("Сначала создайте бизнес через /start.")
         return
     if len(accesses) == 1:
-        ctx = await _load_admin_context(
+        await control._send_dashboard(
+            message,
             user_id=user_id,
             business_id=str(accesses[0].business.id),
         )
-        await _render_menu(message, state, ctx, reset=True)
         return
     await message.answer(
         "Для какого бизнеса открыть админку?",
@@ -1464,21 +1469,13 @@ async def admin_gate(callback: CallbackQuery, state: FSMContext) -> None:
             else:
                 _assert_section_allowed(ctx, action)
 
-        legacy_callback = str(callback.data or "").startswith(
-            ("cpa:home:", "cpa:formats:", "cpa:back:")
-        )
         if action == "menu":
             await state.clear()
-            if legacy_callback:
-                await control._callback_message(callback).answer(
-                    "⚙️ Управление бизнесом\n\n"
-                    f"{ctx.business_name} · {_role_label(ctx.role)}\n\n"
-                    "Выберите раздел по тому, что Вам нужно сделать. Если название непонятно, "
-                    "откройте раздел — внутри каждое действие описано простыми словами.",
-                    reply_markup=_menu_keyboard(ctx),
-                )
-            else:
-                await _render_menu(callback, state, ctx, reset=True)
+            await control._send_dashboard(
+                control._callback_message(callback),
+                user_id=ctx.user_id,
+                business_id=ctx.business_id,
+            )
         elif action == "back":
             await _navigate_back(callback, state, ctx)
         elif action in _ADMIN_MENU_GROUPS:
@@ -1627,13 +1624,10 @@ async def send_admin_panel(
 ) -> None:
     """Compatibility entry used by production probes and earlier extensions."""
 
-    ctx = await _load_admin_context(user_id=user_id, business_id=business_id)
-    await message.answer(
-        "⚙️ Управление бизнесом\n\n"
-        f"{ctx.business_name} · {_role_label(ctx.role)}\n\n"
-        "Выберите, чем хотите заняться. Редкие и технические функции спрятаны "
-        "внутри соответствующих разделов.",
-        reply_markup=_menu_keyboard(ctx),
+    await control._send_dashboard(
+        message,
+        user_id=user_id,
+        business_id=business_id,
     )
 
 
