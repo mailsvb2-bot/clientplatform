@@ -86,35 +86,19 @@ def slot(status=BookingSlotStatus.OPEN):
 
 
 class GoalScheduleTests(unittest.IsolatedAsyncioTestCase):
-    async def test_start_delegates_to_one_click_when_open_slot_exists(self) -> None:
+    async def test_start_always_enters_advertising_without_forcing_schedule(self) -> None:
         cb = callback("cpo:start:business-1")
         state = FakeState()
-        with (
-            patch.object(schedule.control, "_token_uuid", side_effect=lambda value: value),
-            patch.object(schedule.control, "_actor", new=AsyncMock(return_value="actor")),
-            patch.object(schedule.control, "list_booking_slots", return_value=[slot()]),
-            patch.object(schedule.one_click, "get_clients_one_click", new=AsyncMock()) as delegate,
-            patch.object(schedule.asyncio, "to_thread", new=direct),
-        ):
+        with patch.object(
+            schedule.one_click,
+            "get_clients_one_click",
+            new=AsyncMock(),
+        ) as delegate:
             await schedule.get_clients_goal(cb, state)
+
         delegate.assert_awaited_once_with(cb, state)
         cb.answer.assert_not_awaited()
-
-    async def test_start_without_slot_enters_business_schedule_flow(self) -> None:
-        out = FakeMessage()
-        cb = callback("cpo:start:business-1", out)
-        state = FakeState()
-        with (
-            patch.object(schedule.control, "_token_uuid", side_effect=lambda value: value),
-            patch.object(schedule.control, "_actor", new=AsyncMock(return_value="actor")),
-            patch.object(schedule.control, "list_booking_slots", return_value=[]),
-            patch.object(schedule, "_begin_missing_schedule", new=AsyncMock()) as begin,
-            patch.object(schedule.asyncio, "to_thread", new=direct),
-        ):
-            await schedule.get_clients_goal(cb, state)
-        cb.answer.assert_awaited_once_with("Готовлю всё сам…")
-        self.assertEqual(state.clear_count, 1)
-        begin.assert_awaited_once()
+        self.assertEqual(state.clear_count, 0)
 
     async def test_missing_capability_is_enabled_and_then_service_name_is_requested(self) -> None:
         out = FakeMessage()
