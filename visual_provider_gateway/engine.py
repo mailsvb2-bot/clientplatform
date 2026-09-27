@@ -253,6 +253,61 @@ def _should_stop_after_submit_failure(brief: CreativeBrief) -> bool:
 class VisualCreativeEngine:
     def __init__(self, *, enabled: bool | None = None) -> None:
         self.enabled = _truthy("VISUAL_CREATIVE_ENABLED", "0") if enabled is None else bool(enabled)
+        self._circuit_open_until: dict[str, float] = {}
+        self._runtime: dict[str, dict[str, object]] = {"image": {}, "video": {}}
+
+    @staticmethod
+    def _circuit_seconds() -> int:
+        return _limit(
+            "VISUAL_PROVIDER_CIRCUIT_SECONDS",
+            900,
+            minimum=30,
+            maximum=86400,
+        )
+
+    def _circuit_open(self, provider: str) -> bool:
+        return time.monotonic() < float(self._circuit_open_until.get(provider, 0.0) or 0.0)
+
+    def _trip_circuit(self, provider: str, error_code: str) -> None:
+        if error_code not in {
+            "visual_provider_submit_http_401",
+            "visual_provider_submit_http_403",
+            "visual_provider_submit_http_404",
+            "visual_provider_submit_http_410",
+        }:
+            return
+        self._circuit_open_until[provider] = time.monotonic() + self._circuit_seconds()
+
+    def _record_runtime(
+        self,
+        *,
+        kind: str,
+        provider: str,
+        model: str = "",
+        error_code: str = "",
+        attempts: tuple[str, ...] = (),
+    ) -> None:
+        self._runtime[kind] = {
+            "provider": provider,
+            "model": model,
+            "error_code": error_code,
+            "attempts": attempts,
+            "failover": bool(attempts and provider not in {"", "none"}),
+            "updated_at_epoch": int(time.time()),
+        }
+
+    def runtime_snapshot(self) -> dict[str, object]:
+        now = time.monotonic()
+        circuits = {
+            provider: max(0, int(open_until - now))
+            for provider, open_until in self._circuit_open_until.items()
+            if open_until > now
+        }
+        return {
+            "image": dict(self._runtime.get("image") or {}),
+            "video": dict(self._runtime.get("video") or {}),
+            "circuits_open_seconds": circuits,
+        }
 
     def submit(self, brief: CreativeBrief) -> CreativeJob:
         normalized = _apply_visual_safety(brief.normalized())
@@ -262,6 +317,9 @@ class VisualCreativeEngine:
         submit_failure_code = ""
         order = provider_order(normalized.kind, normalized.country_code, normalized.preferred_provider)
         for name in order:
+            if self._circuit_open(name):
+                failures.append(f"{name}:circuit_open")
+                continue
             try:
                 provider = build_provider(name)
             except ValueError:
@@ -273,7 +331,15 @@ class VisualCreativeEngine:
 
             failure: BaseException | None = None
             try:
-                return provider.submit(normalized)
+                job = provider.submit(normalized)
+                self._circuit_open_until.pop(name, None)
+                self._record_runtime(
+                    kind=normalized.kind,
+                    provider=job.provider,
+                    model=job.model,
+                    attempts=tuple(failures),
+                )
+                return job
             except ProviderTransportError as exc:
                 failure = exc
             except (ValueError, TypeError) as exc:
@@ -283,24 +349,33 @@ class VisualCreativeEngine:
 
             submit_failure_code = _submit_failure_code(failure)
             failures.append(f"{name}:{submit_failure_code}")
-            # A timed-out/failed POST can be ambiguous: the provider may have
-            # accepted and billed the job even though we never received its ID.
-            # Authentication rejection is different: HTTP 401/403 is a definitive
-            # pre-acceptance failure, so an automatic policy route may safely try
-            # the next already-configured provider without risking a duplicate
-            # paid generation. An explicitly requested provider remains strict.
-            auth_rejected = submit_failure_code in {
+            self._trip_circuit(name, submit_failure_code)
+            # Only definitive pre-acceptance failures are safe for an automatic
+            # paid-provider failover. Timeouts/5xx remain fail-closed because the
+            # first provider may already have accepted and billed the job.
+            definitive_rejection = submit_failure_code in {
                 "visual_provider_submit_http_401",
                 "visual_provider_submit_http_403",
+                "visual_provider_submit_http_404",
+                "visual_provider_submit_http_410",
             }
-            safe_policy_failover = auth_rejected and not normalized.preferred_provider
+            safe_policy_failover = (
+                definitive_rejection and not normalized.preferred_provider
+            )
             if not safe_policy_failover and _should_stop_after_submit_failure(normalized):
                 break
+        final_code = submit_failure_code or "no_visual_provider_available"
+        self._record_runtime(
+            kind=normalized.kind,
+            provider="none",
+            error_code=final_code,
+            attempts=tuple(failures),
+        )
         return CreativeJob(
             provider="none",
             kind=normalized.kind,
             status="failed",
-            error_code=submit_failure_code or "no_visual_provider_available",
+            error_code=final_code,
             provider_payload={"attempts": tuple(failures)},
         )
 
