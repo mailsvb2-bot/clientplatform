@@ -255,6 +255,11 @@ class CockpitHttpM7001Tests(unittest.IsolatedAsyncioTestCase):
             patch.object(cockpit_http, "verify_telegram_webapp_init_data", return_value=principal),
             patch.object(cockpit_http, "resolve_cockpit_events", return_value=events_snapshot) as resolve_events,
             patch.object(cockpit_http, "resolve_cockpit_event_live", return_value=live_snapshot) as resolve_live,
+            patch.object(
+                cockpit_http,
+                "resolve_cockpit_event_actor",
+                return_value=SimpleNamespace(),
+            ) as resolve_live_actor,
         ):
             app = web.Application()
             cockpit_http.register_cockpit_routes(app)
@@ -291,6 +296,10 @@ class CockpitHttpM7001Tests(unittest.IsolatedAsyncioTestCase):
             telegram_user_id=101,
             requested_business_id=_BUSINESS_A,
             event_id="33333333-3333-4333-8333-333333333333",
+        )
+        resolve_live_actor.assert_called_once_with(
+            telegram_user_id=101,
+            requested_business_id=_BUSINESS_A,
         )
 
     async def test_cockpit_section_open_revalidates_and_delivers_through_canonical_bot_ui(self) -> None:
