@@ -162,7 +162,7 @@ def _result_rows(token: str):
         [
             [("✨ Создать ещё картинку", f"cpc:new:{token}")],
             [("🎬 Создать видео", f"cpc:video:{token}")],
-            [("🚀 Перейти к рекламе", f"cpo:start:{token}")],
+            [("🚀 Перейти к рекламе", f"cpo:ads:{token}")],
             *_studio_navigation_rows(token),
         ]
     )
