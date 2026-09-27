@@ -51,7 +51,25 @@ def get_yandex_billing_snapshot() -> YandexBillingSnapshot:
                     available=False,
                     error_code="yandex_billing_response_too_large",
                 )
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as exc:
+    except urllib.error.HTTPError as exc:
+        return YandexBillingSnapshot(
+            configured=True,
+            available=False,
+            error_code=_safe_error(exc),
+        )
+    except urllib.error.URLError as exc:
+        return YandexBillingSnapshot(
+            configured=True,
+            available=False,
+            error_code=_safe_error(exc),
+        )
+    except TimeoutError as exc:
+        return YandexBillingSnapshot(
+            configured=True,
+            available=False,
+            error_code=_safe_error(exc),
+        )
+    except OSError as exc:
         return YandexBillingSnapshot(
             configured=True,
             available=False,
@@ -63,7 +81,25 @@ def get_yandex_billing_snapshot() -> YandexBillingSnapshot:
         if not isinstance(payload, dict):
             raise ValueError
         balance = Decimal(str(payload.get("balance") or "0"))
-    except (UnicodeDecodeError, json.JSONDecodeError, InvalidOperation, ValueError):
+    except UnicodeDecodeError:
+        return YandexBillingSnapshot(
+            configured=True,
+            available=False,
+            error_code="yandex_billing_invalid_response",
+        )
+    except json.JSONDecodeError:
+        return YandexBillingSnapshot(
+            configured=True,
+            available=False,
+            error_code="yandex_billing_invalid_response",
+        )
+    except InvalidOperation:
+        return YandexBillingSnapshot(
+            configured=True,
+            available=False,
+            error_code="yandex_billing_invalid_response",
+        )
+    except ValueError:
         return YandexBillingSnapshot(
             configured=True,
             available=False,
