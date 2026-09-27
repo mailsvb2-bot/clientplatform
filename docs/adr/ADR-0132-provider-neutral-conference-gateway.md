@@ -1,7 +1,8 @@
 # ADR-0132 — Provider-neutral conference gateway and reviewed UCR mutations
 
 **Статус:** accepted by explicit owner task and implementation review  
-**Дата:** 2026-09-27
+**Дата:** 2026-09-27  
+**Supersedes:** только ADR-0129 п.5 и ADR-0130 п.2–3 в части запрета `UniversalConferenceService` mutations; остальные решения этих ADR остаются действующими.
 
 ## Контекст
 
