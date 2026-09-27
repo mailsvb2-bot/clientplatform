@@ -341,6 +341,7 @@ class PublicEventManagedConferenceJoinTests(unittest.IsolatedAsyncioTestCase):
         )
         issue.assert_awaited_once_with(
             registration=registration,
+            event=event,
             session=session,
         )
         mark.assert_called_once_with(
