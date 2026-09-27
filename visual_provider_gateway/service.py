@@ -371,6 +371,8 @@ class VisualGatewayService:
             for name, seconds in (circuits.items() if isinstance(circuits, dict) else ())
             if int(seconds or 0) > 0
         }
+        if "yandexart" in open_providers:
+            open_providers.add("yandexart_motion")
         if open_providers:
             for field in (
                 "configured_image",
