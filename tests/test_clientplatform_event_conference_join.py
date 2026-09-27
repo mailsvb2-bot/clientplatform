@@ -234,7 +234,7 @@ class ManagedEventConferenceJoinTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first_spec.starts_at_unix_ms, second_spec.starts_at_unix_ms)
         self.assertEqual(first_key, second_key)
 
-    async def test_repeat_join_does_not_regress_live_conference_to_waiting(self) -> None:
+    async def test_repeat_join_does_not_regress_active_conference_to_waiting(self) -> None:
         event = _event()
         session = _session()
         registration = _registration(session)
