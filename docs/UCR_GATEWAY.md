@@ -147,6 +147,20 @@ that boundary, not a hard-coded webinar backend. Link-only HTTPS rooms may be ex
 through the same boundary, but all unsupported management and attendance operations
 fail closed instead of pretending success.
 
+### Event-session integration boundary
+
+The canonical ClientPlatform event/session model remains the owner of schedules,
+registration, CRM, consent and provider selection. Existing `EventSession.join_url`
+is a shared external-room target.
+
+UCR `IssueJoinGrant` is different: it produces a participant-specific, single-use
+grant. Therefore an UCR grant MUST NOT be persisted into the shared
+`EventSession.join_url` field. A future user-facing UCR webinar hookup must issue the
+grant at the authenticated participant join/redirect boundary, after resolving the
+canonical event registration and tenant context. Until that vertical slice exists,
+this gateway is an infrastructure capability and does not claim that paid UCR-hosted
+webinars are production-ready.
+
 `StartCall` receives the canonical UCR request supplied by the caller. ClientPlatform does not turn a short `(tenant, conversation, participants)` tuple into a fabricated `CallSession` because UCR owns the exact call model and its required authority/revision fields.
 
 ## Explicitly not exposed
