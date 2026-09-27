@@ -601,7 +601,8 @@ def _mark_public_event_join_click(*, token: str, expected_registration_id: str) 
         event = repository.get_public_owner_event(
             public_slug=str(row["public_slug"] if hasattr(row, "keys") else row[0])
         )
-        repository.mark_join_click(registration=registration, event=event)
+        if not repository.mark_join_click(registration=registration, event=event):
+            raise EventNotFound("registration or event is no longer joinable")
 
 
 async def public_event_join(request: web.Request) -> web.Response:
@@ -627,6 +628,7 @@ async def public_event_join(request: web.Request) -> web.Response:
         try:
             join = await issue_managed_event_session_join(
                 registration=registration,
+                event=_event,
                 session=session,
             )
         except (ConferenceProviderError, UcrGatewayError, ValueError):
