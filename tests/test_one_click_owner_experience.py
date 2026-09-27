@@ -483,10 +483,40 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         }
         self.assertEqual(called_capabilities, {"cap-service", "cap-second"})
 
-    async def test_selected_service_without_open_time_opens_calendar_for_that_service(self) -> None:
+    async def test_selected_service_does_not_force_calendar(self) -> None:
         out = outbound_message()
         state = FakeState()
         cb = callback("cpo:offer:business-1:offering-1", out)
+        patches = self.common_patches(out)
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4],
+            patch.object(
+                one_click,
+                "_advertisable_offerings",
+                new=AsyncMock(return_value=[offering()]),
+            ),
+        ):
+            await one_click.choose_one_click_offering(cb, state)
+
+        self.assertEqual(state.data["selected_offering_id"], "offering-1")
+        self.assertEqual(state.data["selected_offering_title"], "Консультация")
+        text = out.answer.await_args.args[0]
+        self.assertIn("Рекламируем «Консультация»", text)
+        self.assertIn("Дата и время нужны только если", text)
+        labels = [
+            button.text
+            for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertIn("🎨 Подготовить рекламный материал", labels)
+        self.assertIn("📡 Выбрать канал продвижения", labels)
+        self.assertIn("💰 Бюджет и запуск", labels)
+        self.assertIn("📅 Привязать дату и время", labels)
+
+    async def test_optional_ad_time_without_open_slot_opens_calendar(self) -> None:
+        out = outbound_message()
+        state = FakeState()
+        cb = callback("cpo:offertime:business-1:offering-1", out)
         send_picker = AsyncMock()
         patches = self.common_patches(out)
         with (
@@ -508,16 +538,16 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
                 return_value=SimpleNamespace(send_booking_date_picker=send_picker),
             ),
         ):
-            await one_click.choose_one_click_offering(cb, state)
+            await one_click.choose_offering_ad_time(cb, state)
 
         self.assertEqual(state.data["offering_id"], "offering-1")
         send_picker.assert_awaited_once()
         self.assertIn("Рекламируем «Консультация»", send_picker.await_args.kwargs["heading"])
 
-    async def test_selected_service_lists_only_its_open_times_and_allows_new_time(self) -> None:
+    async def test_optional_ad_time_lists_only_selected_offering_slots(self) -> None:
         out = outbound_message()
         state = FakeState()
-        cb = callback("cpo:offer:business-1:offering-1", out)
+        cb = callback("cpo:offertime:business-1:offering-1", out)
         chosen = slot(slot_id="slot-chosen")
         other = slot(slot_id="slot-other")
         other.slot.offering_id = "offering-2"
@@ -535,7 +565,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
                 return_value=[other, chosen],
             ),
         ):
-            await one_click.choose_one_click_offering(cb, state)
+            await one_click.choose_offering_ad_time(cb, state)
 
         text = out.answer.await_args.args[0]
         self.assertIn("Какую дату и время продвигать", text)
@@ -586,7 +616,6 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
                 "_advertisable_offerings",
                 new=AsyncMock(return_value=[]),
             ),
-            patch.object(one_click.control, "list_booking_slots", return_value=[]),
         ):
             await one_click.choose_one_click_offering(cb, FakeState())
 
