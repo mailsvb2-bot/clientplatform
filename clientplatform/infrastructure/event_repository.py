@@ -427,6 +427,43 @@ class EventRepository:
             (customer, registration, business),
         )
 
+    def authorize_join_redirect(
+        self,
+        *,
+        registration: EventRegistration,
+        event: Event,
+        now: datetime | None = None,
+    ) -> bool:
+        """Atomically revalidate a join and record funnel timing only when eligible."""
+
+        timestamp = normalize_utc(now or datetime.now(timezone.utc), field_name="now")
+        count_for_funnel = event.join_click_counts_for_funnel(now=timestamp)
+        cursor = self._conn.execute(
+            """
+            UPDATE clientplatform_event_registrations
+            SET first_join_click_at=CASE
+                WHEN ? THEN COALESCE(first_join_click_at,?)
+                ELSE first_join_click_at
+            END
+            WHERE id=? AND event_id=? AND business_id=? AND status='registered'
+              AND EXISTS(
+                  SELECT 1
+                  FROM clientplatform_events AS active_event
+                  WHERE active_event.id=clientplatform_event_registrations.event_id
+                    AND active_event.business_id=clientplatform_event_registrations.business_id
+                    AND active_event.status='published'
+              )
+            """,
+            (
+                bool(count_for_funnel),
+                timestamp.isoformat(),
+                registration.id,
+                event.id,
+                event.business_id,
+            ),
+        )
+        return int(getattr(cursor, "rowcount", 0) or 0) == 1
+
     def mark_join_click(
         self,
         *,
@@ -437,15 +474,11 @@ class EventRepository:
         timestamp = normalize_utc(now or datetime.now(timezone.utc), field_name="now")
         if not event.join_click_counts_for_funnel(now=timestamp):
             return False
-        cursor = self._conn.execute(
-            """
-            UPDATE clientplatform_event_registrations
-            SET first_join_click_at=COALESCE(first_join_click_at,?)
-            WHERE id=? AND event_id=? AND business_id=? AND status='registered'
-            """,
-            (timestamp.isoformat(), registration.id, event.id, event.business_id),
+        return self.authorize_join_redirect(
+            registration=registration,
+            event=event,
+            now=timestamp,
         )
-        return int(getattr(cursor, "rowcount", 0) or 0) == 1
 
     def confirm_attendance(
         self,

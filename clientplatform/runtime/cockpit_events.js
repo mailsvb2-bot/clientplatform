@@ -67,7 +67,13 @@
       panel.replaceChildren();
       const sessions = (payload.sessions || []).filter((session) => session.join_ready && session.join_url);
       if (!sessions.length) {
-        text(panel, "Ссылка на эфир пока не добавлена.");
+        const managed = (payload.sessions || []).some((session) => session.provider_key === "ucr");
+        text(
+          panel,
+          managed
+            ? "Управляемый эфир пока не готов к входу. Повторите после подключения первого участника."
+            : "Ссылка на эфир пока не добавлена.",
+        );
         return;
       }
       const heading = document.createElement("strong");

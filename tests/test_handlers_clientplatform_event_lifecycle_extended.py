@@ -300,7 +300,7 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         ucr = _callback("cpev:venue:ucr")
         await lifecycle.choose_webinar_venue(ucr, venue_state)
-        self.assertIn("UCR", ucr.answer.await_args.args[0])
+        self.assertIn("не подключён", ucr.answer.await_args.args[0])
 
         telemost = _callback("cpev:venue:telemost")
         with (

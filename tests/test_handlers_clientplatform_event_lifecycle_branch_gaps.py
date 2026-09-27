@@ -97,6 +97,191 @@ class WebinarLifecycleBranchGapTests(unittest.IsolatedAsyncioTestCase):
             show_alert=True,
         )
 
+    async def test_open_webinar_room_materializes_managed_owner_grant(self) -> None:
+        cb = callback("cpev:conduct:event-token:business-token")
+        actor = object()
+        reply = message()
+        live = SimpleNamespace(
+            title="Управляемый эфир",
+            sessions=(
+                SimpleNamespace(
+                    position=1,
+                    local_start="25.09.2026 19:00",
+                    provider_key="ucr",
+                    join_ready=True,
+                    join_url=None,
+                ),
+            ),
+        )
+        issue = AsyncMock(
+            return_value=SimpleNamespace(
+                url="https://join.example.test/owner-grant",
+            )
+        )
+        with (
+            patch.object(
+                lifecycle.control,
+                "_token_uuid",
+                side_effect=(EVENT_ID, BUSINESS_ID),
+            ),
+            patch.object(
+                lifecycle.control,
+                "_uuid_token",
+                return_value="business-token",
+            ),
+            patch.object(
+                lifecycle.control,
+                "_actor",
+                new=AsyncMock(return_value=actor),
+            ),
+            patch.object(
+                lifecycle.asyncio,
+                "to_thread",
+                new=AsyncMock(return_value=live),
+            ),
+            patch.object(
+                lifecycle,
+                "issue_managed_event_owner_join_for_position",
+                new=issue,
+            ),
+            patch.object(
+                lifecycle.control,
+                "_callback_message",
+                return_value=reply,
+            ),
+        ):
+            await lifecycle.open_webinar_live_room(cb)
+
+        cb.answer.assert_awaited_once_with()
+        issue.assert_awaited_once_with(
+            actor=actor,
+            event_id=EVENT_ID,
+            position=1,
+        )
+        markup = reply.answer.await_args.kwargs["reply_markup"]
+        self.assertEqual(
+            markup.inline_keyboard[0][0].url,
+            "https://join.example.test/owner-grant",
+        )
+
+    async def test_open_webinar_room_managed_provider_failure_is_fail_closed(self) -> None:
+        cb = callback("cpev:conduct:event-token:business-token")
+        actor = object()
+        live = SimpleNamespace(
+            title="Управляемый эфир",
+            sessions=(
+                SimpleNamespace(
+                    position=1,
+                    local_start="25.09.2026 19:00",
+                    provider_key="ucr",
+                    join_ready=True,
+                    join_url=None,
+                ),
+            ),
+        )
+        with (
+            patch.object(
+                lifecycle.control,
+                "_token_uuid",
+                side_effect=(EVENT_ID, BUSINESS_ID),
+            ),
+            patch.object(
+                lifecycle.control,
+                "_actor",
+                new=AsyncMock(return_value=actor),
+            ),
+            patch.object(
+                lifecycle.asyncio,
+                "to_thread",
+                new=AsyncMock(return_value=live),
+            ),
+            patch.object(
+                lifecycle,
+                "issue_managed_event_owner_join_for_position",
+                new=AsyncMock(
+                    side_effect=lifecycle.ConferenceProviderError("provider unavailable")
+                ),
+            ),
+        ):
+            await lifecycle.open_webinar_live_room(cb)
+
+        cb.answer.assert_awaited_once_with(
+            "Управляемый эфир пока не готов к входу. "
+            "Проверьте подключение UCR и повторите после появления участника.",
+            show_alert=True,
+        )
+
+    async def test_managed_session_skips_manual_url_and_advances_to_next_day(self) -> None:
+        msg = message()
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_sessions": [],
+            "pending_session": {
+                "position": 1,
+                "starts_at": "2026-09-28T16:00:00+00:00",
+                "ends_at": "2026-09-28T18:00:00+00:00",
+                "local_label": "28.09.2026 19:00",
+                "join_url": None,
+            },
+            "event_timezone": "Europe/Moscow",
+        }
+        prompt_next = AsyncMock()
+        with patch.object(lifecycle, "_prompt_session_date", new=prompt_next):
+            await lifecycle._prompt_session_url(
+                msg,
+                state,
+                business_id=BUSINESS_ID,
+                position=1,
+                total=2,
+                venue_key="ucr",
+            )
+
+        first_update = state.update_data.await_args_list[0].kwargs
+        self.assertEqual(first_update["pending_session"], {})
+        self.assertEqual(len(first_update["event_sessions"]), 1)
+        self.assertIsNone(first_update["event_sessions"][0]["join_url"])
+        state.update_data.assert_any_await(event_session_index=2)
+        self.assertIn("персональный вход", msg.answer.await_args.args[0])
+        prompt_next.assert_awaited_once_with(
+            msg,
+            state,
+            business_id=BUSINESS_ID,
+            position=2,
+            total=2,
+            timezone_name="Europe/Moscow",
+        )
+
+    async def test_managed_session_final_day_creates_configured_event(self) -> None:
+        msg = message()
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_sessions": [],
+            "pending_session": {
+                "position": 1,
+                "starts_at": "2026-09-28T16:00:00+00:00",
+                "ends_at": "2026-09-28T18:00:00+00:00",
+                "local_label": "28.09.2026 19:00",
+                "join_url": None,
+            },
+            "event_timezone": "Europe/Moscow",
+        }
+        create = AsyncMock()
+        with patch.object(lifecycle, "_create_configured_event", new=create):
+            await lifecycle._prompt_session_url(
+                msg,
+                state,
+                business_id=BUSINESS_ID,
+                position=1,
+                total=1,
+                venue_key="ucr",
+            )
+
+        create.assert_awaited_once_with(msg, state)
+        state.set_state.assert_not_awaited()
+        self.assertIsNone(
+            state.update_data.await_args_list[0].kwargs["event_sessions"][0]["join_url"]
+        )
+
     async def test_open_webinar_room_renders_single_and_multiday_rooms(self) -> None:
         actor = object()
         single = SimpleNamespace(

@@ -51,12 +51,12 @@ WEBINAR_VENUES = (
     ),
     WebinarVenue(
         key="ucr",
-        label="UCR",
+        label="ClientPlatform эфир",
         open_url=None,
-        public_room_supported=False,
+        public_room_supported=True,
         note=(
-            "Текущий UCR-контракт умеет создавать conversation/call, но пока не выдаёт "
-            "публичную ссылку на постоянную вебинарную комнату."
+            "ClientPlatform создаст управляемую комнату автоматически и выдаст "
+            "каждому зарегистрированному участнику персональный одноразовый вход."
         ),
     ),
     WebinarVenue(

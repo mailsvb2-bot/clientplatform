@@ -46,7 +46,17 @@ class _Gateway:
             UcrUniversalConferenceMethod.TRANSITION_CONFERENCE,
             UcrUniversalConferenceMethod.SET_ENTRY_OPEN,
         }:
-            return {"result": {"conference": {"conferenceId": {"value": "ucr-conf-1"}}}}
+            lifecycle = "UNIVERSAL_CONFERENCE_LIFECYCLE_SCHEDULED"
+            if method is UcrUniversalConferenceMethod.TRANSITION_CONFERENCE:
+                lifecycle = str(request.get("target") or lifecycle)
+            return {
+                "result": {
+                    "conference": {
+                        "conferenceId": {"value": "ucr-conf-1"},
+                        "lifecycle": lifecycle,
+                    }
+                }
+            }
         if method is UcrUniversalConferenceMethod.ISSUE_JOIN_GRANT:
             return {
                 "result": {
@@ -184,6 +194,7 @@ class ConferenceProviderTests(unittest.IsolatedAsyncioTestCase):
             external_conference_id="event-a",
         )
         self.assertEqual(resolved.provider_conference_id, "ucr-conf-1")
+        self.assertEqual(resolved.lifecycle, ConferenceLifecycle.SCHEDULED)
         await provider.set_lifecycle(
             ref,
             tenant_id="tenant-a",

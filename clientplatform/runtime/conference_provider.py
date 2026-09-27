@@ -76,6 +76,7 @@ class ConferenceRef:
     provider_key: str
     external_conference_id: str
     provider_conference_id: str
+    lifecycle: ConferenceLifecycle | None = None
 
     def __post_init__(self) -> None:
         if not str(self.provider_key or "").strip():

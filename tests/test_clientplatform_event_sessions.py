@@ -91,6 +91,26 @@ def test_two_day_event_sessions_keep_distinct_join_targets() -> None:
     assert all(session.join_is_ready for session in sessions)
 
 
+def test_ucr_managed_session_is_join_configured_without_shared_url() -> None:
+    event = _event(join_url=None)
+    session = EventSession(
+        id=str(uuid4()),
+        business_id=event.business_id,
+        event_id=event.id,
+        position=1,
+        starts_at=event.starts_at,
+        ends_at=event.ends_at,
+        provider_key="ucr",
+        provider_label="ClientPlatform эфир",
+        join_url=None,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+
+    assert session.join_is_ready
+    assert session.join_url is None
+
+
 def test_legacy_personal_join_advances_from_day_one_to_day_two() -> None:
     event = _event()
     day_one, day_two = _two_day_sessions(event)

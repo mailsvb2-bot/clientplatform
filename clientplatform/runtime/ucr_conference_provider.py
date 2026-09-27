@@ -44,6 +44,38 @@ _ROLE = {
 }
 
 
+_LIFECYCLE_FROM_UCR = {value: key for key, value in _LIFECYCLE.items()}
+
+
+def _conference_lifecycle(raw: object) -> ConferenceLifecycle | None:
+    if raw is None:
+        return None
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    try:
+        return _LIFECYCLE_FROM_UCR[value]
+    except KeyError as exc:
+        raise ConferenceProviderUnavailable("UCR conference lifecycle is invalid") from exc
+
+
+def _conference_ref(
+    *,
+    raw: Mapping[str, Any],
+    external_conference_id: str,
+    provider_key: str,
+) -> ConferenceRef:
+    conference_id = raw.get("conferenceId")
+    if not isinstance(conference_id, Mapping) or not conference_id.get("value"):
+        raise ConferenceProviderUnavailable("UCR conference id is unavailable")
+    return ConferenceRef(
+        provider_key=provider_key,
+        external_conference_id=external_conference_id,
+        provider_conference_id=str(conference_id["value"]),
+        lifecycle=_conference_lifecycle(raw.get("lifecycle")),
+    )
+
+
 def _opaque(value: str) -> dict[str, str]:
     normalized = str(value or "").strip()
     if not normalized:
@@ -216,13 +248,10 @@ class UcrConferenceProvider:
         conference = _result(response).get("conference")
         if not isinstance(conference, Mapping):
             raise ConferenceProviderUnavailable("UCR did not return a conference")
-        conference_id = conference.get("conferenceId")
-        if not isinstance(conference_id, Mapping) or not conference_id.get("value"):
-            raise ConferenceProviderUnavailable("UCR conference id is unavailable")
-        return ConferenceRef(
-            provider_key=self.key,
+        return _conference_ref(
+            raw=conference,
             external_conference_id=spec.external_conference_id,
-            provider_conference_id=str(conference_id["value"]),
+            provider_key=self.key,
         )
 
     async def resolve(
@@ -240,13 +269,10 @@ class UcrConferenceProvider:
         conference = _result(response).get("conference")
         if not isinstance(conference, Mapping):
             raise ConferenceProviderUnavailable("UCR conference could not be resolved")
-        conference_id = conference.get("conferenceId")
-        if not isinstance(conference_id, Mapping) or not conference_id.get("value"):
-            raise ConferenceProviderUnavailable("UCR conference id is unavailable")
-        return ConferenceRef(
-            provider_key=self.key,
+        return _conference_ref(
+            raw=conference,
             external_conference_id=external_conference_id,
-            provider_conference_id=str(conference_id["value"]),
+            provider_key=self.key,
         )
 
     async def set_lifecycle(
@@ -273,7 +299,11 @@ class UcrConferenceProvider:
         raw = _result(response).get("conference")
         if not isinstance(raw, Mapping):
             raise ConferenceProviderUnavailable("UCR lifecycle transition failed")
-        return conference
+        return _conference_ref(
+            raw=raw,
+            external_conference_id=conference.external_conference_id,
+            provider_key=self.key,
+        )
 
     async def set_entry_open(
         self,
@@ -299,7 +329,11 @@ class UcrConferenceProvider:
         raw = _result(response).get("conference")
         if not isinstance(raw, Mapping):
             raise ConferenceProviderUnavailable("UCR entry gate update failed")
-        return conference
+        return _conference_ref(
+            raw=raw,
+            external_conference_id=conference.external_conference_id,
+            provider_key=self.key,
+        )
 
     async def ensure_participant(
         self,

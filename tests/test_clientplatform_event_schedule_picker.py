@@ -28,11 +28,11 @@ class WebinarVenuePickerTests(unittest.TestCase):
         self.assertTrue(str(webinar_venue("getcourse").open_url).startswith("https://"))
         self.assertIsNone(webinar_venue("other").open_url)
 
-    def test_ucr_is_explicitly_not_claimed_as_public_webinar_room(self) -> None:
+    def test_ucr_is_a_managed_room_without_shared_launch_url(self) -> None:
         ucr = webinar_venue("ucr")
-        self.assertFalse(ucr.public_room_supported)
+        self.assertTrue(ucr.public_room_supported)
         self.assertIsNone(ucr.open_url)
-        self.assertIn("не выдаёт", ucr.note)
+        self.assertIn("персональный", ucr.note)
 
     def test_unknown_service_fails_closed(self) -> None:
         with self.assertRaises(ValueError):

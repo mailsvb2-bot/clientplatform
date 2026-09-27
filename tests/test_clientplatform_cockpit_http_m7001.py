@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 _AIOHTTP_AVAILABLE = importlib.util.find_spec("aiohttp") is not None
@@ -255,6 +256,11 @@ class CockpitHttpM7001Tests(unittest.IsolatedAsyncioTestCase):
             patch.object(cockpit_http, "verify_telegram_webapp_init_data", return_value=principal),
             patch.object(cockpit_http, "resolve_cockpit_events", return_value=events_snapshot) as resolve_events,
             patch.object(cockpit_http, "resolve_cockpit_event_live", return_value=live_snapshot) as resolve_live,
+            patch.object(
+                cockpit_http,
+                "resolve_cockpit_event_actor",
+                return_value=SimpleNamespace(),
+            ) as resolve_live_actor,
         ):
             app = web.Application()
             cockpit_http.register_cockpit_routes(app)
@@ -291,6 +297,90 @@ class CockpitHttpM7001Tests(unittest.IsolatedAsyncioTestCase):
             telegram_user_id=101,
             requested_business_id=_BUSINESS_A,
             event_id="33333333-3333-4333-8333-333333333333",
+        )
+        resolve_live_actor.assert_called_once_with(
+            telegram_user_id=101,
+            requested_business_id=_BUSINESS_A,
+        )
+
+    async def test_cockpit_materializes_managed_owner_join_url(self) -> None:
+        principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)
+
+        class Snapshot:
+            def as_dict(self):
+                return {
+                    "business_id": _BUSINESS_A,
+                    "event_id": "33333333-3333-4333-8333-333333333333",
+                    "title": "Вебинар",
+                    "sessions": [
+                        {
+                            "position": 1,
+                            "local_start": "15.09.2026 19:00",
+                            "provider_key": "ucr",
+                            "join_url": None,
+                            "join_ready": True,
+                        }
+                    ],
+                }
+
+        actor = object()
+        issue = AsyncMock(
+            return_value=type(
+                "Join",
+                (),
+                {"url": "https://join.example.test/owner-grant"},
+            )()
+        )
+        with (
+            patch.object(cockpit_http.settings, "BOT_TOKEN", _TOKEN),
+            patch.object(
+                cockpit_http,
+                "verify_telegram_webapp_init_data",
+                return_value=principal,
+            ),
+            patch.object(
+                cockpit_http,
+                "resolve_cockpit_event_live",
+                return_value=Snapshot(),
+            ),
+            patch.object(
+                cockpit_http,
+                "resolve_cockpit_event_actor",
+                return_value=actor,
+            ),
+            patch.object(
+                cockpit_http,
+                "issue_managed_event_owner_join_for_position",
+                issue,
+            ),
+        ):
+            app = web.Application()
+            cockpit_http.register_cockpit_routes(app)
+            client = TestClient(TestServer(app))
+            await client.start_server()
+            try:
+                response = await client.post(
+                    "/clientplatform/cockpit/events/live",
+                    json={
+                        "init_data": "verified-by-test",
+                        "business_id": _BUSINESS_A,
+                        "event_id": "33333333-3333-4333-8333-333333333333",
+                    },
+                )
+                payload = await response.json()
+            finally:
+                await client.close()
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(payload["sessions"][0]["join_ready"])
+        self.assertEqual(
+            payload["sessions"][0]["join_url"],
+            "https://join.example.test/owner-grant",
+        )
+        issue.assert_awaited_once_with(
+            actor=actor,
+            event_id="33333333-3333-4333-8333-333333333333",
+            position=1,
         )
 
     async def test_cockpit_section_open_revalidates_and_delivers_through_canonical_bot_ui(self) -> None:

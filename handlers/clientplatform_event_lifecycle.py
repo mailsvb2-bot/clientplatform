@@ -10,6 +10,10 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from clientplatform.application.event_content_plans import set_event_content_mode
+from clientplatform.application.event_conference_join import (
+    issue_managed_event_owner_join_for_position,
+    ucr_managed_event_provider_available,
+)
 from clientplatform.application.cockpit_events import resolve_event_live_snapshot
 from clientplatform.application.event_owner_flow import (
     MultiSessionOnlineEventCreateRequest,
@@ -41,6 +45,8 @@ from clientplatform.domain.event_content import (
     parse_event_content_mode,
 )
 from clientplatform.domain.tenancy import TenantPermissionDenied
+from clientplatform.runtime.conference_provider import ConferenceProviderError
+from clientplatform.runtime.ucr_gateway import UcrGatewayError
 from clientplatform.presentation.event_schedule_picker import (
     MAX_CALENDAR_MONTHS,
     QUICK_DURATIONS,
@@ -524,6 +530,40 @@ async def _prompt_session_url(
     venue_key: str,
 ) -> None:
     venue = webinar_venue(venue_key)
+    if venue.key == "ucr":
+        data = await state.get_data()
+        configured = _configured_sessions(data)
+        pending = _session_from_payload(data.get("pending_session"))
+        completed = EventWizardSession(
+            position=pending.position,
+            starts_at=pending.starts_at,
+            ends_at=pending.ends_at,
+            local_label=pending.local_label,
+            join_url=None,
+        )
+        payloads = [
+            _session_payload(session, join_url=session.join_url) for session in configured
+        ]
+        payloads.append(_session_payload(completed, join_url=None))
+        await state.update_data(event_sessions=payloads, pending_session={})
+        await message.answer(
+            f"✅ День {position}: ClientPlatform подготовит персональный вход автоматически."
+        )
+        if position < total:
+            next_position = position + 1
+            await state.update_data(event_session_index=next_position)
+            await _prompt_session_date(
+                message,
+                state,
+                business_id=business_id,
+                position=next_position,
+                total=total,
+                timezone_name=str(data.get("event_timezone") or ""),
+            )
+            return
+        await _create_configured_event(message, state)
+        return
+
     await state.set_state(ClientPlatformEventLifecycleState.waiting_session_url)
     later_note = (
         "Если ссылка появится позже — отправьте «-»; добавить её можно будет до эфира."
@@ -716,26 +756,53 @@ async def open_webinar_live_room(callback: CallbackQuery) -> None:
     except RuntimeError:
         await callback.answer("Не удалось открыть эфир этого вебинара", show_alert=True)
         return
-    ready = tuple(
-        session
-        for session in live.sessions
-        if session.join_ready and session.join_url
-    )
-    if not ready:
-        await callback.answer("Сначала добавьте ссылку на эфир", show_alert=True)
+    join_targets: list[tuple[object, str]] = []
+    managed_failed = False
+    for session in live.sessions:
+        if getattr(session, "provider_key", None) == "ucr":
+            try:
+                join = await issue_managed_event_owner_join_for_position(
+                    actor=actor,
+                    event_id=event_id,
+                    position=session.position,
+                )
+            except (
+                ConferenceProviderError,
+                UcrGatewayError,
+                LookupError,
+                OSError,
+                RuntimeError,
+                ValueError,
+            ):
+                managed_failed = True
+                continue
+            join_targets.append((session, join.url))
+            continue
+        if session.join_ready and session.join_url:
+            join_targets.append((session, session.join_url))
+    if not join_targets:
+        await callback.answer(
+            (
+                "Управляемый эфир пока не готов к входу. "
+                "Проверьте подключение UCR и повторите после появления участника."
+                if managed_failed
+                else "Сначала добавьте ссылку на эфир"
+            ),
+            show_alert=True,
+        )
         return
     rows = [
         [
             InlineKeyboardButton(
                 text=(
                     f"▶️ Открыть день {session.position}"
-                    if len(ready) > 1
+                    if len(join_targets) > 1
                     else "▶️ Открыть эфир"
                 ),
-                url=session.join_url,
+                url=join_url,
             )
         ]
-        for session in ready
+        for session, join_url in join_targets
     ]
     rows.append(
         [
@@ -748,7 +815,7 @@ async def open_webinar_live_room(callback: CallbackQuery) -> None:
     await callback.answer()
     schedule = "\n".join(
         f"День {session.position}: {session.local_start}"
-        for session in ready
+        for session, _join_url in join_targets
     )
     await control._callback_message(callback).answer(
         f"▶️ {live.title}\n\n{schedule}\n\nВыберите нужный эфир:",
@@ -1013,6 +1080,12 @@ async def choose_webinar_venue(callback: CallbackQuery, state: FSMContext) -> No
         venue = webinar_venue(key)
     except ValueError:
         await callback.answer("Неизвестная площадка", show_alert=True)
+        return
+    if venue.key == "ucr" and not ucr_managed_event_provider_available():
+        await callback.answer(
+            "Управляемый эфир ClientPlatform пока не подключён в этой среде.",
+            show_alert=True,
+        )
         return
     if not venue.public_room_supported:
         await callback.answer(venue.note, show_alert=True)
@@ -1302,6 +1375,11 @@ async def _create_configured_event(message: Message, state: FSMContext) -> None:
         else ""
     )
     actor = await control._actor(int(message.from_user.id), business_id)
+    venue_key = str(data.get("event_platform") or "other")
+    managed_provider_key = "ucr" if venue_key == "ucr" else None
+    managed_provider_label = (
+        webinar_venue(venue_key).label if managed_provider_key is not None else None
+    )
     try:
         if len(sessions) == 1:
             session = sessions[0]
@@ -1315,6 +1393,8 @@ async def _create_configured_event(message: Message, state: FSMContext) -> None:
                     timezone_name=timezone_name,
                     join_url=session.join_url,
                     description=description,
+                    provider_key=managed_provider_key,
+                    provider_label=managed_provider_label,
                 ),
             )
         else:
@@ -1330,6 +1410,8 @@ async def _create_configured_event(message: Message, state: FSMContext) -> None:
                             starts_at=session.starts_at,
                             ends_at=session.ends_at,
                             join_url=session.join_url,
+                            provider_key=managed_provider_key,
+                            provider_label=managed_provider_label,
                         )
                         for session in sessions
                     ),
@@ -1357,7 +1439,7 @@ async def _create_configured_event(message: Message, state: FSMContext) -> None:
         )
     except (ValueError, RuntimeError):
         await message.answer(
-            "Не удалось создать вебинар. Проверьте даты, время окончания и HTTPS-ссылки.",
+            "Не удалось создать вебинар. Проверьте даты, время окончания и настройки площадки.",
             reply_markup=_cancel_keyboard(business_id),
         )
 
