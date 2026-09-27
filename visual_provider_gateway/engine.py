@@ -189,11 +189,32 @@ def _policy_order(kind: str, country_code: str = "") -> tuple[str, ...]:
     )
 
 
+def _video_provider_mode(name: str) -> str:
+    """Classify video providers without exposing provider implementation details.
+
+    Native providers synthesize moving frames. yandexart_motion is deliberately
+    classified as a motion fallback because it animates one generated keyframe with
+    ffmpeg rather than generating a scene over time.
+    """
+
+    return "motion" if str(name or "").strip().lower() == "yandexart_motion" else "native"
+
+
+def _prefer_native_video_order(order: tuple[str, ...]) -> tuple[str, ...]:
+    if _truthy("VISUAL_VIDEO_MOTION_PRIMARY", "0"):
+        return order
+    native = tuple(name for name in order if _video_provider_mode(name) == "native")
+    motion = tuple(name for name in order if _video_provider_mode(name) == "motion")
+    return tuple(dict.fromkeys((*native, *motion)))
+
+
 def provider_order(kind: str, country_code: str = "", preferred_provider: str = "") -> tuple[str, ...]:
     normalized_kind = str(kind or "").strip().lower()
     if normalized_kind not in {"image", "video"}:
         raise ValueError("visual kind must be image or video")
     policy = _policy_order(normalized_kind, country_code)
+    if normalized_kind == "video":
+        policy = _prefer_native_video_order(policy)
     explicit = str(preferred_provider or "").strip().lower()
     if not explicit or explicit == "auto":
         return policy
@@ -293,13 +314,30 @@ def provider_snapshot(country_code: str = "") -> dict[str, object]:
     configs = provider_configs()
     yandex = configs["yandexart"]
     catalog = get_yandex_model_catalog(yandex)
+    configured_video = configured_providers("video", country_code)
+    configured_video_native = tuple(
+        name for name in configured_video if _video_provider_mode(name) == "native"
+    )
+    configured_video_motion = tuple(
+        name for name in configured_video if _video_provider_mode(name) == "motion"
+    )
+    video_generation_mode = (
+        "native"
+        if configured_video_native
+        else "motion"
+        if configured_video_motion
+        else "unavailable"
+    )
     return {
         "enabled": _truthy("VISUAL_CREATIVE_ENABLED", "0"),
         "country_code": str(country_code or _env("VISUAL_DEPLOYMENT_COUNTRY", "RU")).strip().upper(),
         "image_order": provider_order("image", country_code),
         "video_order": provider_order("video", country_code),
         "configured_image": configured_providers("image", country_code),
-        "configured_video": configured_providers("video", country_code),
+        "configured_video": configured_video,
+        "configured_video_native": configured_video_native,
+        "configured_video_motion": configured_video_motion,
+        "video_generation_mode": video_generation_mode,
         "providers": {name: cfg.safe_dict() for name, cfg in configs.items()},
         "models": {
             "yandexart": {
@@ -456,10 +494,12 @@ class VisualCreativeEngine:
             # paid-provider failover. Timeouts/5xx remain fail-closed because the
             # first provider may already have accepted and billed the job.
             definitive_rejection = submit_failure_code in {
+                "visual_provider_submit_http_400",
                 "visual_provider_submit_http_401",
                 "visual_provider_submit_http_403",
                 "visual_provider_submit_http_404",
                 "visual_provider_submit_http_410",
+                "visual_provider_submit_http_422",
             }
             safe_policy_failover = (
                 definitive_rejection and not normalized.preferred_provider
