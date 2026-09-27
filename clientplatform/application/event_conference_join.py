@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 from collections.abc import Mapping
 from uuid import UUID, uuid4
@@ -123,11 +124,15 @@ async def _open_and_prepare(
     conference: ConferenceRef,
     event: Event,
     session: EventSession,
+    reconciler_external_id: str,
 ) -> None:
+    reconcile_key = "runtime:" + hashlib.sha256(
+        f"{event.id}:{session.position}:{reconciler_external_id}".encode("utf-8")
+    ).hexdigest()
     await provider.prepare(
         conference,
         tenant_id=session.business_id,
-        idempotency_key=f"runtime:{event.id}:{session.position}",
+        idempotency_key=reconcile_key,
     )
     await provider.set_lifecycle(
         conference,
@@ -185,6 +190,7 @@ async def issue_managed_event_session_join(
         conference=conference,
         event=event,
         session=session,
+        reconciler_external_id=participant_external_id,
     )
     attempt = _validated_attempt_id(join_attempt_id)
     return await managed.issue_join(
@@ -239,6 +245,7 @@ async def issue_managed_event_owner_join(
         conference=conference,
         event=event,
         session=session,
+        reconciler_external_id=external_user_id,
     )
     attempt = _validated_attempt_id(join_attempt_id)
     return await managed.issue_join(
