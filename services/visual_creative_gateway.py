@@ -538,6 +538,7 @@ def download_render_asset(
         raise VisualCreativeGatewayError("visual_gateway_render_materialization_failed") from exc
     return target
 
+
 def configured_visual_providers(
     kind: str,
     *,
