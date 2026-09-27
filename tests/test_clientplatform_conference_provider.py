@@ -60,6 +60,7 @@ class _Gateway:
             return {
                 "result": {
                     "attendance": {
+                        "externalUserId": "dXNlci1h",
                         "connected": False,
                         "totalConnectedSeconds": "2520",
                         "joinCount": 2,
@@ -263,6 +264,44 @@ class ConferenceProviderTests(unittest.IsolatedAsyncioTestCase):
                         external_user_id="user-a",
                         idempotency_key="join:user-a",
                     )
+
+    async def test_ucr_attendance_rejects_wrong_participant_echo(self):
+        gateway = _Gateway()
+
+        async def wrong_participant(**kwargs: Any):
+            if kwargs["method"] is UcrUniversalConferenceMethod.GET_PARTICIPANT_ATTENDANCE:
+                return {
+                    "result": {
+                        "attendance": {
+                            "externalUserId": "dXNlci1i",
+                            "connected": False,
+                            "totalConnectedSeconds": "10",
+                            "joinCount": 1,
+                            "reconnectCount": 0,
+                        }
+                    }
+                }
+            return await _Gateway().invoke_universal_conference(**kwargs)
+
+        gateway.invoke_universal_conference = wrong_participant  # type: ignore[method-assign]
+        provider = UcrConferenceProvider(
+            gateway=gateway,  # type: ignore[arg-type]
+            integration_id="clientplatform-prod",
+        )
+        ref = ConferenceRef(
+            provider_key="ucr",
+            external_conference_id="event-a",
+            provider_conference_id="ucr-conf-1",
+        )
+        with self.assertRaisesRegex(
+            ConferenceProviderUnavailable,
+            "participant does not match",
+        ):
+            await provider.attendance(
+                ref,
+                tenant_id="tenant-a",
+                external_user_id="user-a",
+            )
 
     async def test_ucr_rejects_foreign_provider_reference_before_network(self):
         gateway = _Gateway()
