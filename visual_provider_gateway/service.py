@@ -350,4 +350,6 @@ class VisualGatewayService:
         }
 
     def snapshot(self, country_code: str = "") -> dict[str, Any]:
-        return dict(provider_snapshot(self._effective_country(country_code)))
+        payload = dict(provider_snapshot(self._effective_country(country_code)))
+        payload["runtime"] = self.engine.runtime_snapshot()
+        return payload
