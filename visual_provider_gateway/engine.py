@@ -58,7 +58,7 @@ def provider_configs() -> dict[str, ProviderConfig]:
         "yandexart": ProviderConfig(
             name="yandexart",
             base_url=_env("YANDEX_ART_BASE_URL", "https://ai.api.cloud.yandex.net:443"),
-            api_key=_env("YANDEX_ART_IAM_TOKEN", _env("YANDEX_API_KEY", "")),
+            api_key=_env("YANDEX_API_KEY", _env("YANDEX_ART_IAM_TOKEN", "")),
             model_image=_env("YANDEX_ART_MODEL_URI", f"art://{yandex_folder}/yandex-art/latest" if yandex_folder else ""),
             folder_id=yandex_folder,
             timeout_seconds=timeout,
@@ -69,7 +69,7 @@ def provider_configs() -> dict[str, ProviderConfig]:
         "yandexart_motion": ProviderConfig(
             name="yandexart_motion",
             base_url=_env("YANDEX_ART_BASE_URL", "https://ai.api.cloud.yandex.net:443"),
-            api_key=_env("YANDEX_ART_IAM_TOKEN", _env("YANDEX_API_KEY", "")),
+            api_key=_env("YANDEX_API_KEY", _env("YANDEX_ART_IAM_TOKEN", "")),
             model_image=_env("YANDEX_ART_MODEL_URI", f"art://{yandex_folder}/yandex-art/latest" if yandex_folder else ""),
             folder_id=yandex_folder,
             timeout_seconds=timeout,
