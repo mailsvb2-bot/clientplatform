@@ -43,6 +43,14 @@ class FakeEngine:
 
 
 
+class SnapshotEngine:
+    def __init__(self, runtime: dict) -> None:
+        self._runtime = runtime
+
+    def runtime_snapshot(self):
+        return self._runtime
+
+
 class SequencedFailureEngine:
     def __init__(self, first_error: str) -> None:
         self.first_error = first_error
@@ -264,6 +272,51 @@ def test_service_request_country_override_requires_operator_opt_in_and_allowlist
         svc.submit(payload(country_code="US", idempotency_key="request-country-3"), client_id="client-a")
 
 
+def test_snapshot_hides_providers_with_open_circuits(tmp_path, monkeypatch):
+    monkeypatch.setenv("VISUAL_CREATIVE_ENABLED", "1")
+    monkeypatch.setenv("VISUAL_DEPLOYMENT_COUNTRY", "RU")
+    monkeypatch.setenv("YANDEX_API_KEY", "key")
+    monkeypatch.setenv("YANDEX_ART_FOLDER_ID", "folder")
+    monkeypatch.delenv("VISUAL_SELFHOST_BASE_URL", raising=False)
+    monkeypatch.delenv("VISUAL_SELFHOST_BACKUP_BASE_URL", raising=False)
+
+    class Catalog:
+        configured = True
+        available = True
+        current_model_present = True
+        art_models = ("art://folder/aliceai-image-art-3.0",)
+        all_model_count = 1
+        error_code = ""
+
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.get_yandex_model_catalog",
+        lambda _config: Catalog(),
+    )
+    engine = SnapshotEngine(
+        {
+            "image": {
+                "provider": "none",
+                "error_code": "visual_provider_submit_http_403",
+            },
+            "video": {},
+            "circuits_open_seconds": {
+                "yandexart": 600,
+                "yandexart_motion": 600,
+            },
+        }
+    )
+    svc = VisualGatewayService(
+        store=JobStore(str(tmp_path / "jobs.sqlite3")),
+        engine=engine,
+    )
+
+    snapshot = svc.snapshot("RU")
+
+    assert "yandexart" not in snapshot["configured_image"]
+    assert "yandexart_motion" not in snapshot["configured_video"]
+    assert snapshot["video_generation_mode"] == "unavailable"
+
+
 def test_provider_snapshot_uses_effective_deployment_country(tmp_path, monkeypatch):
     monkeypatch.setenv("VISUAL_DEPLOYMENT_COUNTRY", "RU")
     monkeypatch.delenv("VISUAL_ALLOW_REQUEST_COUNTRY_OVERRIDE", raising=False)
@@ -386,6 +439,29 @@ def test_no_provider_failure_can_be_retried_after_configuration_changes(tmp_path
     )
     assert svc.submit(payload(kind="video"), client_id="client-a")["status"] == "failed"
     assert svc.submit(payload(kind="video"), client_id="client-a")["status"] == "queued"
+    assert engine.generations == 2
+
+
+@pytest.mark.parametrize(
+    "error_code",
+    [
+        "visual_provider_submit_http_410",
+        "visual_provider_submit_connect_unreachable",
+    ],
+)
+def test_safe_preacceptance_failure_can_be_retried_with_same_idempotency_key(
+    tmp_path,
+    error_code,
+):
+    engine = SequencedFailureEngine(error_code)
+    svc = VisualGatewayService(
+        store=JobStore(str(tmp_path / "jobs.sqlite3")),
+        engine=engine,
+    )
+    first = svc.submit(payload(), client_id="client-a")
+    second = svc.submit(payload(), client_id="client-a")
+    assert first["status"] == "failed"
+    assert second["status"] == "queued"
     assert engine.generations == 2
 
 
