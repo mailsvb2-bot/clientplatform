@@ -116,6 +116,31 @@ def test_selfhosted_forwards_operator_selected_model(monkeypatch):
     assert job.model == "wan2.2-t2v-a14b"
 
 
+def test_selfhosted_backup_preserves_provider_identity(monkeypatch):
+    observed = {}
+
+    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0):
+        observed["url"] = url
+        return {"id": "backup-job", "status": "queued", "model": payload.get("model")}
+
+    monkeypatch.setattr(providers, "_json_request", fake_json_request)
+    provider = SelfHostedVisualProvider(
+        ProviderConfig(
+            name="selfhosted_backup",
+            base_url="http://backup-worker:9000",
+            api_key="backup-token",
+            model_video="wan2.2-t2v-a14b",
+        )
+    )
+    job = provider.submit(
+        CreativeBrief(kind="video", prompt="cinematic rain", duration_seconds=5)
+    )
+
+    assert observed["url"].startswith("http://backup-worker:9000/")
+    assert job.provider == "selfhosted_backup"
+    assert job.external_id == "backup-job"
+
+
 def test_openai_video_reference_fails_instead_of_being_ignored():
     from visual_provider_gateway.providers import OpenAIVisualProvider, ProviderTransportError
 
