@@ -334,6 +334,19 @@ def resolve_event_live_snapshot(
     )
 
 
+def resolve_cockpit_event_actor(
+    *,
+    telegram_user_id: int,
+    requested_business_id: str | None,
+) -> TenantContext:
+    actor, _business_name = _resolve_actor(
+        telegram_user_id=telegram_user_id,
+        requested_business_id=requested_business_id,
+    )
+    actor.assert_can_manage_business()
+    return actor
+
+
 def resolve_cockpit_event_live(
     *,
     telegram_user_id: int,
@@ -471,6 +484,7 @@ __all__ = [
     "CockpitEventsSnapshot",
     "cancel_cockpit_event",
     "create_cockpit_event",
+    "resolve_cockpit_event_actor",
     "resolve_cockpit_event_live",
     "resolve_cockpit_events",
     "resolve_event_live_snapshot",
