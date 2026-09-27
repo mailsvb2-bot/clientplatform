@@ -292,26 +292,43 @@ async def creative_provider_status(callback: CallbackQuery) -> None:
     try:
         await _actor_for_callback(callback, token)
         country_code = os.getenv("VISUAL_DEPLOYMENT_COUNTRY", "")
-        ready = await asyncio.to_thread(
-            visual_generation_ready,
-            kind=kind,
-            country_code=country_code,
-        )
+        if kind == "video":
+            video_mode = await asyncio.to_thread(
+                visual_video_generation_mode,
+                country_code=country_code,
+            )
+            ready = video_mode != "unavailable"
+        else:
+            video_mode = ""
+            ready = await asyncio.to_thread(
+                visual_generation_ready,
+                kind=kind,
+                country_code=country_code,
+            )
     except (TypeError, ValueError, TenantPermissionDenied):
         await callback.answer("Не удалось проверить генератор", show_alert=True)
         return
     except VisualCreativeError:
         await callback.answer("Не удалось проверить генератор", show_alert=True)
         return
-    noun = "видео" if kind == "video" else "картинок"
-    await callback.answer()
-    await control._callback_message(callback).answer(
-        (
+
+    if kind == "video" and ready:
+        status_text = (
+            "✅ Полноценная AI-генерация видео подключена."
+            if video_mode == "native"
+            else "🟡 Сейчас доступно только оживление AI-кадра, а не генерация движущейся сцены."
+        )
+    else:
+        noun = "видео" if kind == "video" else "картинок"
+        status_text = (
             f"✅ Генератор {noun} подключён и доступен."
             if ready
             else f"⚠️ Генератор {noun} сейчас не подключён к production-шлюзу. "
             "Платный AI-вызов не будет запущен."
-        ),
+        )
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        status_text,
         reply_markup=control._keyboard(
             [[("⬅️ К картинкам и видео", f"cpc:open:{token}")]]
         ),
@@ -355,6 +372,24 @@ async def _ask_creative_prompt(
     if active is not None and active.status != CreativeGenerationReceiptStatus.PREPARED:
         await callback.answer("Сначала продолжите уже начатую генерацию", show_alert=True)
         return
+
+    video_mode = ""
+    if kind == "video":
+        try:
+            video_mode = await asyncio.to_thread(
+                visual_video_generation_mode,
+                country_code=os.getenv("VISUAL_DEPLOYMENT_COUNTRY", ""),
+            )
+        except VisualCreativeError:
+            await callback.answer("Не удалось проверить генератор видео", show_alert=True)
+            return
+        if video_mode == "unavailable":
+            await callback.answer(
+                "Видео сейчас недоступно: рабочий production-генератор не подключён.",
+                show_alert=True,
+            )
+            return
+
     await state.set_state(ClientPlatformCreativeStudioState.waiting_prompt)
     await state.set_data(
         {
@@ -366,13 +401,6 @@ async def _ask_creative_prompt(
     await callback.answer()
     target = control._callback_message(callback)
     if kind == "video":
-        try:
-            video_mode = await asyncio.to_thread(
-                visual_video_generation_mode,
-                country_code=os.getenv("VISUAL_DEPLOYMENT_COUNTRY", ""),
-            )
-        except VisualCreativeError:
-            video_mode = "unavailable"
         if video_mode == "motion":
             prompt_text = (
                 "Сейчас доступен безопасный резервный режим: ClientPlatform создаст "
