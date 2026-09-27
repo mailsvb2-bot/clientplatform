@@ -927,6 +927,8 @@ async def cockpit_event_live(request: web.Request) -> web.Response:
                 ConferenceProviderError,
                 UcrGatewayError,
                 LookupError,
+                OSError,
+                RuntimeError,
                 ValueError,
             ):
                 session["join_ready"] = False
