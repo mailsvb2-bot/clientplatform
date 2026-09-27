@@ -749,6 +749,18 @@ def test_yandex_model_candidate_failover_after_deprecated_model(monkeypatch, tmp
     assert job.model == "art://folder/aliceai-image-art-3.0"
 
 
+def test_yandex_image_circuit_also_blocks_motion_fallback(monkeypatch):
+    import time
+
+    from visual_provider_gateway.engine import VisualCreativeEngine
+
+    engine = VisualCreativeEngine(enabled=True)
+    engine._circuit_open_until["yandexart"] = time.monotonic() + 60
+
+    assert engine._circuit_open("yandexart") is True
+    assert engine._circuit_open("yandexart_motion") is True
+
+
 def test_definitive_provider_rejection_opens_circuit_and_skips_next_request(monkeypatch):
     from visual_provider_gateway.engine import VisualCreativeEngine
 
