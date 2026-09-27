@@ -6,6 +6,7 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable
 
 from aiogram.exceptions import TelegramAPIError
@@ -19,6 +20,15 @@ from services.platform_resource_limits import (
     current_levels,
     get_platform_resource_snapshot,
     render_threshold_notification,
+)
+from services.visual_provider_health import (
+    VisualProviderHealthSnapshot,
+    get_visual_provider_health_snapshot,
+)
+from services.yandex_billing_health import (
+    YandexBillingSnapshot,
+    crossed_balance_threshold,
+    get_yandex_billing_snapshot,
 )
 
 
@@ -297,13 +307,282 @@ async def _finish_pending_threshold(
     return True
 
 
+def _lifecycle_level(days_remaining: object, status: object) -> int:
+    if str(status or "") == "deprecated":
+        return 5
+    try:
+        days = int(days_remaining)
+    except (TypeError, ValueError):
+        return 0
+    if days <= 1:
+        return 4
+    if days <= 7:
+        return 3
+    if days <= 14:
+        return 2
+    if days <= 30:
+        return 1
+    return 0
+
+
+def _provider_state_and_alerts(
+    snapshot: VisualProviderHealthSnapshot,
+    previous: dict[str, Any] | None,
+) -> tuple[dict[str, Any], list[str]]:
+    prev = previous if isinstance(previous, dict) else {}
+    alerts: list[str] = []
+    current: dict[str, Any] = {
+        "available": snapshot.available,
+        "configured_image": list(snapshot.configured_image),
+        "configured_video": list(snapshot.configured_video),
+        "models": {},
+        "runtime": {},
+        "circuits": {},
+    }
+
+    if not snapshot.available:
+        current["error_code"] = snapshot.error_code
+        if bool(prev.get("available", True)):
+            alerts.append(
+                "🔴 Visual Provider Gateway недоступен\n"
+                f"Причина: {snapshot.error_code or 'unknown'}\n"
+                "Генерация должна считаться деградированной до восстановления."
+            )
+        return current, alerts
+
+    if prev and not bool(prev.get("available", True)):
+        alerts.append("🟢 Visual Provider Gateway восстановился.")
+
+    for kind, providers in (
+        ("изображений", snapshot.configured_image),
+        ("видео", snapshot.configured_video),
+    ):
+        previous_values = prev.get(
+            "configured_image" if kind == "изображений" else "configured_video"
+        )
+        if not providers and previous_values != []:
+            alerts.append(
+                f"🔴 Не осталось настроенных провайдеров для {kind}. "
+                "Пользовательская генерация этого типа недоступна."
+            )
+        elif providers and previous_values == []:
+            alerts.append(
+                f"🟢 Провайдеры для {kind} снова доступны: {', '.join(providers)}."
+            )
+
+    prev_models = prev.get("models") if isinstance(prev.get("models"), dict) else {}
+    for provider, raw in snapshot.models.items():
+        if not isinstance(raw, dict):
+            continue
+        model = str(raw.get("model") or "")
+        model_id = str(raw.get("model_id") or model)
+        lifecycle = _lifecycle_level(raw.get("days_remaining"), raw.get("status"))
+        current["models"][provider] = {
+            "model": model,
+            "model_id": model_id,
+            "lifecycle_level": lifecycle,
+            "deprecated_at": str(raw.get("deprecated_at") or ""),
+        }
+        previous_model = prev_models.get(provider)
+        if isinstance(previous_model, dict):
+            old_model = str(previous_model.get("model") or "")
+            if old_model and model and old_model != model:
+                alerts.append(
+                    "🔄 Модель генерации автоматически/операторски изменена\n"
+                    f"{provider}: {old_model} → {model}"
+                )
+            old_level = int(previous_model.get("lifecycle_level") or 0)
+        else:
+            old_level = 0
+
+        if lifecycle > old_level and lifecycle > 0:
+            deprecated_at = str(raw.get("deprecated_at") or "")
+            replacement = str(raw.get("replacement") or "")
+            days = raw.get("days_remaining")
+            if lifecycle >= 5:
+                headline = "🔴 Модель уже снята с поддержки"
+            else:
+                headline = f"🟠 Модель скоро снимается с поддержки: осталось {days} дн."
+            message = f"{headline}\n{provider}: {model_id}"
+            if deprecated_at:
+                message += f"\nДата: {deprecated_at}"
+            if replacement:
+                message += f"\nЗамена: {replacement}"
+            alerts.append(message)
+
+    runtime = snapshot.runtime if isinstance(snapshot.runtime, dict) else {}
+    prev_runtime = prev.get("runtime") if isinstance(prev.get("runtime"), dict) else {}
+    for kind in ("image", "video"):
+        raw = runtime.get(kind)
+        if not isinstance(raw, dict) or not raw:
+            continue
+        signature = {
+            "provider": str(raw.get("provider") or ""),
+            "model": str(raw.get("model") or ""),
+            "error_code": str(raw.get("error_code") or ""),
+            "updated_at_epoch": int(raw.get("updated_at_epoch") or 0),
+            "failover": bool(raw.get("failover")),
+        }
+        current["runtime"][kind] = signature
+        previous_signature = prev_runtime.get(kind)
+        changed = not isinstance(previous_signature, dict) or any(
+            previous_signature.get(key) != value
+            for key, value in signature.items()
+        )
+        if not changed:
+            continue
+        if signature["failover"] and signature["provider"] not in {"", "none"}:
+            alerts.append(
+                "🟠 Сработал автоматический fallback Visual Creative\n"
+                f"Тип: {kind}\n"
+                f"Рабочий провайдер: {signature['provider']}\n"
+                f"Модель: {signature['model'] or 'не указана'}"
+            )
+        elif signature["provider"] == "none" and signature["error_code"]:
+            alerts.append(
+                "🔴 Генерация завершилась без рабочего провайдера\n"
+                f"Тип: {kind}\nОшибка: {signature['error_code']}"
+            )
+        elif isinstance(previous_signature, dict):
+            old_provider = str(previous_signature.get("provider") or "")
+            if (
+                old_provider
+                and old_provider != signature["provider"]
+                and signature["provider"] not in {"", "none"}
+            ):
+                alerts.append(
+                    "🔄 Рабочий visual-провайдер изменился\n"
+                    f"Тип: {kind}\n{old_provider} → {signature['provider']}"
+                )
+
+    circuits_raw = runtime.get("circuits_open_seconds")
+    circuits = circuits_raw if isinstance(circuits_raw, dict) else {}
+    current["circuits"] = {
+        str(name): int(seconds)
+        for name, seconds in circuits.items()
+        if str(seconds).lstrip("-").isdigit() and int(seconds) > 0
+    }
+    previous_circuits = prev.get("circuits") if isinstance(prev.get("circuits"), dict) else {}
+    for provider, seconds in current["circuits"].items():
+        if provider not in previous_circuits:
+            alerts.append(
+                "🟠 Провайдер временно исключён circuit breaker'ом\n"
+                f"{provider}: повторная проверка примерно через {seconds} сек."
+            )
+    for provider in previous_circuits:
+        if provider not in current["circuits"]:
+            alerts.append(f"🟢 Circuit breaker снят: {provider} снова допускается в маршрут.")
+
+    return current, alerts
+
+
+async def _deliver_provider_alerts(
+    bot: Any,
+    *,
+    alerts: list[str],
+) -> bool:
+    if not alerts:
+        return True
+    message = "🧠 ClientPlatform · Visual Provider Watch\n\n" + "\n\n".join(alerts)
+    _delivered, failed = await _send_superadmins(bot, message)
+    return not failed
+
+
+def _billing_state_and_alerts(
+    snapshot: YandexBillingSnapshot,
+    previous: dict[str, Any] | None,
+) -> tuple[dict[str, Any], list[str]]:
+    prev = previous if isinstance(previous, dict) else {}
+    if not snapshot.configured:
+        return {"configured": False}, []
+
+    current: dict[str, Any] = {
+        "configured": True,
+        "available": snapshot.available,
+        "active": snapshot.active,
+        "currency": snapshot.currency,
+        "balance": "" if snapshot.balance is None else str(snapshot.balance),
+        "error_code": snapshot.error_code,
+    }
+    alerts: list[str] = []
+
+    if not snapshot.available:
+        if bool(prev.get("available", True)) or str(prev.get("error_code") or "") != snapshot.error_code:
+            alerts.append(
+                "🟠 Yandex Billing telemetry недоступна\n"
+                f"Причина: {snapshot.error_code or 'unknown'}\n"
+                "Проверка реального денежного баланса временно невозможна."
+            )
+        return current, alerts
+
+    if prev.get("configured") and not bool(prev.get("available", True)):
+        alerts.append("🟢 Yandex Billing telemetry восстановилась.")
+
+    if not snapshot.active and prev.get("active") is not False:
+        alerts.append(
+            "🔴 Платёжный аккаунт Yandex Cloud неактивен. "
+            "Платные генерации могут остановиться."
+        )
+
+    previous_balance = None
+    raw_previous_balance = str(prev.get("balance") or "").strip()
+    if raw_previous_balance:
+        try:
+            previous_balance = Decimal(raw_previous_balance)
+        except InvalidOperation:
+            previous_balance = None
+
+    if snapshot.balance is not None:
+        threshold = crossed_balance_threshold(snapshot.balance, previous_balance)
+        if threshold is not None:
+            alerts.append(
+                "💰 Yandex Cloud: заканчиваются деньги\n"
+                f"Баланс: {snapshot.balance} {snapshot.currency or ''}\n"
+                f"Порог: {threshold} {snapshot.currency or ''}"
+            )
+
+    return current, alerts
+
+
 async def _tick(bot: Any) -> None:
     global _last_error
     global _last_tick_monotonic
 
-    snapshot = await asyncio.to_thread(get_platform_resource_snapshot)
+    snapshot, provider_snapshot, billing_snapshot = await asyncio.gather(
+        asyncio.to_thread(get_platform_resource_snapshot),
+        asyncio.to_thread(get_visual_provider_health_snapshot),
+        asyncio.to_thread(get_yandex_billing_snapshot),
+    )
     state = await asyncio.to_thread(_load_state)
     today = datetime.now(timezone.utc).date().isoformat()
+
+    provider_state, provider_alerts = _provider_state_and_alerts(
+        provider_snapshot,
+        state.get("provider_state") if isinstance(state, dict) else None,
+    )
+    if provider_alerts:
+        if not await _deliver_provider_alerts(bot, alerts=provider_alerts):
+            _last_error = "visual_provider_alert_delivery_failed"
+            _last_tick_monotonic = time.monotonic()
+            return
+        state["provider_state"] = provider_state
+        await asyncio.to_thread(_save_state, state)
+    elif state.get("provider_state") != provider_state:
+        state["provider_state"] = provider_state
+
+    billing_state, billing_alerts = _billing_state_and_alerts(
+        billing_snapshot,
+        state.get("billing_state") if isinstance(state, dict) else None,
+    )
+    if billing_alerts:
+        if not await _deliver_provider_alerts(bot, alerts=billing_alerts):
+            _last_error = "yandex_billing_alert_delivery_failed"
+            _last_tick_monotonic = time.monotonic()
+            return
+        state["billing_state"] = billing_state
+        await asyncio.to_thread(_save_state, state)
+    elif state.get("billing_state") != billing_state:
+        state["billing_state"] = billing_state
 
     if not snapshot.telemetry_available:
         error_code = snapshot.error_code or "visual_gateway_usage_unavailable"
@@ -329,6 +608,8 @@ async def _tick(bot: Any) -> None:
             "levels": {},
             "telemetry_day": "",
             "telemetry_error": "",
+            "provider_state": state.get("provider_state", provider_state),
+            "billing_state": state.get("billing_state", billing_state),
         }
 
     previous_levels = state.get("levels") if isinstance(state.get("levels"), dict) else {}
@@ -357,6 +638,8 @@ async def _tick(bot: Any) -> None:
             "levels": levels,
             "telemetry_day": "",
             "telemetry_error": "",
+            "provider_state": provider_state,
+            "billing_state": billing_state,
         },
     )
     _last_error = ""

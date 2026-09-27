@@ -176,6 +176,7 @@ def resolve_events_snapshot(
     actor: TenantContext,
     business_name: str = "",
     limit: int = 30,
+    direction_id: str | None = None,
 ) -> CockpitEventsSnapshot:
     """Build the canonical event UI projection for any authenticated member surface."""
 
@@ -190,7 +191,15 @@ def resolve_events_snapshot(
         limitations.append("Публичный HTTPS-адрес не настроен; ссылки регистрации временно скрыты.")
 
     with get_db_ro() as conn:
-        events = EventRepository(conn).list(actor=actor, limit=bounded_limit)
+        event_repository = EventRepository(conn)
+        if direction_id is None:
+            events = event_repository.list(actor=actor, limit=bounded_limit)
+        else:
+            events = event_repository.list_for_direction(
+                actor=actor,
+                direction_id=direction_id,
+                limit=bounded_limit,
+            )
         items: list[CockpitEventItem] = []
         for event in events:
             funnel = get_event_funnel_in_transaction(conn, actor=actor, event_id=event.id)
@@ -274,7 +283,11 @@ def resolve_events_snapshot(
 
 
 def resolve_cockpit_events(
-    *, telegram_user_id: int, requested_business_id: str | None = None, limit: int = 30
+    *,
+    telegram_user_id: int,
+    requested_business_id: str | None = None,
+    limit: int = 30,
+    direction_id: str | None = None,
 ) -> CockpitEventsSnapshot:
     actor, business_name = _resolve_actor(
         telegram_user_id=telegram_user_id,
@@ -284,6 +297,7 @@ def resolve_cockpit_events(
         actor=actor,
         business_name=business_name,
         limit=limit,
+        direction_id=direction_id,
     )
 
 

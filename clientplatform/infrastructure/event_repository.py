@@ -213,6 +213,36 @@ class EventRepository:
         ).fetchall()
         return [_event_from_row(row) for row in rows]
 
+    def list_for_direction(
+        self,
+        *,
+        actor: TenantContext,
+        direction_id: str,
+        limit: int = 100,
+    ) -> list[Event]:
+        current = self._actor(actor, manage=False)
+        normalized_direction_id = normalize_uuid(
+            direction_id,
+            field_name="direction_id",
+        )
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+            raise ValueError("limit must be an integer between 1 and 500")
+        event_columns = ", ".join(
+            f"e.{column.strip()}"
+            for column in _EVENT_COLUMNS.replace("\n", " ").split(",")
+        )
+        rows = self._conn.execute(
+            f"SELECT {event_columns} FROM clientplatform_events e "
+            "JOIN clientplatform_activity_direction_bindings b "
+            "ON b.business_id=e.business_id "
+            "AND b.subject_kind='event' "
+            "AND b.subject_id=e.id "
+            "WHERE e.business_id=? AND b.direction_id=? "
+            "ORDER BY e.starts_at DESC,e.id DESC LIMIT ?",  # nosec B608 - static columns
+            (current.business_id, normalized_direction_id, limit),
+        ).fetchall()
+        return [_event_from_row(row) for row in rows]
+
     def set_status(
         self,
         *,

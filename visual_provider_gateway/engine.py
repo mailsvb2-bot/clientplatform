@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
+from datetime import date
 from dataclasses import replace
 
 from .models import CreativeBrief, CreativeJob, ProviderConfig
@@ -58,8 +60,8 @@ def provider_configs() -> dict[str, ProviderConfig]:
         "yandexart": ProviderConfig(
             name="yandexart",
             base_url=_env("YANDEX_ART_BASE_URL", "https://ai.api.cloud.yandex.net:443"),
-            api_key=_env("YANDEX_ART_IAM_TOKEN", _env("YANDEX_API_KEY", "")),
-            model_image=_env("YANDEX_ART_MODEL_URI", f"art://{yandex_folder}/yandex-art/latest" if yandex_folder else ""),
+            api_key=_env("YANDEX_API_KEY", _env("YANDEX_ART_IAM_TOKEN", "")),
+            model_image=_env("YANDEX_ART_MODEL_URI", f"art://{yandex_folder}/aliceai-image-art-3.0" if yandex_folder else ""),
             folder_id=yandex_folder,
             timeout_seconds=timeout,
             max_json_bytes=max_json,
@@ -69,8 +71,8 @@ def provider_configs() -> dict[str, ProviderConfig]:
         "yandexart_motion": ProviderConfig(
             name="yandexart_motion",
             base_url=_env("YANDEX_ART_BASE_URL", "https://ai.api.cloud.yandex.net:443"),
-            api_key=_env("YANDEX_ART_IAM_TOKEN", _env("YANDEX_API_KEY", "")),
-            model_image=_env("YANDEX_ART_MODEL_URI", f"art://{yandex_folder}/yandex-art/latest" if yandex_folder else ""),
+            api_key=_env("YANDEX_API_KEY", _env("YANDEX_ART_IAM_TOKEN", "")),
+            model_image=_env("YANDEX_ART_MODEL_URI", f"art://{yandex_folder}/aliceai-image-art-3.0" if yandex_folder else ""),
             folder_id=yandex_folder,
             timeout_seconds=timeout,
             max_json_bytes=max_json,
@@ -213,8 +215,82 @@ def configured_providers(kind: str, country_code: str = "") -> tuple[str, ...]:
     return tuple(names)
 
 
+_KNOWN_MODEL_LIFECYCLE = {
+    "yandex-art-2.0": {
+        "deprecated_at": "2026-09-07",
+        "replacement": "aliceai-image-art-3.0",
+    },
+    "yandex-art/latest": {
+        "deprecated_at": "2026-09-07",
+        "replacement": "aliceai-image-art-3.0",
+    },
+}
+
+
+def _model_lifecycle_overrides() -> dict[str, dict[str, str]]:
+    raw = str(os.getenv("VISUAL_MODEL_LIFECYCLE_JSON", "") or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    result: dict[str, dict[str, str]] = {}
+    for key, value in parsed.items():
+        if not isinstance(value, dict):
+            continue
+        model = str(key or "").strip()
+        if not model:
+            continue
+        result[model] = {
+            "deprecated_at": str(value.get("deprecated_at") or "").strip(),
+            "replacement": str(value.get("replacement") or "").strip(),
+        }
+    return result
+
+
+def _model_lifecycle(model_uri: str) -> dict[str, object]:
+    uri = str(model_uri or "").strip()
+    model_id = uri.rsplit("/", 1)[-1] if uri else ""
+    lifecycle_key = model_id
+    for known in _KNOWN_MODEL_LIFECYCLE:
+        if uri.endswith("/" + known) or uri == known:
+            lifecycle_key = known
+            break
+    metadata = dict(_KNOWN_MODEL_LIFECYCLE.get(lifecycle_key) or {})
+    overrides = _model_lifecycle_overrides()
+    override = (
+        overrides.get(uri)
+        or overrides.get(lifecycle_key)
+        or overrides.get(model_id)
+    )
+    if override:
+        metadata.update(override)
+    deprecated_at = str(metadata.get("deprecated_at") or "").strip()
+    days_remaining: int | None = None
+    status = "active"
+    if deprecated_at:
+        try:
+            deadline = date.fromisoformat(deprecated_at)
+            days_remaining = (deadline - date.today()).days
+            status = "deprecated" if days_remaining < 0 else "deprecating"
+        except ValueError:
+            status = "unknown"
+    return {
+        "model": uri,
+        "model_id": model_id,
+        "deprecated_at": deprecated_at,
+        "days_remaining": days_remaining,
+        "replacement": str(metadata.get("replacement") or ""),
+        "status": status,
+    }
+
+
 def provider_snapshot(country_code: str = "") -> dict[str, object]:
     configs = provider_configs()
+    yandex = configs["yandexart"]
     return {
         "enabled": _truthy("VISUAL_CREATIVE_ENABLED", "0"),
         "country_code": str(country_code or _env("VISUAL_DEPLOYMENT_COUNTRY", "RU")).strip().upper(),
@@ -223,6 +299,24 @@ def provider_snapshot(country_code: str = "") -> dict[str, object]:
         "configured_image": configured_providers("image", country_code),
         "configured_video": configured_providers("video", country_code),
         "providers": {name: cfg.safe_dict() for name, cfg in configs.items()},
+        "models": {
+            "yandexart": {
+                **_model_lifecycle(yandex.model_image),
+                "api_family": "openai_images",
+                "candidate_count": len(
+                    tuple(
+                        dict.fromkeys(
+                            part.strip()
+                            for part in str(
+                                os.getenv("YANDEX_ART_MODEL_CANDIDATES", "")
+                                or yandex.model_image
+                            ).split(",")
+                            if part.strip()
+                        )
+                    )
+                ),
+            }
+        },
     }
 
 
@@ -253,6 +347,61 @@ def _should_stop_after_submit_failure(brief: CreativeBrief) -> bool:
 class VisualCreativeEngine:
     def __init__(self, *, enabled: bool | None = None) -> None:
         self.enabled = _truthy("VISUAL_CREATIVE_ENABLED", "0") if enabled is None else bool(enabled)
+        self._circuit_open_until: dict[str, float] = {}
+        self._runtime: dict[str, dict[str, object]] = {"image": {}, "video": {}}
+
+    @staticmethod
+    def _circuit_seconds() -> int:
+        return _limit(
+            "VISUAL_PROVIDER_CIRCUIT_SECONDS",
+            900,
+            minimum=30,
+            maximum=86400,
+        )
+
+    def _circuit_open(self, provider: str) -> bool:
+        return time.monotonic() < float(self._circuit_open_until.get(provider, 0.0) or 0.0)
+
+    def _trip_circuit(self, provider: str, error_code: str) -> None:
+        if error_code not in {
+            "visual_provider_submit_http_401",
+            "visual_provider_submit_http_403",
+            "visual_provider_submit_http_404",
+            "visual_provider_submit_http_410",
+        }:
+            return
+        self._circuit_open_until[provider] = time.monotonic() + self._circuit_seconds()
+
+    def _record_runtime(
+        self,
+        *,
+        kind: str,
+        provider: str,
+        model: str = "",
+        error_code: str = "",
+        attempts: tuple[str, ...] = (),
+    ) -> None:
+        self._runtime[kind] = {
+            "provider": provider,
+            "model": model,
+            "error_code": error_code,
+            "attempts": attempts,
+            "failover": bool(attempts and provider not in {"", "none"}),
+            "updated_at_epoch": int(time.time()),
+        }
+
+    def runtime_snapshot(self) -> dict[str, object]:
+        now = time.monotonic()
+        circuits = {
+            provider: max(0, int(open_until - now))
+            for provider, open_until in self._circuit_open_until.items()
+            if open_until > now
+        }
+        return {
+            "image": dict(self._runtime.get("image") or {}),
+            "video": dict(self._runtime.get("video") or {}),
+            "circuits_open_seconds": circuits,
+        }
 
     def submit(self, brief: CreativeBrief) -> CreativeJob:
         normalized = _apply_visual_safety(brief.normalized())
@@ -262,6 +411,9 @@ class VisualCreativeEngine:
         submit_failure_code = ""
         order = provider_order(normalized.kind, normalized.country_code, normalized.preferred_provider)
         for name in order:
+            if self._circuit_open(name):
+                failures.append(f"{name}:circuit_open")
+                continue
             try:
                 provider = build_provider(name)
             except ValueError:
@@ -273,7 +425,15 @@ class VisualCreativeEngine:
 
             failure: BaseException | None = None
             try:
-                return provider.submit(normalized)
+                job = provider.submit(normalized)
+                self._circuit_open_until.pop(name, None)
+                self._record_runtime(
+                    kind=normalized.kind,
+                    provider=job.provider,
+                    model=job.model,
+                    attempts=tuple(failures),
+                )
+                return job
             except ProviderTransportError as exc:
                 failure = exc
             except (ValueError, TypeError) as exc:
@@ -283,17 +443,33 @@ class VisualCreativeEngine:
 
             submit_failure_code = _submit_failure_code(failure)
             failures.append(f"{name}:{submit_failure_code}")
-            # A timed-out/failed POST can be ambiguous: the provider may have
-            # accepted and billed the job even though we never received its ID.
-            # Default to fail-closed instead of starting another paid provider
-            # request. Operators may explicitly opt into that cost/risk tradeoff.
-            if _should_stop_after_submit_failure(normalized):
+            self._trip_circuit(name, submit_failure_code)
+            # Only definitive pre-acceptance failures are safe for an automatic
+            # paid-provider failover. Timeouts/5xx remain fail-closed because the
+            # first provider may already have accepted and billed the job.
+            definitive_rejection = submit_failure_code in {
+                "visual_provider_submit_http_401",
+                "visual_provider_submit_http_403",
+                "visual_provider_submit_http_404",
+                "visual_provider_submit_http_410",
+            }
+            safe_policy_failover = (
+                definitive_rejection and not normalized.preferred_provider
+            )
+            if not safe_policy_failover and _should_stop_after_submit_failure(normalized):
                 break
+        final_code = submit_failure_code or "no_visual_provider_available"
+        self._record_runtime(
+            kind=normalized.kind,
+            provider="none",
+            error_code=final_code,
+            attempts=tuple(failures),
+        )
         return CreativeJob(
             provider="none",
             kind=normalized.kind,
             status="failed",
-            error_code=submit_failure_code or "no_visual_provider_available",
+            error_code=final_code,
             provider_payload={"attempts": tuple(failures)},
         )
 

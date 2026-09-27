@@ -22,6 +22,8 @@ from clientplatform.domain.activity_directions import (
     ActivityDirectionStatus,
 )
 
+from . import clientplatform_direction_context as direction_context
+
 control = importlib.import_module(".clientplatform_control", __package__)
 
 router = Router(name="clientplatform_activity_directions")
@@ -41,6 +43,14 @@ def _open_callback(business_id: str, direction_id: str) -> str:
         f"cp:diropen:{control._uuid_token(business_id)}:"
         f"{control._uuid_token(direction_id)}"
     )
+
+
+def _routed_callback(callback: CallbackQuery, data: str) -> CallbackQuery:
+    copier = getattr(callback, "model_copy", None)
+    if callable(copier):
+        return copier(update={"data": data})
+    callback.data = data
+    return callback
 
 
 async def _render_directions(
@@ -213,20 +223,15 @@ async def open_activity_direction(callback: CallbackQuery, state: FSMContext) ->
     await callback.answer()
     rows: list[list[tuple[str, str]]] = []
     if direction.status == ActivityDirectionStatus.ACTIVE:
-        rows.append(
+        rows.extend(
             [
-                (
-                    "✏️ Изменить",
-                    f"cp:diredit:{business_token}:{direction_token}",
-                )
-            ]
-        )
-        rows.append(
-            [
-                (
-                    "🗑 Удалить направление",
-                    f"cp:dirarc:{business_token}:{direction_token}",
-                )
+                [("📣 Продвижение и реклама", f"cp:dg:a:{business_token}:{direction_token}")],
+                [("👥 Клиенты и продажи", f"cp:dg:c:{business_token}:{direction_token}")],
+                [("🎥 Вебинары и мероприятия", f"cp:dg:e:{business_token}:{direction_token}")],
+                [("📅 Запись и календарь", f"cp:dg:w:{business_token}:{direction_token}")],
+                [("🎓 Материалы и программы", f"cp:dg:p:{business_token}:{direction_token}")],
+                [("📊 Результаты", f"cp:dg:r:{business_token}:{direction_token}")],
+                [("⚙️ Настроить направление", f"cp:dirset:{business_token}:{direction_token}")],
             ]
         )
     else:
@@ -242,14 +247,126 @@ async def open_activity_direction(callback: CallbackQuery, state: FSMContext) ->
     await control._callback_message(callback).answer(
         f"🧭 {direction.title}\n\n"
         f"{direction.description}\n\n"
-        "Связано с направлением:\n"
+        "Что хотите сделать с этим направлением?\n\n"
+        "Связано сейчас:\n"
         f"• материалов: {counts['program']}\n"
         f"• услуг и предложений: {counts['offering']}\n"
         f"• событий: {counts['event']}\n\n"
-        "Направление — это часть организации, а не отдельная организация.\n\n"
-        "Откройте направление, чтобы изменить или удалить его.",
+        "Направление — часть организации, а не отдельная организация: общий бренд, "
+        "сотрудники, клиенты и подключения не дублируются.",
         reply_markup=control._keyboard(rows),
     )
+
+
+@router.callback_query(F.data.startswith("cp:dirset:"))
+async def open_activity_direction_settings(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    _, _, business_token, direction_token = str(callback.data).split(":", 3)
+    business_id = control._token_uuid(business_token)
+    direction_id = control._token_uuid(direction_token)
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    direction = await asyncio.to_thread(
+        get_activity_direction,
+        actor=actor,
+        direction_id=direction_id,
+    )
+    actor.assert_can_manage_business()
+    await state.clear()
+    await callback.answer()
+    rows: list[list[tuple[str, str]]] = []
+    if direction.status == ActivityDirectionStatus.ACTIVE:
+        rows.extend(
+            [
+                [("✏️ Изменить", f"cp:diredit:{business_token}:{direction_token}")],
+                [("🗑 Удалить направление", f"cp:dirarc:{business_token}:{direction_token}")],
+                [("⬅️ К направлению", f"cp:diropen:{business_token}:{direction_token}")],
+            ]
+        )
+    else:
+        rows.extend(
+            [
+                [("♻️ Вернуть в работу", f"cp:dirrestore:{business_token}:{direction_token}")],
+                [("📦 К архиву", f"cp:dirarch:{business_token}")],
+            ]
+        )
+    await control._callback_message(callback).answer(
+        f"⚙️ Настроить направление\n\n"
+        f"🧭 {direction.title}\n"
+        f"{direction.description}\n\n"
+        "Здесь меняются только название, описание и статус направления. "
+        "Рабочие действия находятся на экране самого направления.",
+        reply_markup=control._keyboard(rows),
+    )
+
+
+@router.callback_query(F.data.startswith("cp:dg:"))
+async def open_activity_direction_goal(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    _, _, goal, business_token, direction_token = str(callback.data).split(":", 4)
+    business_id = control._token_uuid(business_token)
+    direction_id = control._token_uuid(direction_token)
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    direction = await asyncio.to_thread(
+        get_activity_direction,
+        actor=actor,
+        direction_id=direction_id,
+    )
+    if direction.status != ActivityDirectionStatus.ACTIVE:
+        await callback.answer("Направление больше не активно.", show_alert=True)
+        return
+    await direction_context.set_direction_context(
+        state,
+        business_id=business_id,
+        direction_id=direction.id,
+        title=direction.title,
+    )
+
+    if goal == "a":
+        owner = importlib.import_module(".clientplatform_one_click_experience", __package__)
+        await owner.open_ad_tools(
+            _routed_callback(callback, f"cpo:ads:{business_token}:{direction_token}"),
+            state,
+        )
+        return
+    if goal == "c":
+        owner = importlib.import_module(".clientplatform_one_click_experience", __package__)
+        await owner.open_client_tools(
+            _routed_callback(callback, f"cpo:clients:{business_token}:{direction_token}"),
+            state,
+        )
+        return
+    if goal == "e":
+        events = importlib.import_module(".clientplatform_events", __package__)
+        await events.open_event_hub(
+            _routed_callback(callback, f"cpev:home:{business_token}:{direction_token}"),
+            state,
+        )
+        return
+    if goal == "w":
+        owner = importlib.import_module(".clientplatform_one_click_experience", __package__)
+        await owner.open_work_tools(
+            _routed_callback(callback, f"cpo:work:{business_token}:{direction_token}"),
+            state,
+        )
+        return
+    if goal == "p":
+        programs = importlib.import_module(".clientplatform_program_builder", __package__)
+        await programs.open_programs(
+            _routed_callback(callback, f"cp:cap:{business_token}:programs"),
+            state,
+        )
+        return
+    if goal == "r":
+        await control.show_results(
+            _routed_callback(callback, f"cp:results:{business_token}:{direction_token}"),
+            state,
+        )
+        return
+    await callback.answer("Кнопка устарела. Откройте направление заново.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("cp:diredit:"))

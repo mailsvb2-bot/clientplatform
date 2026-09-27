@@ -31,6 +31,7 @@ from clientplatform.application.activity_directions import (
     update_activity_direction,
 )
 from clientplatform.application.ad_channel_directory import advertising_channel, advertising_channels
+from clientplatform.domain.activity_directions import DirectionSubjectKind
 from clientplatform.application.ad_connections import list_ad_connections
 from clientplatform.application.ad_spend_consent import list_ad_spend_authorizations
 from clientplatform.application.ad_spend_operations import (
@@ -992,6 +993,10 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "directions",
             "directions-archived",
             "direction",
+            "direction-goal",
+            "direction-settings",
+            "direction-ad-offers",
+            "direction-programs",
             "direction-new",
             "direction-create-text",
             "direction-edit",
@@ -2519,13 +2524,25 @@ def _event_projection_fallback(actor: TenantContext) -> CustomerInteractionMessa
     )
 
 
-def _events_message(actor: TenantContext) -> CustomerInteractionMessage:
+def _events_message(
+    actor: TenantContext,
+    *,
+    direction_id: str | None = None,
+) -> CustomerInteractionMessage:
     try:
-        snapshot = resolve_events_snapshot(
-            actor=actor,
-            business_name=_business_name(actor),
-            limit=5,
-        )
+        if direction_id is None:
+            snapshot = resolve_events_snapshot(
+                actor=actor,
+                business_name=_business_name(actor),
+                limit=5,
+            )
+        else:
+            snapshot = resolve_events_snapshot(
+                actor=actor,
+                business_name=_business_name(actor),
+                limit=5,
+                direction_id=direction_id,
+            )
         rows: list[tuple[CustomerInteractionButton, ...]] = []
         for action in event_hub_actions(snapshot):
             rows.append((_button(action.label, _event_action_command(action)),))
@@ -3439,10 +3456,22 @@ def _ai_visuals_message(actor: TenantContext) -> CustomerInteractionMessage:
 _AD_OFFER_PAGE_SIZE = 6
 
 
-def _ad_offers_message(actor: TenantContext, page: int) -> CustomerInteractionMessage:
+def _ad_offers_message(
+    actor: TenantContext,
+    page: int,
+    *,
+    direction_id: str | None = None,
+) -> CustomerInteractionMessage:
     if actor.role not in _ACQUISITION_ROLES:
         return _permission_message()
     offerings = _native_all_offerings(actor)
+    if direction_id is not None:
+        offering_ids = _direction_subject_ids(
+            actor,
+            direction_id,
+            DirectionSubjectKind.OFFERING,
+        )
+        offerings = [item for item in offerings if item.id in offering_ids]
     page_count = max(1, (len(offerings) + _AD_OFFER_PAGE_SIZE - 1) // _AD_OFFER_PAGE_SIZE)
     safe_page = min(max(0, page), page_count - 1)
     start = safe_page * _AD_OFFER_PAGE_SIZE
@@ -3456,9 +3485,27 @@ def _ad_offers_message(actor: TenantContext, page: int) -> CustomerInteractionMe
     )
     pagination: list[CustomerInteractionButton] = []
     if safe_page > 0:
-        pagination.append(_button("⬅️ Ранее", f"cpm:ad-offers:{safe_page - 1}"))
+        pagination.append(
+            _button(
+                "⬅️ Ранее",
+                (
+                    f"cpm:direction-ad-offers:{direction_id}:{safe_page - 1}"
+                    if direction_id is not None
+                    else f"cpm:ad-offers:{safe_page - 1}"
+                ),
+            )
+        )
     if safe_page + 1 < page_count:
-        pagination.append(_button("Далее ➡️", f"cpm:ad-offers:{safe_page + 1}"))
+        pagination.append(
+            _button(
+                "Далее ➡️",
+                (
+                    f"cpm:direction-ad-offers:{direction_id}:{safe_page + 1}"
+                    if direction_id is not None
+                    else f"cpm:ad-offers:{safe_page + 1}"
+                ),
+            )
+        )
     if pagination:
         rows.append(tuple(pagination))
     rows.append((_button(nav.BACK.label, "cpm:ads"),))
@@ -3908,8 +3955,13 @@ def _direction_message(actor: TenantContext, direction_id: str) -> CustomerInter
     if active:
         rows.extend(
             [
-                (_button("✏️ Изменить", f"cpm:direction-edit:{direction.id}"),),
-                (_button("🗑 Удалить направление", f"cpm:direction-archive:{direction.id}"),),
+                (_button("📣 Продвижение и реклама", f"cpm:direction-goal:ads:{direction.id}"),),
+                (_button("👥 Клиенты и продажи", f"cpm:direction-goal:clients:{direction.id}"),),
+                (_button("🎥 Вебинары и мероприятия", f"cpm:direction-goal:events:{direction.id}"),),
+                (_button("📅 Запись и календарь", f"cpm:direction-goal:bookings:{direction.id}"),),
+                (_button("🎓 Материалы и программы", f"cpm:direction-goal:programs:{direction.id}"),),
+                (_button("📊 Результаты", f"cpm:direction-goal:results:{direction.id}"),),
+                (_button("⚙️ Настроить направление", f"cpm:direction-settings:{direction.id}"),),
             ]
         )
         rows.append((_button("🧭 К направлениям", "cpm:directions:0"),))
@@ -3921,13 +3973,122 @@ def _direction_message(actor: TenantContext, direction_id: str) -> CustomerInter
         text=(
             f"🧭 {direction.title}\n\n"
             f"{direction.description}\n\n"
-            f"Материалы и программы: {counts['program']}\n"
+            + ("Что хотите сделать с этим направлением?\n\n" if active else "")
+            + f"Материалы и программы: {counts['program']}\n"
             f"Услуги и предложения: {counts['offering']}\n"
             f"События и вебинары: {counts['event']}\n\n"
-            f"Статус: {'в работе' if active else 'в архиве'}.\n\n"
-            + ("Нажмите «Удалить направление», чтобы убрать его из активной работы без потери связанных данных." if active else "Направление можно вернуть в работу в любой момент.")
+            f"Статус: {'в работе' if active else 'в архиве'}."
         ),
         rows=tuple(rows),
+    )
+
+
+def _direction_settings_message(
+    actor: TenantContext,
+    direction_id: str,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    direction = get_activity_direction(actor=actor, direction_id=direction_id)
+    if direction.status != ActivityDirectionStatus.ACTIVE:
+        return _direction_message(actor, direction.id)
+    return CustomerInteractionMessage(
+        text=(
+            f"⚙️ Настроить направление\n\n🧭 {direction.title}\n"
+            f"{direction.description}\n\n"
+            "Здесь меняются только название, описание и статус направления."
+        ),
+        rows=(
+            (_button("✏️ Изменить", f"cpm:direction-edit:{direction.id}"),),
+            (_button("🗑 Удалить направление", f"cpm:direction-archive:{direction.id}"),),
+            (_button("🧭 К направлению", f"cpm:direction:{direction.id}"),),
+            _back_row(),
+        ),
+    )
+
+
+def _direction_subject_ids(
+    actor: TenantContext,
+    direction_id: str,
+    subject_kind: DirectionSubjectKind,
+) -> set[str]:
+    return {
+        item.subject_id
+        for item in list_activity_direction_bindings(
+            actor=actor,
+            direction_id=direction_id,
+            subject_kind=subject_kind,
+        )
+    }
+
+
+def _direction_results_message(
+    actor: TenantContext,
+    direction_id: str,
+) -> CustomerInteractionMessage:
+    direction = get_activity_direction(actor=actor, direction_id=direction_id)
+    program_ids = _direction_subject_ids(
+        actor,
+        direction.id,
+        DirectionSubjectKind.PROGRAM,
+    )
+    progress = [
+        item
+        for item in list_business_program_progress(actor=actor, limit=100)
+        if item.program_id in program_ids
+    ]
+    progress_lines = "\n".join(
+        f"• {item.customer_display_name or 'Клиент'}: {item.program_title} — "
+        f"{item.completed_lessons}/{item.total_lessons} ({item.percent_complete}%)"
+        for item in progress[:15]
+    ) or "По программам этого направления пока нет прогресса."
+    return CustomerInteractionMessage(
+        text=(
+            f"📊 Результаты\n\n"
+            f"Связано программ: {len(program_ids)}\n"
+            f"Клиентов с прогрессом: {len({item.customer_id for item in progress})}\n\n"
+            f"Прогресс клиентов\n{progress_lines}"
+        ),
+        rows=(
+            (_button("🧭 К направлению", f"cpm:direction:{direction.id}"),),
+            _back_row(),
+        ),
+    )
+
+
+def _direction_goal_message(
+    actor: TenantContext,
+    goal: str,
+    direction_id: str,
+) -> CustomerInteractionMessage:
+    direction = get_activity_direction(actor=actor, direction_id=direction_id)
+    if direction.status != ActivityDirectionStatus.ACTIVE:
+        return _stale_message()
+    if goal == "ads":
+        base = _ads_message(actor)
+        rows = list(base.rows)
+        if rows:
+            rows[0] = (
+                _button(
+                    "🎯 Что рекламировать",
+                    f"cpm:direction-ad-offers:{direction.id}:0",
+                ),
+            )
+        base = CustomerInteractionMessage(text=base.text, rows=tuple(rows))
+    elif goal == "clients":
+        base = _clients_sales_message(actor)
+    elif goal == "events":
+        base = _events_message(actor, direction_id=direction.id)
+    elif goal == "bookings":
+        base = _bookings_message(actor, direction_id=direction.id)
+    elif goal == "programs":
+        base = _programs_message(actor, 0, direction_id=direction.id)
+    elif goal == "results":
+        base = _direction_results_message(actor, direction.id)
+    else:
+        return _stale_message()
+    return CustomerInteractionMessage(
+        text=f"🧭 Направление: {direction.title}\n\n" + base.text,
+        rows=base.rows,
     )
 
 
@@ -6125,8 +6286,19 @@ def _booking_open_create_message(
     )
 
 
-def _bookings_message(actor: TenantContext) -> CustomerInteractionMessage:
+def _bookings_message(
+    actor: TenantContext,
+    *,
+    direction_id: str | None = None,
+) -> CustomerInteractionMessage:
     slots = list_booking_slots(actor=actor, include_unavailable=False)
+    if direction_id is not None:
+        offering_ids = _direction_subject_ids(
+            actor,
+            direction_id,
+            DirectionSubjectKind.OFFERING,
+        )
+        slots = [item for item in slots if item.slot.offering_id in offering_ids]
     if not slots:
         text = (
             "📅 Запись и свободное время\n\n"
@@ -6155,8 +6327,20 @@ def _bookings_message(actor: TenantContext) -> CustomerInteractionMessage:
     rows.append(_back_row())
     return CustomerInteractionMessage(text=text, rows=tuple(rows))
 
-def _programs_message(actor: TenantContext, page: int = 0) -> CustomerInteractionMessage:
+def _programs_message(
+    actor: TenantContext,
+    page: int = 0,
+    *,
+    direction_id: str | None = None,
+) -> CustomerInteractionMessage:
     programs = list_programs(actor=actor)
+    if direction_id is not None:
+        program_ids = _direction_subject_ids(
+            actor,
+            direction_id,
+            DirectionSubjectKind.PROGRAM,
+        )
+        programs = [item for item in programs if item.id in program_ids]
     page_size = 3
     page_count = max(1, (len(programs) + page_size - 1) // page_size)
     if page >= page_count:
@@ -6173,7 +6357,18 @@ def _programs_message(actor: TenantContext, page: int = 0) -> CustomerInteractio
     ] or ["• Материалов и программ пока нет."]
     rows: list[tuple[CustomerInteractionButton, ...]] = []
     if actor.role in _PROGRAM_MANAGEMENT_ROLES:
-        rows.append((_button("➕ Создать материал или программу", "cpm:program-create"),))
+        rows.append(
+            (
+                _button(
+                    "➕ Создать материал или программу",
+                    (
+                        f"cpm:program-create-dir:{direction_id}"
+                        if direction_id is not None
+                        else "cpm:program-create"
+                    ),
+                ),
+            )
+        )
     for item in current:
         if item.status.value == "draft" and actor.role in _PROGRAM_MANAGEMENT_ROLES:
             rows.append(
@@ -6183,9 +6378,27 @@ def _programs_message(actor: TenantContext, page: int = 0) -> CustomerInteractio
             rows.append((_button("📤 Выдать клиенту", f"cpm:program-deliver:{item.id}"),))
     pagination: list[CustomerInteractionButton] = []
     if page > 0:
-        pagination.append(_button("◀️ Предыдущая страница", f"cpm:programs:{page - 1}"))
+        pagination.append(
+            _button(
+                "◀️ Предыдущая страница",
+                (
+                    f"cpm:direction-programs:{direction_id}:{page - 1}"
+                    if direction_id is not None
+                    else f"cpm:programs:{page - 1}"
+                ),
+            )
+        )
     if page + 1 < page_count:
-        pagination.append(_button("Вперёд ➡️", f"cpm:programs:{page + 1}"))
+        pagination.append(
+            _button(
+                "Вперёд ➡️",
+                (
+                    f"cpm:direction-programs:{direction_id}:{page + 1}"
+                    if direction_id is not None
+                    else f"cpm:programs:{page + 1}"
+                ),
+            )
+        )
     if pagination:
         rows.append(tuple(pagination))
     rows.append(_back_row())
@@ -7710,6 +7923,30 @@ def _render(
             if len(parsed.args) != 1:
                 return _stale_message()
             return _direction_message(actor, parsed.args[0])
+        if parsed.action == "direction-goal":
+            if len(parsed.args) != 2:
+                return _stale_message()
+            return _direction_goal_message(actor, parsed.args[0], parsed.args[1])
+        if parsed.action == "direction-settings":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _direction_settings_message(actor, parsed.args[0])
+        if parsed.action == "direction-ad-offers":
+            if len(parsed.args) != 2:
+                return _stale_message()
+            return _ad_offers_message(
+                actor,
+                _page_number((parsed.args[1],)),
+                direction_id=parsed.args[0],
+            )
+        if parsed.action == "direction-programs":
+            if len(parsed.args) != 2:
+                return _stale_message()
+            return _programs_message(
+                actor,
+                _page_number((parsed.args[1],)),
+                direction_id=parsed.args[0],
+            )
         if parsed.action == "direction-new":
             return _direction_new_message(
                 actor,

@@ -9,7 +9,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
-from clientplatform.application.activity_directions import list_activity_directions
+from clientplatform.application.activity_directions import (
+    list_activity_direction_bindings,
+    list_activity_directions,
+)
 from clientplatform.application.programs import (
     add_program_lesson,
     archive_program_draft,
@@ -19,6 +22,7 @@ from clientplatform.application.programs import (
     list_programs,
     publish_program,
 )
+from clientplatform.domain.activity_directions import DirectionSubjectKind
 from clientplatform.domain.programs import (
     ContentKind,
     Program,
@@ -30,6 +34,10 @@ from clientplatform.domain.programs import (
 )
 
 control = importlib.import_module(".clientplatform_control", __package__)
+direction_context = importlib.import_module(
+    ".clientplatform_direction_context",
+    __package__,
+)
 
 router = Router(name="clientplatform_program_builder")
 router.message.filter(control.ClientPlatformControlEnabled())
@@ -196,13 +204,30 @@ async def open_programs(callback: CallbackQuery, state: FSMContext) -> None:
     _, _, business_token, _connector_key = str(callback.data).split(":", 3)
     business_id = control._token_uuid(business_token)
     actor = await control._actor(int(callback.from_user.id), business_id)
+    context = await direction_context.read_direction_context(
+        state,
+        business_id=business_id,
+    )
     programs = await asyncio.to_thread(list_programs, actor=actor)
+    if context is not None:
+        bindings = await asyncio.to_thread(
+            list_activity_direction_bindings,
+            actor=actor,
+            direction_id=context.direction_id,
+            subject_kind=DirectionSubjectKind.PROGRAM,
+        )
+        program_ids = {item.subject_id for item in bindings}
+        programs = [item for item in programs if item.id in program_ids]
     drafts = [item for item in programs if item.status == ProgramStatus.DRAFT]
     active = [item for item in programs if item.status == ProgramStatus.ACTIVE]
-    await state.clear()
+    await direction_context.clear_flow_preserving_direction(
+        state,
+        business_id=business_id,
+    )
     await callback.answer()
     await control._callback_message(callback).answer(
-        f"Программы\n\n{_program_lines(programs)}",
+        direction_context.direction_heading(context)
+        + f"🎓 Материалы и программы\n\n{_program_lines(programs)}",
         reply_markup=_programs_keyboard(
             business_id=business_id,
             drafts=drafts,
@@ -297,13 +322,30 @@ async def begin_program(callback: CallbackQuery, state: FSMContext) -> None:
     business_id = control._token_uuid(business_token)
     actor = await control._actor(int(callback.from_user.id), business_id)
     directions = await asyncio.to_thread(list_activity_directions, actor=actor)
+    context = await direction_context.read_direction_context(
+        state,
+        business_id=business_id,
+    )
+    selected_direction_id = (
+        context.direction_id
+        if context is not None and context.direction_id in {item.id for item in directions}
+        else None
+    )
     await state.clear()
-    await state.update_data(business_id=business_id)
+    await state.update_data(
+        business_id=business_id,
+        direction_id=selected_direction_id,
+    )
     await callback.answer()
-    if not directions:
+    if selected_direction_id is not None or not directions:
         await state.set_state(ClientPlatformProgramBuilderState.program_title)
         await control._callback_message(callback).answer(
-            "Напишите название программы.",
+            (
+                f"🧭 Направление: {context.title}\n\n"
+                if context is not None and selected_direction_id is not None
+                else ""
+            )
+            + "Напишите название программы.",
             reply_markup=control._keyboard(
                 [[("⬅️ К программам", f"cp:cap:{business_token}:programs")]]
             ),

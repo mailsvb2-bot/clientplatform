@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import base64
+from pathlib import Path
+
 import pytest
 
 from visual_provider_gateway import providers
 from visual_provider_gateway.engine import provider_order, provider_snapshot
-from visual_provider_gateway.models import CreativeBrief, ProviderConfig
+from visual_provider_gateway.models import CreativeBrief, CreativeJob, ProviderConfig
 from visual_provider_gateway.providers import SelfHostedVisualProvider
 
 
@@ -117,10 +120,52 @@ def test_yandexart_can_use_explicit_model_uri_without_separate_folder():
             name="yandexart",
             base_url="https://ai.api.cloud.yandex.net:443",
             api_key="test",
-            model_image="art://folder/yandex-art/latest",
+            model_image="art://folder/aliceai-image-art-3.0",
         )
     )
     assert provider.configured("image") is True
+
+
+def test_legacy_yandex_latest_uri_is_marked_deprecated():
+    from visual_provider_gateway.engine import _model_lifecycle
+
+    lifecycle = _model_lifecycle("art://folder/yandex-art/latest")
+
+    assert lifecycle["status"] == "deprecated"
+    assert lifecycle["deprecated_at"] == "2026-09-07"
+    assert lifecycle["replacement"] == "aliceai-image-art-3.0"
+
+
+def test_yandex_api_key_wins_over_stale_iam_token(monkeypatch):
+    from visual_provider_gateway.engine import provider_configs
+    from visual_provider_gateway.providers import YandexArtProvider
+
+    monkeypatch.setenv("YANDEX_API_KEY", "durable-api-key")
+    monkeypatch.setenv("YANDEX_ART_IAM_TOKEN", "expired-iam-token")
+    monkeypatch.delenv("YANDEX_ART_AUTH_SCHEME", raising=False)
+    monkeypatch.setenv("YANDEX_ART_FOLDER_ID", "folder")
+
+    config = provider_configs()["yandexart"]
+    provider = YandexArtProvider(config)
+
+    assert config.api_key == "durable-api-key"
+    assert provider._authorization() == "Api-Key durable-api-key"
+
+
+def test_yandex_iam_token_still_works_when_no_api_key_exists(monkeypatch):
+    from visual_provider_gateway.engine import provider_configs
+    from visual_provider_gateway.providers import YandexArtProvider
+
+    monkeypatch.delenv("YANDEX_API_KEY", raising=False)
+    monkeypatch.setenv("YANDEX_ART_IAM_TOKEN", "current-iam-token")
+    monkeypatch.delenv("YANDEX_ART_AUTH_SCHEME", raising=False)
+    monkeypatch.setenv("YANDEX_ART_FOLDER_ID", "folder")
+
+    config = provider_configs()["yandexart"]
+    provider = YandexArtProvider(config)
+
+    assert config.api_key == "current-iam-token"
+    assert provider._authorization() == "Bearer current-iam-token"
 
 
 def test_provider_snapshot_strips_base_url_credentials_and_paths(monkeypatch):
@@ -158,6 +203,84 @@ def test_submit_does_not_failover_after_ambiguous_provider_error_by_default(monk
     job = VisualCreativeEngine(enabled=True).submit(CreativeBrief(kind="image", prompt="x"))
     assert job.status == "failed"
     assert calls == ["broken"]
+
+
+def test_submit_fails_over_after_definitive_auth_rejection(monkeypatch):
+    from visual_provider_gateway.engine import VisualCreativeEngine
+    from visual_provider_gateway.models import CreativeJob
+
+    calls = []
+
+    class UnauthorizedProvider:
+        def configured(self, kind):
+            return True
+        def submit(self, brief):
+            calls.append("unauthorized")
+            raise providers.ProviderTransportError("http_403")
+
+    class SecondProvider:
+        def configured(self, kind):
+            return True
+        def submit(self, brief):
+            calls.append("second")
+            return CreativeJob(
+                provider="second",
+                kind=brief.kind,
+                status="queued",
+                external_id="j2",
+            )
+
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.provider_order",
+        lambda *_args, **_kwargs: ("unauthorized", "second"),
+    )
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.build_provider",
+        lambda name: UnauthorizedProvider() if name == "unauthorized" else SecondProvider(),
+    )
+    monkeypatch.delenv("VISUAL_ALLOW_PROVIDER_FAILOVER_AFTER_ERROR", raising=False)
+
+    job = VisualCreativeEngine(enabled=True).submit(
+        CreativeBrief(kind="image", prompt="x")
+    )
+
+    assert job.provider == "second"
+    assert calls == ["unauthorized", "second"]
+
+
+def test_explicit_provider_does_not_escape_auth_rejection(monkeypatch):
+    from visual_provider_gateway.engine import VisualCreativeEngine
+
+    calls = []
+
+    class UnauthorizedProvider:
+        def configured(self, kind):
+            return True
+        def submit(self, brief):
+            calls.append("unauthorized")
+            raise providers.ProviderTransportError("http_401")
+
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.provider_order",
+        lambda *_args, **_kwargs: ("unauthorized", "second"),
+    )
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.build_provider",
+        lambda _name: UnauthorizedProvider(),
+    )
+    monkeypatch.delenv("VISUAL_ALLOW_PROVIDER_FAILOVER_AFTER_ERROR", raising=False)
+
+    job = VisualCreativeEngine(enabled=True).submit(
+        CreativeBrief(
+            kind="image",
+            prompt="x",
+            preferred_provider="unauthorized",
+        )
+    )
+
+    assert job.status == "failed"
+    assert job.error_code == "visual_provider_submit_http_401"
+    assert calls == ["unauthorized"]
 
 
 def test_submit_can_failover_only_with_explicit_operator_opt_in(monkeypatch):
@@ -324,22 +447,74 @@ def test_submit_never_exposes_unstructured_transport_error_text(monkeypatch):
     assert secret_marker not in rendered
 
 
-def test_yandexart_motion_video_uses_image_operation_and_preserves_video_contract(monkeypatch):
-    from visual_provider_gateway.providers import YandexArtMotionVideoProvider
+def test_yandexart_uses_current_alice_images_api(monkeypatch, tmp_path):
+    from visual_provider_gateway.providers import YandexArtProvider
 
     observed = {}
+    encoded = base64.b64encode(b"png-bytes").decode("ascii")
 
-    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0):
+    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0, ca_bundle_file=""):
         observed.update({"method": method, "url": url, "headers": headers, "payload": payload})
-        return {"id": "operation-1"}
+        return {"data": [{"b64_json": encoded}]}
 
     monkeypatch.setattr(providers, "_json_request", fake_json_request)
+    provider = YandexArtProvider(
+        ProviderConfig(
+            name="yandexart",
+            base_url="https://ai.api.cloud.yandex.net",
+            api_key="test",
+            folder_id="folder",
+            model_image="art://folder/aliceai-image-art-3.0",
+            output_dir=str(tmp_path),
+        )
+    )
+    job = provider.submit(
+        CreativeBrief(kind="image", prompt="new sink advertising image", aspect_ratio="16:9")
+    )
+
+    assert observed["url"].endswith("/v1/images/generations")
+    assert observed["headers"]["OpenAI-Project"] == "folder"
+    assert observed["payload"]["model"] == "art://folder/aliceai-image-art-3.0"
+    assert observed["payload"]["size"] == "1536x1024"
+    assert job.status == "succeeded"
+    assert job.mime_type == "image/png"
+    assert Path(job.asset_path).read_bytes() == b"png-bytes"
+
+
+def test_yandexart_motion_video_renders_current_alice_keyframe(monkeypatch, tmp_path):
+    from visual_provider_gateway.providers import YandexArtMotionVideoProvider, YandexArtProvider
+
+    source = tmp_path / "keyframe.png"
+    source.write_bytes(b"png")
+    target = tmp_path / "motion.mp4"
+
+    def fake_image_submit(_self, brief):
+        return CreativeJob(
+            provider="yandexart",
+            kind="image",
+            status="succeeded",
+            external_id="image-1",
+            model="art://folder/aliceai-image-art-3.0",
+            mime_type="image/png",
+            asset_path=str(source),
+        )
+
+    def fake_render(_config, **kwargs):
+        assert kwargs["image_path"] == str(source)
+        assert kwargs["duration_seconds"] == 7
+        assert kwargs["aspect_ratio"] == "16:9"
+        target.write_bytes(b"mp4")
+        return str(target)
+
+    monkeypatch.setattr(YandexArtProvider, "submit", fake_image_submit)
+    monkeypatch.setattr(providers, "_render_motion_video", fake_render)
     provider = YandexArtMotionVideoProvider(
         ProviderConfig(
             name="yandexart_motion",
-            base_url="https://ai.api.cloud.yandex.net:443",
             api_key="test",
-            model_image="art://folder/yandex-art/latest",
+            folder_id="folder",
+            model_image="art://folder/aliceai-image-art-3.0",
+            output_dir=str(tmp_path),
         )
     )
     job = provider.submit(
@@ -350,54 +525,97 @@ def test_yandexart_motion_video_uses_image_operation_and_preserves_video_contrac
             aspect_ratio="16:9",
         )
     )
-    assert observed["url"].endswith("/foundationModels/v1/imageGenerationAsync")
+
+    assert job.status == "succeeded"
     assert job.provider == "yandexart_motion"
     assert job.kind == "video"
-    assert job.status == "queued"
-    assert job.provider_payload["duration_seconds"] == 7
-    assert job.provider_payload["aspect_ratio"] == "16:9"
-
-
-def test_yandexart_motion_poll_converts_keyframe_and_removes_source(monkeypatch, tmp_path):
-    from visual_provider_gateway.models import CreativeJob
-    from visual_provider_gateway.providers import YandexArtMotionVideoProvider, YandexArtProvider
-
-    source = tmp_path / "keyframe.jpg"
-    source.write_bytes(b"jpeg")
-    target = tmp_path / "motion.mp4"
-
-    def fake_image_poll(_self, job):
-        job.status = "succeeded"
-        job.mime_type = "image/jpeg"
-        job.asset_path = str(source)
-        return job
-
-    def fake_render(_config, **kwargs):
-        assert kwargs["image_path"] == str(source)
-        assert kwargs["duration_seconds"] == 5
-        assert kwargs["aspect_ratio"] == "1:1"
-        target.write_bytes(b"mp4")
-        return str(target)
-
-    monkeypatch.setattr(YandexArtProvider, "poll", fake_image_poll)
-    monkeypatch.setattr(providers, "_render_motion_video", fake_render)
-    provider = YandexArtMotionVideoProvider(
-        ProviderConfig(name="yandexart_motion", api_key="test", model_image="art://folder/model")
-    )
-    job = CreativeJob(
-        provider="yandexart_motion",
-        kind="video",
-        status="running",
-        external_id="operation-1",
-        provider_payload={"duration_seconds": 5, "aspect_ratio": "1:1"},
-    )
-    result = provider.poll(job)
-    assert result.status == "succeeded"
-    assert result.kind == "video"
-    assert result.provider == "yandexart_motion"
-    assert result.mime_type == "video/mp4"
-    assert result.asset_path == str(target)
+    assert job.mime_type == "video/mp4"
+    assert job.asset_path == str(target)
     assert source.exists() is False
+
+
+def test_yandex_model_candidate_failover_after_deprecated_model(monkeypatch, tmp_path):
+    from visual_provider_gateway.providers import YandexArtProvider
+
+    calls = []
+    encoded = base64.b64encode(b"new-model").decode("ascii")
+
+    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0, ca_bundle_file=""):
+        calls.append(payload["model"])
+        if payload["model"].endswith("/yandex-art-2.0"):
+            raise providers.ProviderTransportError("http_403")
+        return {"data": [{"b64_json": encoded}]}
+
+    monkeypatch.setenv(
+        "YANDEX_ART_MODEL_CANDIDATES",
+        "art://folder/aliceai-image-art-3.0",
+    )
+    monkeypatch.setattr(providers, "_json_request", fake_json_request)
+    provider = YandexArtProvider(
+        ProviderConfig(
+            name="yandexart",
+            base_url="https://ai.api.cloud.yandex.net",
+            api_key="key",
+            folder_id="folder",
+            model_image="art://folder/yandex-art-2.0",
+            output_dir=str(tmp_path),
+        )
+    )
+
+    job = provider.submit(CreativeBrief(kind="image", prompt="x"))
+
+    assert calls == [
+        "art://folder/yandex-art-2.0",
+        "art://folder/aliceai-image-art-3.0",
+    ]
+    assert job.status == "succeeded"
+    assert job.model == "art://folder/aliceai-image-art-3.0"
+
+
+def test_definitive_provider_rejection_opens_circuit_and_skips_next_request(monkeypatch):
+    from visual_provider_gateway.engine import VisualCreativeEngine
+
+    calls = []
+
+    class BrokenProvider:
+        def configured(self, kind):
+            return True
+
+        def submit(self, brief):
+            calls.append("broken")
+            raise providers.ProviderTransportError("http_403")
+
+    class SecondProvider:
+        def configured(self, kind):
+            return True
+
+        def submit(self, brief):
+            calls.append("second")
+            return CreativeJob(
+                provider="second",
+                kind=brief.kind,
+                status="succeeded",
+                model="m2",
+            )
+
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.provider_order",
+        lambda *_args, **_kwargs: ("broken", "second"),
+    )
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.build_provider",
+        lambda name: BrokenProvider() if name == "broken" else SecondProvider(),
+    )
+    engine = VisualCreativeEngine(enabled=True)
+
+    first = engine.submit(CreativeBrief(kind="image", prompt="x"))
+    second = engine.submit(CreativeBrief(kind="image", prompt="y"))
+
+    assert first.provider == "second"
+    assert second.provider == "second"
+    assert calls == ["broken", "second", "second"]
+    runtime = engine.runtime_snapshot()
+    assert "broken" in runtime["circuits_open_seconds"]
 
 
 def test_visual_provider_gateway_image_contains_ffmpeg_contract():

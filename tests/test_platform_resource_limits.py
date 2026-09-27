@@ -7,6 +7,31 @@ import pytest
 
 from clientplatform.runtime import platform_resource_monitor as monitor
 from services import platform_resource_limits as limits
+from services import visual_provider_health as provider_health
+from services import yandex_billing_health as billing_health
+
+
+
+
+@pytest.fixture(autouse=True)
+def _stable_visual_provider_health(monkeypatch):
+    monkeypatch.setattr(
+        monitor,
+        "get_visual_provider_health_snapshot",
+        lambda: provider_health.VisualProviderHealthSnapshot(
+            available=True,
+            configured_image=("yandexart",),
+            configured_video=("yandexart_motion",),
+        ),
+    )
+    monkeypatch.setattr(
+        monitor,
+        "get_yandex_billing_snapshot",
+        lambda: billing_health.YandexBillingSnapshot(
+            configured=False,
+            available=False,
+        ),
+    )
 
 
 def _snapshot(*, used: int = 0, limit: int = 30) -> limits.PlatformResourceSnapshot:
@@ -281,6 +306,143 @@ def test_resource_operator_chat_ids_accept_private_and_group_ids(monkeypatch):
     )
 
     assert monitor._resource_alert_chat_ids() == (-100987654321, 123)
+
+
+
+def test_provider_watch_alerts_on_model_lifecycle_fallback_and_circuit():
+    snapshot = provider_health.VisualProviderHealthSnapshot(
+        available=True,
+        configured_image=("yandexart", "gigachat"),
+        configured_video=("yandexart_motion",),
+        models={
+            "yandexart": {
+                "model": "art://folder/yandex-art-2.0",
+                "model_id": "yandex-art-2.0",
+                "deprecated_at": "2026-09-07",
+                "days_remaining": -20,
+                "replacement": "aliceai-image-art-3.0",
+                "status": "deprecated",
+            }
+        },
+        runtime={
+            "image": {
+                "provider": "gigachat",
+                "model": "GigaChat-2-Pro",
+                "error_code": "",
+                "updated_at_epoch": 100,
+                "failover": True,
+            },
+            "circuits_open_seconds": {"yandexart": 850},
+        },
+    )
+
+    state, alerts = monitor._provider_state_and_alerts(snapshot, {})
+
+    rendered = "\n".join(alerts)
+    assert "Модель уже снята с поддержки" in rendered
+    assert "aliceai-image-art-3.0" in rendered
+    assert "Сработал автоматический fallback" in rendered
+    assert "gigachat" in rendered
+    assert "circuit breaker" in rendered
+    assert state["runtime"]["image"]["provider"] == "gigachat"
+
+
+def test_billing_watch_alerts_when_real_balance_crosses_threshold(monkeypatch):
+    from decimal import Decimal
+
+    monkeypatch.setenv("YANDEX_BILLING_ALERT_THRESHOLDS", "5000,2000,1000,500,100,0")
+    snapshot = billing_health.YandexBillingSnapshot(
+        configured=True,
+        available=True,
+        active=True,
+        balance=Decimal("450"),
+        currency="RUB",
+    )
+
+    state, alerts = monitor._billing_state_and_alerts(
+        snapshot,
+        {
+            "configured": True,
+            "available": True,
+            "active": True,
+            "balance": "1500",
+            "currency": "RUB",
+        },
+    )
+
+    rendered = "\n".join(alerts)
+    assert "заканчиваются деньги" in rendered
+    assert "450 RUB" in rendered
+    assert "500 RUB" in rendered
+    assert state["balance"] == "450"
+
+
+def test_billing_watch_reports_telemetry_loss_and_recovery():
+    lost = billing_health.YandexBillingSnapshot(
+        configured=True,
+        available=False,
+        error_code="yandex_billing_http_401",
+    )
+    lost_state, alerts = monitor._billing_state_and_alerts(
+        lost,
+        {"configured": True, "available": True, "balance": "1000"},
+    )
+    assert "Billing telemetry недоступна" in "\n".join(alerts)
+
+    from decimal import Decimal
+
+    recovered = billing_health.YandexBillingSnapshot(
+        configured=True,
+        available=True,
+        active=True,
+        balance=Decimal("1000"),
+        currency="RUB",
+    )
+    _state, recovery_alerts = monitor._billing_state_and_alerts(recovered, lost_state)
+    assert "Billing telemetry восстановилась" in "\n".join(recovery_alerts)
+
+
+def test_provider_watch_reports_model_change_and_recovery_once():
+    previous = {
+        "available": False,
+        "configured_image": [],
+        "configured_video": [],
+        "models": {
+            "yandexart": {
+                "model": "art://folder/yandex-art-2.0",
+                "model_id": "yandex-art-2.0",
+                "lifecycle_level": 5,
+                "deprecated_at": "2026-09-07",
+            }
+        },
+        "runtime": {},
+        "circuits": {},
+    }
+    snapshot = provider_health.VisualProviderHealthSnapshot(
+        available=True,
+        configured_image=("yandexart",),
+        configured_video=("yandexart_motion",),
+        models={
+            "yandexart": {
+                "model": "art://folder/aliceai-image-art-3.0",
+                "model_id": "aliceai-image-art-3.0",
+                "deprecated_at": "",
+                "days_remaining": None,
+                "replacement": "",
+                "status": "active",
+            }
+        },
+        runtime={},
+    )
+
+    current, alerts = monitor._provider_state_and_alerts(snapshot, previous)
+    rendered = "\n".join(alerts)
+    assert "Gateway восстановился" in rendered
+    assert "Модель генерации автоматически/операторски изменена" in rendered
+    assert "aliceai-image-art-3.0" in rendered
+
+    _again, repeated = monitor._provider_state_and_alerts(snapshot, current)
+    assert repeated == []
 
 
 def test_monitor_loop_survives_database_driver_error(monkeypatch):

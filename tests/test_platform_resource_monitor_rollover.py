@@ -4,6 +4,15 @@ import asyncio
 
 from clientplatform.runtime import platform_resource_monitor as monitor
 from services import platform_resource_limits as limits
+from services import visual_provider_health as provider_health
+
+
+def _stable_provider_snapshot():
+    return provider_health.VisualProviderHealthSnapshot(
+        available=True,
+        configured_image=("yandexart",),
+        configured_video=("yandexart_motion",),
+    )
 
 
 def test_pending_threshold_delivery_survives_utc_day_rollover(monkeypatch):
@@ -41,6 +50,11 @@ def test_pending_threshold_delivery_survives_utc_day_rollover(monkeypatch):
         saved.update(value)
 
     monkeypatch.setattr(monitor, "get_platform_resource_snapshot", lambda: snapshot)
+    monkeypatch.setattr(
+        monitor,
+        "get_visual_provider_health_snapshot",
+        _stable_provider_snapshot,
+    )
     monkeypatch.setattr(monitor, "_load_state", lambda: dict(saved))
     monkeypatch.setattr(monitor, "_save_state", save)
     monkeypatch.setattr(monitor, "_superadmin_ids", lambda: (101, 202))

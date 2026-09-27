@@ -14,7 +14,11 @@ from aiogram.types import (
     WebAppInfo,
 )
 
-from clientplatform.application.activity_directions import list_activity_directions
+from clientplatform.application.activity_directions import (
+    get_activity_direction,
+    list_activity_direction_bindings,
+    list_activity_directions,
+)
 from clientplatform.application.activity import (
     claim_customer_invite,
     complete_business_profile,
@@ -65,6 +69,7 @@ from clientplatform.application.tenancy import (
     list_accessible_businesses,
     resolve_tenant_context,
 )
+from clientplatform.domain.activity_directions import DirectionSubjectKind
 from clientplatform.domain.activity import (
     ACTIVITY_CONNECTORS,
     ActivityError,
@@ -85,6 +90,8 @@ from clientplatform.runtime.cockpit_links import cockpit_web_app_url
 from clientplatform.runtime.control_bot import control_bot_enabled
 from config.settings import settings
 from services.accounts.identity import resolve_account_for_identity
+
+from . import clientplatform_direction_context as direction_context
 
 router = Router(name="clientplatform_control")
 
@@ -807,16 +814,33 @@ async def start_offering(callback: CallbackQuery, state: FSMContext) -> None:
     business_id = _token_uuid(business_token)
     actor = await _actor(int(callback.from_user.id), business_id)
     directions = await asyncio.to_thread(list_activity_directions, actor=actor)
-    await state.clear()
-    await state.update_data(
+    context = await direction_context.read_direction_context(
+        state,
         business_id=business_id,
-        capability_id=_token_uuid(capability_token),
     )
+    selected_direction_id = (
+        context.direction_id
+        if context is not None and context.direction_id in {item.id for item in directions}
+        else None
+    )
+    await state.clear()
+    state_data = {
+        "business_id": business_id,
+        "capability_id": _token_uuid(capability_token),
+    }
+    if selected_direction_id is not None:
+        state_data["direction_id"] = selected_direction_id
+    await state.update_data(**state_data)
     await callback.answer()
-    if not directions:
+    if selected_direction_id is not None or not directions:
         await state.set_state(ClientPlatformControlState.offering_title)
         await _callback_message(callback).answer(
-            "Как называется консультация, услуга или предложение?"
+            (
+                f"🧭 Направление: {context.title}\n\n"
+                if context is not None and selected_direction_id is not None
+                else ""
+            )
+            + "Как называется консультация, услуга или предложение?"
         )
         return
     rows = [
@@ -1340,11 +1364,69 @@ async def send_program_to_customer(callback: CallbackQuery, state: FSMContext) -
 
 
 @router.callback_query(F.data.startswith("cp:results:"))
-async def show_results(callback: CallbackQuery) -> None:
-    business_id = _token_uuid(str(callback.data).split(":", 2)[2])
+async def show_results(
+    callback: CallbackQuery,
+    state: FSMContext | None = None,
+) -> None:
+    parts = str(callback.data).split(":")
+    if len(parts) not in {3, 4}:
+        await callback.answer("Кнопка устарела.", show_alert=True)
+        return
+    business_id = _token_uuid(parts[2])
     actor = await _actor(_callback_actor_user_id(callback), business_id)
+    context = None
+    if len(parts) == 4:
+        direction = await asyncio.to_thread(
+            get_activity_direction,
+            actor=actor,
+            direction_id=_token_uuid(parts[3]),
+        )
+        if state is not None:
+            context = await direction_context.set_direction_context(
+                state,
+                business_id=business_id,
+                direction_id=direction.id,
+                title=direction.title,
+            )
+        else:
+            context = direction_context.DirectionContext(
+                business_id=business_id,
+                direction_id=direction.id,
+                title=direction.title,
+            )
+    elif state is not None:
+        context = await direction_context.read_direction_context(
+            state,
+            business_id=business_id,
+        )
+
+    progress = await asyncio.to_thread(list_business_program_progress, actor=actor, limit=50)
+    if context is not None:
+        bindings = await asyncio.to_thread(
+            list_activity_direction_bindings,
+            actor=actor,
+            direction_id=context.direction_id,
+            subject_kind=DirectionSubjectKind.PROGRAM,
+        )
+        program_ids = {item.subject_id for item in bindings}
+        progress = [item for item in progress if item.program_id in program_ids][:15]
+        progress_lines = "\n".join(
+            f"• {item.customer_display_name or 'Клиент'}: {item.program_title} — "
+            f"{item.completed_lessons}/{item.total_lessons} ({item.percent_complete}%)"
+            for item in progress
+        ) or "По программам этого направления пока нет прогресса."
+        await callback.answer()
+        await _callback_message(callback).answer(
+            direction_context.direction_heading(context)
+            + "📊 Результаты\n\n"
+            f"Связано программ: {len(program_ids)}\n"
+            f"Клиентов с прогрессом: {len({item.customer_id for item in progress})}\n\n"
+            f"Прогресс клиентов\n{progress_lines}"
+        )
+        return
+
     summary = await asyncio.to_thread(business_delivery_summary, actor=actor)
-    progress = await asyncio.to_thread(list_business_program_progress, actor=actor, limit=15)
+    progress = progress[:15]
     progress_lines = "\n".join(
         f"• {item.customer_display_name or 'Клиент'}: {item.program_title} — "
         f"{item.completed_lessons}/{item.total_lessons} ({item.percent_complete}%)"

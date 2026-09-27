@@ -12,6 +12,11 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
 
+from clientplatform.application.activity_directions import (
+    get_activity_direction,
+    list_activity_direction_bindings,
+    list_activity_directions,
+)
 from clientplatform.application.cockpit import cockpit_navigation
 from clientplatform.application.growth_cockpit import GrowthAction, get_growth_cockpit
 from clientplatform.application.ad_connections import (
@@ -25,6 +30,7 @@ from clientplatform.application.ad_connections import (
 from clientplatform.application.promotions import create_slot_promotion, promotion_public_url
 from clientplatform.application.public_business_entry import public_business_entry_url
 from clientplatform.domain.ad_connections import AdConnectionError, AdConnectionStatus
+from clientplatform.domain.activity_directions import ActivityDirectionStatus, DirectionSubjectKind
 from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
 from clientplatform.domain.tenancy import PlatformRole, TenantPermissionDenied
@@ -35,6 +41,7 @@ from config.settings import settings
 
 from . import clientplatform_ad_connections as ad
 from . import clientplatform_control as control
+from . import clientplatform_direction_context as direction_context
 from . import clientplatform_goal_first_safety as goal_contract
 from . import clientplatform_simple_experience as simple
 from .clientplatform_message_target import ClientPlatformMessageTarget
@@ -432,7 +439,12 @@ async def _choose_connection(
     )
 
 
-async def _advertisable_offerings(actor, *, capabilities=None) -> list:
+async def _advertisable_offerings(
+    actor,
+    *,
+    capabilities=None,
+    direction_id: str | None = None,
+) -> list:
     if capabilities is None:
         capabilities = await asyncio.to_thread(
             control.list_business_capabilities,
@@ -450,11 +462,23 @@ async def _advertisable_offerings(actor, *, capabilities=None) -> list:
             and capability.status == control.CapabilityStatus.ACTIVE
         ]
     )
+    allowed_ids: set[str] | None = None
+    if direction_id is not None:
+        bindings = await asyncio.to_thread(
+            list_activity_direction_bindings,
+            actor=actor,
+            direction_id=direction_id,
+            subject_kind=DirectionSubjectKind.OFFERING,
+        )
+        allowed_ids = {item.subject_id for item in bindings}
+
     seen: set[str] = set()
     result = []
     for group in groups:
         for offering in group:
             if offering.id in seen:
+                continue
+            if allowed_ids is not None and offering.id not in allowed_ids:
                 continue
             seen.add(offering.id)
             result.append(offering)
@@ -587,6 +611,42 @@ async def _start_slot_ad(
     )
 
 
+async def _activate_direction_from_callback(
+    callback: CallbackQuery,
+    state: FSMContext | None,
+    *,
+    business_id: str,
+    direction_token: str | None,
+):
+    if direction_token:
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        direction = await asyncio.to_thread(
+            get_activity_direction,
+            actor=actor,
+            direction_id=control._token_uuid(direction_token),
+        )
+        if direction.status != ActivityDirectionStatus.ACTIVE:
+            raise ValueError("activity direction is not active")
+        if state is None:
+            return direction_context.DirectionContext(
+                business_id=business_id,
+                direction_id=direction.id,
+                title=direction.title,
+            )
+        return await direction_context.set_direction_context(
+            state,
+            business_id=business_id,
+            direction_id=direction.id,
+            title=direction.title,
+        )
+    if state is None:
+        return None
+    return await direction_context.read_direction_context(
+        state,
+        business_id=business_id,
+    )
+
+
 @router.callback_query(F.data.startswith("cpo:next:"))
 async def open_next_actions(callback: CallbackQuery) -> None:
     token = str(callback.data).split(":", 2)[2]
@@ -631,7 +691,10 @@ async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> N
     business_id = control._token_uuid(token)
     actor = await control._actor(int(callback.from_user.id), business_id)
     actor.assert_can_manage_promotions()
-    await state.clear()
+    context = await direction_context.clear_flow_preserving_direction(
+        state,
+        business_id=business_id,
+    )
     # Preserve permission/error feedback before acknowledging the callback, then
     # close the Telegram spinner before the heavier capability/offering reads.
     await callback.answer()
@@ -639,10 +702,17 @@ async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> N
         control.list_business_capabilities,
         actor=actor,
     )
-    offerings = await _advertisable_offerings(
-        actor,
-        capabilities=capabilities,
-    )
+    if context is None:
+        offerings = await _advertisable_offerings(
+            actor,
+            capabilities=capabilities,
+        )
+    else:
+        offerings = await _advertisable_offerings(
+            actor,
+            capabilities=capabilities,
+            direction_id=context.direction_id,
+        )
     creation_capability = next(
         (
             item
@@ -682,7 +752,8 @@ async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> N
         rows.append([("🧰 Настроить услуги", f"cpj:services:{token}")])
     rows.extend(_popup_navigation_rows(token, back_callback=f"cpo:ads:{token}"))
     await control._callback_message(callback).answer(
-        "🎯 Что рекламировать\n\n"
+        direction_context.direction_heading(context)
+        + "🎯 Что рекламировать\n\n"
         "Создайте новую услугу / предложение или выберите уже существующее.",
         reply_markup=control._keyboard(rows),
     )
@@ -690,6 +761,63 @@ async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> N
 
 @router.callback_query(F.data.startswith("cpo:offer:"))
 async def choose_one_click_offering(callback: CallbackQuery, state: FSMContext) -> None:
+    _, _, business_token, offering_token = str(callback.data).split(":", 3)
+    business_id = control._token_uuid(business_token)
+    offering_id = control._token_uuid(offering_token)
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    actor.assert_can_manage_promotions()
+    context = (
+        None
+        if state is None
+        else await direction_context.read_direction_context(
+            state,
+            business_id=business_id,
+        )
+    )
+    offerings = await _advertisable_offerings(
+        actor,
+        direction_id=context.direction_id if context is not None else None,
+    )
+    offering = next((item for item in offerings if item.id == offering_id), None)
+    if offering is None:
+        await callback.answer("Эта услуга больше недоступна", show_alert=True)
+        return
+
+    await state.update_data(
+        business_id=business_id,
+        business_token=business_token,
+        selected_offering_id=str(offering.id),
+        selected_offering_title=str(offering.title),
+    )
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        direction_context.direction_heading(context)
+        + f"🎯 Рекламируем «{offering.title}»\n\n"
+        "Что хотите сделать дальше? Дата и время нужны только если Вы "
+        "рекламируете конкретное окно записи.",
+        reply_markup=control._keyboard(
+            [
+                [("🎨 Подготовить рекламный материал", f"cpo:ad-materials:{business_token}")],
+                [("📡 Выбрать канал продвижения", f"cpa:home:{business_token}")],
+                [("💰 Бюджет и запуск", f"cpsp:home:{business_token}")],
+                [
+                    (
+                        "📅 Привязать дату и время",
+                        f"cpo:offertime:{business_token}:{offering_token}",
+                    )
+                ],
+                [("⬅️ Что рекламировать", f"cpo:start:{business_token}")],
+                *_popup_navigation_rows(
+                    business_token,
+                    back_callback=f"cpo:ads:{business_token}",
+                ),
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:offertime:"))
+async def choose_offering_ad_time(callback: CallbackQuery, state: FSMContext) -> None:
     _, _, business_token, offering_token = str(callback.data).split(":", 3)
     business_id = control._token_uuid(business_token)
     offering_id = control._token_uuid(offering_token)
@@ -703,6 +831,7 @@ async def choose_one_click_offering(callback: CallbackQuery, state: FSMContext) 
     if offering is None:
         await callback.answer("Эта услуга больше недоступна", show_alert=True)
         return
+
     open_slots = [
         item
         for item in slots
@@ -711,7 +840,6 @@ async def choose_one_click_offering(callback: CallbackQuery, state: FSMContext) 
     ]
     await callback.answer()
     if not open_slots:
-        await state.clear()
         await state.update_data(business_id=business_id, offering_id=offering_id)
         profile = await asyncio.to_thread(control.get_business_profile, actor=actor)
         booking = importlib.import_module(".clientplatform_booking_wizard_ux", __package__)
@@ -741,8 +869,11 @@ async def choose_one_click_offering(callback: CallbackQuery, state: FSMContext) 
                     f"cpo:newtime:{business_token}:{offering_token}",
                 )
             ],
-            [("⬅️ Другая услуга", f"cpo:start:{business_token}")],
-            *_popup_navigation_rows(business_token, back_callback=f"cpo:start:{business_token}"),
+            [("⬅️ Без привязки ко времени", f"cpo:offer:{business_token}:{offering_token}")],
+            *_popup_navigation_rows(
+                business_token,
+                back_callback=f"cpo:offer:{business_token}:{offering_token}",
+            ),
         ]
     )
     await control._callback_message(callback).answer(
@@ -948,11 +1079,19 @@ def _client_tools_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], 
     return rows, help_lines
 
 
-async def _send_client_tools(message: ClientPlatformMessageTarget, *, token: str, actor) -> None:
+async def _send_client_tools(
+    message: ClientPlatformMessageTarget,
+    *,
+    token: str,
+    actor,
+    context=None,
+) -> None:
     rows, help_lines = _client_tools_rows(token, actor)
     body = "\n".join(line for line in help_lines if line) or "Для Вашей роли здесь сейчас нет доступных действий."
     await message.answer(
-        "👥 Клиенты и продажи\n\nЕсли Вам нужно:\n" + body,
+        direction_context.direction_heading(context)
+        + "👥 Клиенты и продажи\n\nЕсли Вам нужно:\n"
+        + body,
         reply_markup=control._keyboard(rows),
     )
 
@@ -1178,7 +1317,13 @@ async def _send_integration_tools(message: ClientPlatformMessageTarget, *, token
     )
 
 
-async def _send_work_tools(message: ClientPlatformMessageTarget, *, token: str, actor) -> None:
+async def _send_work_tools(
+    message: ClientPlatformMessageTarget,
+    *,
+    token: str,
+    actor,
+    context=None,
+) -> None:
     if not (
         _allowed(actor, actor.assert_can_view_customer_records)
         or _allowed(actor, actor.assert_can_manage_programs)
@@ -1189,7 +1334,8 @@ async def _send_work_tools(message: ClientPlatformMessageTarget, *, token: str, 
         )
         return
     await message.answer(
-        "📅 Запись и календарь\n\n"
+        direction_context.direction_heading(context)
+        + "📅 Запись и календарь\n\n"
         "Если Вам нужно:\n"
         "• настроить то, что можно заказать → «🧰 Мои услуги»\n"
         "• открыть или проверить время → «📅 Мой календарь»\n"
@@ -1218,10 +1364,29 @@ async def open_more(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("cpo:clients:"))
-async def open_client_tools(callback: CallbackQuery) -> None:
-    token = str(callback.data).split(":", 2)[2]
-    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
-    await _send_client_tools(control._callback_message(callback), token=token, actor=actor)
+async def open_client_tools(
+    callback: CallbackQuery,
+    state: FSMContext | None = None,
+) -> None:
+    parts = str(callback.data).split(":")
+    if len(parts) not in {3, 4}:
+        await callback.answer("Кнопка устарела.", show_alert=True)
+        return
+    token = parts[2]
+    business_id = control._token_uuid(token)
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    context = await _activate_direction_from_callback(
+        callback,
+        state,
+        business_id=business_id,
+        direction_token=parts[3] if len(parts) == 4 else None,
+    )
+    await _send_client_tools(
+        control._callback_message(callback),
+        token=token,
+        actor=actor,
+        context=context,
+    )
 
 
 @router.callback_query(F.data.startswith("cpo:content:"))
@@ -1274,10 +1439,29 @@ async def open_integration_tools(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("cpo:work:"))
-async def open_work_tools(callback: CallbackQuery) -> None:
-    token = str(callback.data).split(":", 2)[2]
-    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
-    await _send_work_tools(control._callback_message(callback), token=token, actor=actor)
+async def open_work_tools(
+    callback: CallbackQuery,
+    state: FSMContext | None = None,
+) -> None:
+    parts = str(callback.data).split(":")
+    if len(parts) not in {3, 4}:
+        await callback.answer("Кнопка устарела.", show_alert=True)
+        return
+    token = parts[2]
+    business_id = control._token_uuid(token)
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    context = await _activate_direction_from_callback(
+        callback,
+        state,
+        business_id=business_id,
+        direction_token=parts[3] if len(parts) == 4 else None,
+    )
+    await _send_work_tools(
+        control._callback_message(callback),
+        token=token,
+        actor=actor,
+        context=context,
+    )
 
 
 async def send_one_click_section(
@@ -1385,12 +1569,25 @@ async def send_one_click_section(
     raise ValueError("unsupported cockpit section")
 
 @router.callback_query(F.data.startswith("cpo:ad-materials:"))
-async def open_ad_materials(callback: CallbackQuery) -> None:
+async def open_ad_materials(
+    callback: CallbackQuery,
+    state: FSMContext | None = None,
+) -> None:
     token = str(callback.data).split(":", 2)[2]
-    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    business_id = control._token_uuid(token)
+    actor = await control._actor(int(callback.from_user.id), business_id)
     actor.assert_can_manage_promotions()
+    context = (
+        None
+        if state is None
+        else await direction_context.read_direction_context(
+            state,
+            business_id=business_id,
+        )
+    )
     await control._callback_message(callback).answer(
-        "🎨 Рекламный материал\n\n"
+        direction_context.direction_heading(context)
+        + "🎨 Рекламный материал\n\n"
         "Сначала выберите, что хотите подготовить. Своё изображение или видео также "
         "можно загрузить в безопасном мастере запуска рекламы.",
         reply_markup=control._keyboard(
@@ -1406,24 +1603,98 @@ async def open_ad_materials(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("cpo:ads:"))
-async def open_ad_tools(callback: CallbackQuery) -> None:
-    token = str(callback.data).split(":", 2)[2]
-    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
+async def open_ad_tools(
+    callback: CallbackQuery,
+    state: FSMContext | None = None,
+) -> None:
+    parts = str(callback.data).split(":")
+    if len(parts) not in {3, 4}:
+        await callback.answer("Кнопка устарела.", show_alert=True)
+        return
+    token = parts[2]
+    business_id = control._token_uuid(token)
+    actor = await control._actor(int(callback.from_user.id), business_id)
     actor.assert_can_manage_promotions()
+    direction_token = parts[3] if len(parts) == 4 else None
+    force_all = direction_token == "all"
+    if force_all:
+        if state is not None:
+            await direction_context.clear_direction_context(state)
+        context = None
+    else:
+        context = await _activate_direction_from_callback(
+            callback,
+            state,
+            business_id=business_id,
+            direction_token=direction_token,
+        )
+    if context is None and not force_all and state is not None:
+        directions = await asyncio.to_thread(list_activity_directions, actor=actor)
+        if len(directions) == 1:
+            direction = directions[0]
+            context = await direction_context.set_direction_context(
+                state,
+                business_id=business_id,
+                direction_id=direction.id,
+                title=direction.title,
+            )
+        elif len(directions) > 1:
+            await callback.answer()
+            await control._callback_message(callback).answer(
+                "📣 Реклама и продвижение\n\n"
+                "Что хотите продвигать?",
+                reply_markup=control._keyboard(
+                    [
+                        [("🌐 Весь бизнес", f"cpo:adsall:{token}")],
+                        *[
+                            [
+                                (
+                                    f"🧭 {direction.title[:40]}",
+                                    f"cpo:ads:{token}:{control._uuid_token(direction.id)}",
+                                )
+                            ]
+                            for direction in directions
+                        ],
+                        *_popup_navigation_rows(token, back_callback=f"cpj:home:{token}"),
+                    ]
+                ),
+            )
+            return
+
+    rows = [
+        [("🎯 Что рекламировать", f"cpo:start:{token}")],
+        [("🎨 Рекламный материал", f"cpo:ad-materials:{token}")],
+        [("📡 Где рекламировать", f"cpa:home:{token}")],
+        [("💰 Бюджет и запуск", f"cpsp:home:{token}")],
+        [("📊 Что дала реклама", f"cpy:a:{token}:30")],
+    ]
+    if context is not None:
+        rows.extend(
+            [
+                [("🌐 Перейти ко всему бизнесу", f"cpo:adsall:{token}")],
+                [("🧭 Сменить направление", f"cp:dirs:{token}")],
+            ]
+        )
+    rows.extend(_popup_navigation_rows(token, back_callback=f"cpj:home:{token}"))
     await control._callback_message(callback).answer(
-        "📣 Реклама и продвижение\n\n"
+        direction_context.direction_heading(context)
+        + "📣 Реклама и продвижение\n\n"
         "Идите сверху вниз: сначала выберите или создайте предложение, затем материал, "
         "после этого рекламный канал, и только потом бюджет и запуск.",
-        reply_markup=control._keyboard(
-            [
-                [("🎯 Что рекламировать", f"cpo:start:{token}")],
-                [("🎨 Рекламный материал", f"cpo:ad-materials:{token}")],
-                [("📡 Где рекламировать", f"cpa:home:{token}")],
-                [("💰 Бюджет и запуск", f"cpsp:home:{token}")],
-                [("📊 Что дала реклама", f"cpy:a:{token}:30")],
-                *_popup_navigation_rows(token, back_callback=f"cpj:home:{token}"),
-            ]
-        ),
+        reply_markup=control._keyboard(rows),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:adsall:"))
+async def open_all_business_ad_tools(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    await direction_context.clear_direction_context(state)
+    await open_ad_tools(
+        simple._routed_callback(callback, f"cpo:ads:{token}:all"),
+        state,
     )
 
 

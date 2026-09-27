@@ -306,23 +306,14 @@ async def _create_slot_and_resume(
 
 @router.callback_query(F.data.startswith(goal_contract.ACQUIRE_CLIENTS.callback_prefix))
 async def get_clients_goal(callback: CallbackQuery, state: FSMContext) -> None:
-    business_token = str(callback.data).split(":", 2)[2]
-    business_id = control._token_uuid(business_token)
-    actor = await control._actor(int(callback.from_user.id), business_id)
-    slots = await asyncio.to_thread(control.list_booking_slots, actor=actor)
-    if any(item.slot.status == BookingSlotStatus.OPEN for item in slots):
-        await one_click.get_clients_one_click(callback, state)
-        return
+    """Enter advertising without forcing appointment scheduling.
 
-    await callback.answer("Готовлю всё сам…")
-    await state.clear()
-    await _begin_missing_schedule(
-        callback,
-        state,
-        actor=actor,
-        business_id=business_id,
-        business_token=business_token,
-    )
+    A business may promote a product, course, subscription, application or any
+    other offer that has no bookable time at all. Booking remains available as
+    an explicit optional step after the owner chooses what to advertise.
+    """
+
+    await one_click.get_clients_one_click(callback, state)
 
 
 @router.callback_query(F.data.startswith("cpo:offers:"))
