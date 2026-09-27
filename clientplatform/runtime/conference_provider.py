@@ -212,6 +212,10 @@ class ExternalHttpsRoomProvider:
         self.key = normalized
         self.room_url = str(room_url).strip()
 
+    def _validate_ref(self, conference: ConferenceRef) -> None:
+        if conference.provider_key.casefold() != self.key:
+            raise ValueError("conference reference belongs to a different provider")
+
     async def capabilities(self, *, tenant_id: str) -> ConferenceCapabilities:
         del tenant_id
         return ConferenceCapabilities(
@@ -277,7 +281,8 @@ class ExternalHttpsRoomProvider:
     async def issue_join(
         self, conference: ConferenceRef, **kwargs: object
     ) -> ConferenceJoin:
-        del conference, kwargs
+        self._validate_ref(conference)
+        del kwargs
         return ConferenceJoin(url=self.room_url)
 
     async def attendance(
