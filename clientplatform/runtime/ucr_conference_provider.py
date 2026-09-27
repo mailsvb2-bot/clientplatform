@@ -65,6 +65,44 @@ def _result(response: Mapping[str, Any]) -> Mapping[str, Any]:
     return result
 
 
+def _protobuf_bool(value: object, *, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ConferenceProviderUnavailable(
+            f"UCR conference {field_name} must be boolean"
+        )
+    return value
+
+
+def _protobuf_uint(
+    value: object,
+    *,
+    field_name: str,
+    maximum: int = 2**32 - 1,
+) -> int:
+    if isinstance(value, bool):
+        raise ConferenceProviderUnavailable(
+            f"UCR conference {field_name} must be an unsigned integer"
+        )
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str):
+        raw = value.strip()
+        if not raw or not raw.isascii() or not raw.isdecimal():
+            raise ConferenceProviderUnavailable(
+                f"UCR conference {field_name} must be an unsigned integer"
+            )
+        parsed = int(raw, 10)
+    else:
+        raise ConferenceProviderUnavailable(
+            f"UCR conference {field_name} must be an unsigned integer"
+        )
+    if parsed < 0 or parsed > maximum:
+        raise ConferenceProviderUnavailable(
+            f"UCR conference {field_name} is out of range"
+        )
+    return parsed
+
+
 def _protobuf_bytes(value: object, *, field_name: str) -> bytes:
     if not isinstance(value, str):
         raise ConferenceProviderUnavailable(
@@ -116,18 +154,34 @@ class UcrConferenceProvider:
         raw = _result(response).get("capabilities")
         if not isinstance(raw, Mapping):
             raise ConferenceProviderUnavailable("UCR capabilities are unavailable")
-        production_realtime = bool(
-            raw.get("browserRealtimeGateway")
-            and raw.get("productionWebrtc")
-            and raw.get("turn")
+        browser_gateway = _protobuf_bool(
+            raw.get("browserRealtimeGateway"),
+            field_name="capabilities.browserRealtimeGateway",
         )
+        production_webrtc = _protobuf_bool(
+            raw.get("productionWebrtc"),
+            field_name="capabilities.productionWebrtc",
+        )
+        turn = _protobuf_bool(
+            raw.get("turn"),
+            field_name="capabilities.turn",
+        )
+        recording = _protobuf_bool(
+            raw.get("recording", False),
+            field_name="capabilities.recording",
+        )
+        max_participants = _protobuf_uint(
+            raw.get("maxParticipants", 0),
+            field_name="capabilities.maxParticipants",
+        )
+        production_realtime = browser_gateway and production_webrtc and turn
         return ConferenceCapabilities(
             provider_key=self.key,
             managed_rooms=True,
             join_link=production_realtime,
             attendance=True,
-            recording=bool(raw.get("recording")),
-            max_participants=int(raw.get("maxParticipants") or 0) or None,
+            recording=recording,
+            max_participants=max_participants or None,
             production_realtime=production_realtime,
         )
 
@@ -384,8 +438,21 @@ class UcrConferenceProvider:
                 "UCR attendance participant does not match request"
             )
         return ConferenceAttendance(
-            connected=bool(raw.get("connected")),
-            total_connected_seconds=int(raw.get("totalConnectedSeconds") or 0),
-            join_count=int(raw.get("joinCount") or 0),
-            reconnect_count=int(raw.get("reconnectCount") or 0),
+            connected=_protobuf_bool(
+                raw.get("connected", False),
+                field_name="attendance.connected",
+            ),
+            total_connected_seconds=_protobuf_uint(
+                raw.get("totalConnectedSeconds", 0),
+                field_name="attendance.totalConnectedSeconds",
+                maximum=10 * 366 * 24 * 60 * 60,
+            ),
+            join_count=_protobuf_uint(
+                raw.get("joinCount", 0),
+                field_name="attendance.joinCount",
+            ),
+            reconnect_count=_protobuf_uint(
+                raw.get("reconnectCount", 0),
+                field_name="attendance.reconnectCount",
+            ),
         )
