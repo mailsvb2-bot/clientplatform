@@ -222,68 +222,51 @@ class YandexArtProvider:
     def submit(self, brief: CreativeBrief) -> CreativeJob:
         if not self.configured(brief.kind):
             raise ProviderTransportError("provider_not_configured")
-        width, height = _ratio_pair(brief.aspect_ratio)
-        model_uri = self.config.model_image or f"art://{self.config.folder_id}/yandex-art/latest"
-        payload: dict[str, Any] = {
-            "modelUri": model_uri,
-            "generationOptions": {
-                "aspectRatio": {"widthRatio": str(width), "heightRatio": str(height)},
-            },
-            "messages": [{"text": brief.prompt}],
-        }
-        if brief.seed is not None:
-            payload["generationOptions"]["seed"] = int(brief.seed)
+        model_uri = self.config.model_image or f"art://{self.config.folder_id}/aliceai-image-art-3.0"
         data = _json_request(
             "POST",
-            self.config.base_url.rstrip("/") + "/foundationModels/v1/imageGenerationAsync",
-            headers={"Authorization": self._authorization()},
-            payload=payload,
+            self.config.base_url.rstrip("/") + "/v1/images/generations",
+            headers={
+                "Authorization": self._authorization(),
+                "OpenAI-Project": self.config.folder_id,
+            },
+            payload={
+                "model": model_uri,
+                "prompt": brief.prompt,
+                "size": _openai_image_size(brief.aspect_ratio),
+            },
             timeout=self.config.timeout_seconds,
             max_bytes=self.config.max_json_bytes,
         )
-        operation_id = str(data.get("id") or "").strip()
-        if not operation_id:
-            raise ProviderTransportError("missing_operation_id")
-        return CreativeJob(
+        rows = data.get("data") if isinstance(data.get("data"), list) else []
+        row = rows[0] if rows and isinstance(rows[0], dict) else {}
+        encoded = str(row.get("b64_json") or "")
+        job = CreativeJob(
             provider="yandexart",
             kind="image",
-            status="queued",
-            external_id=operation_id,
+            status="succeeded",
+            external_id=uuid.uuid4().hex,
             model=model_uri,
-            provider_payload={"operation_id": operation_id},
+            mime_type="image/png",
         )
+        if encoded:
+            try:
+                raw = base64.b64decode(encoded, validate=True)
+            except (binascii.Error, ValueError, TypeError):
+                job.status = "failed"
+                job.error_code = "invalid_image_encoding"
+                return job
+            return _store_asset(self.config, job, raw)
+        url = str(row.get("url") or "").strip()
+        if url:
+            job.media_url = url
+            return _download_asset(self.config, job, url)
+        job.status = "failed"
+        job.error_code = "missing_image"
+        return job
 
     def poll(self, job: CreativeJob) -> CreativeJob:
-        data = _json_request(
-            "GET",
-            "https://operation.api.cloud.yandex.net:443/operations/" + urllib.parse.quote(job.external_id),
-            headers={"Authorization": self._authorization()},
-            timeout=self.config.timeout_seconds,
-            max_bytes=self.config.max_json_bytes,
-        )
-        if data.get("done") is not True:
-            job.status = "running"
-            return job
-        error = data.get("error")
-        if error:
-            job.status = "failed"
-            job.error_code = "provider_error"
-            return job
-        response = data.get("response") if isinstance(data.get("response"), dict) else {}
-        encoded = str(response.get("image") or "")
-        if not encoded:
-            job.status = "failed"
-            job.error_code = "missing_image"
-            return job
-        try:
-            raw = base64.b64decode(encoded, validate=True)
-        except (binascii.Error, ValueError, TypeError):
-            job.status = "failed"
-            job.error_code = "invalid_image_encoding"
-            return job
-        job.status = "succeeded"
-        job.mime_type = "image/jpeg"
-        return _store_asset(self.config, job, raw)
+        return job
 
 
 def _motion_dimensions(ratio: str) -> tuple[int, int]:
@@ -377,8 +360,7 @@ class YandexArtMotionVideoProvider(YandexArtProvider):
     def submit(self, brief: CreativeBrief) -> CreativeJob:
         if not self.configured(brief.kind):
             raise ProviderTransportError("provider_not_configured")
-        image_provider = YandexArtProvider(self.config)
-        image_job = image_provider.submit(
+        image_job = YandexArtProvider(self.config).submit(
             CreativeBrief(
                 kind="image",
                 prompt=brief.prompt,
@@ -391,22 +373,13 @@ class YandexArtMotionVideoProvider(YandexArtProvider):
                 metadata=dict(brief.metadata or {}),
             )
         )
-        image_job.provider = "yandexart_motion"
-        image_job.kind = "video"
-        image_job.model = f"{image_job.model}+motion"
-        image_job.provider_payload["duration_seconds"] = max(
-            2, min(int(brief.duration_seconds or 5), 15)
-        )
-        image_job.provider_payload["aspect_ratio"] = str(brief.aspect_ratio or "1:1")
-        return image_job
-
-    def poll(self, job: CreativeJob) -> CreativeJob:
-        image_job = YandexArtProvider(self.config).poll(job)
         if image_job.status != "succeeded":
+            image_job.provider = "yandexart_motion"
+            image_job.kind = "video"
             return image_job
         image_path = image_job.asset_path
-        duration = int(image_job.provider_payload.get("duration_seconds") or 5)
-        aspect_ratio = str(image_job.provider_payload.get("aspect_ratio") or "1:1")
+        duration = max(2, min(int(brief.duration_seconds or 5), 15))
+        aspect_ratio = str(brief.aspect_ratio or "1:1")
         try:
             video_path = _render_motion_video(
                 self.config,
@@ -428,11 +401,15 @@ class YandexArtMotionVideoProvider(YandexArtProvider):
                 Path(image_path).unlink(missing_ok=True)
         image_job.kind = "video"
         image_job.provider = "yandexart_motion"
+        image_job.model = f"{image_job.model}+motion"
         image_job.mime_type = "video/mp4"
         image_job.asset_path = video_path
         image_job.error_code = ""
         image_job.status = "succeeded"
         return image_job
+
+    def poll(self, job: CreativeJob) -> CreativeJob:
+        return job
 
 
 class GigaChatImageProvider:
