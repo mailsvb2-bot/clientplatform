@@ -774,17 +774,64 @@ async def choose_one_click_offering(callback: CallbackQuery, state: FSMContext) 
             business_id=business_id,
         )
     )
-    offerings, slots = await asyncio.gather(
-        _advertisable_offerings(
-            actor,
-            direction_id=context.direction_id if context is not None else None,
+    offerings = await _advertisable_offerings(
+        actor,
+        direction_id=context.direction_id if context is not None else None,
+    )
+    offering = next((item for item in offerings if item.id == offering_id), None)
+    if offering is None:
+        await callback.answer("Эта услуга больше недоступна", show_alert=True)
+        return
+
+    await state.update_data(
+        business_id=business_id,
+        business_token=business_token,
+        selected_offering_id=str(offering.id),
+        selected_offering_title=str(offering.title),
+    )
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        direction_context.direction_heading(context)
+        + f"🎯 Рекламируем «{offering.title}»\n\n"
+        "Что хотите сделать дальше? Дата и время нужны только если Вы "
+        "рекламируете конкретное окно записи.",
+        reply_markup=control._keyboard(
+            [
+                [("🎨 Подготовить рекламный материал", f"cpo:ad-materials:{business_token}")],
+                [("📡 Выбрать канал продвижения", f"cpa:home:{business_token}")],
+                [("💰 Бюджет и запуск", f"cpsp:home:{business_token}")],
+                [
+                    (
+                        "📅 Привязать дату и время",
+                        f"cpo:offertime:{business_token}:{offering_token}",
+                    )
+                ],
+                [("⬅️ Что рекламировать", f"cpo:start:{business_token}")],
+                *_popup_navigation_rows(
+                    business_token,
+                    back_callback=f"cpo:ads:{business_token}",
+                ),
+            ]
         ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:offertime:"))
+async def choose_offering_ad_time(callback: CallbackQuery, state: FSMContext) -> None:
+    _, _, business_token, offering_token = str(callback.data).split(":", 3)
+    business_id = control._token_uuid(business_token)
+    offering_id = control._token_uuid(offering_token)
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    actor.assert_can_manage_promotions()
+    offerings, slots = await asyncio.gather(
+        _advertisable_offerings(actor),
         asyncio.to_thread(control.list_booking_slots, actor=actor),
     )
     offering = next((item for item in offerings if item.id == offering_id), None)
     if offering is None:
         await callback.answer("Эта услуга больше недоступна", show_alert=True)
         return
+
     open_slots = [
         item
         for item in slots
@@ -793,7 +840,6 @@ async def choose_one_click_offering(callback: CallbackQuery, state: FSMContext) 
     ]
     await callback.answer()
     if not open_slots:
-        await state.clear()
         await state.update_data(business_id=business_id, offering_id=offering_id)
         profile = await asyncio.to_thread(control.get_business_profile, actor=actor)
         booking = importlib.import_module(".clientplatform_booking_wizard_ux", __package__)
@@ -823,8 +869,11 @@ async def choose_one_click_offering(callback: CallbackQuery, state: FSMContext) 
                     f"cpo:newtime:{business_token}:{offering_token}",
                 )
             ],
-            [("⬅️ Другая услуга", f"cpo:start:{business_token}")],
-            *_popup_navigation_rows(business_token, back_callback=f"cpo:start:{business_token}"),
+            [("⬅️ Без привязки ко времени", f"cpo:offer:{business_token}:{offering_token}")],
+            *_popup_navigation_rows(
+                business_token,
+                back_callback=f"cpo:offer:{business_token}:{offering_token}",
+            ),
         ]
     )
     await control._callback_message(callback).answer(
