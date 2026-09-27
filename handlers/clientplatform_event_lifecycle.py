@@ -770,6 +770,8 @@ async def open_webinar_live_room(callback: CallbackQuery) -> None:
                 ConferenceProviderError,
                 UcrGatewayError,
                 LookupError,
+                OSError,
+                RuntimeError,
                 ValueError,
             ):
                 managed_failed = True
