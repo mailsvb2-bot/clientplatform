@@ -126,6 +126,16 @@ def test_yandexart_can_use_explicit_model_uri_without_separate_folder():
     assert provider.configured("image") is True
 
 
+def test_legacy_yandex_latest_uri_is_marked_deprecated():
+    from visual_provider_gateway.engine import _model_lifecycle
+
+    lifecycle = _model_lifecycle("art://folder/yandex-art/latest")
+
+    assert lifecycle["status"] == "deprecated"
+    assert lifecycle["deprecated_at"] == "2026-09-07"
+    assert lifecycle["replacement"] == "aliceai-image-art-3.0"
+
+
 def test_yandex_api_key_wins_over_stale_iam_token(monkeypatch):
     from visual_provider_gateway.engine import provider_configs
     from visual_provider_gateway.providers import YandexArtProvider
