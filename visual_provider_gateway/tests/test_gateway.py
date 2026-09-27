@@ -301,7 +301,6 @@ def test_snapshot_hides_providers_with_open_circuits(tmp_path, monkeypatch):
             "video": {},
             "circuits_open_seconds": {
                 "yandexart": 600,
-                "yandexart_motion": 600,
             },
         }
     )
