@@ -442,6 +442,13 @@ class EventRepository:
             UPDATE clientplatform_event_registrations
             SET first_join_click_at=COALESCE(first_join_click_at,?)
             WHERE id=? AND event_id=? AND business_id=? AND status='registered'
+              AND EXISTS(
+                  SELECT 1
+                  FROM clientplatform_events AS active_event
+                  WHERE active_event.id=clientplatform_event_registrations.event_id
+                    AND active_event.business_id=clientplatform_event_registrations.business_id
+                    AND active_event.status='published'
+              )
             """,
             (timestamp.isoformat(), registration.id, event.id, event.business_id),
         )
