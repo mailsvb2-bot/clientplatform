@@ -24,6 +24,11 @@ from services.visual_provider_health import (
     VisualProviderHealthSnapshot,
     get_visual_provider_health_snapshot,
 )
+from services.yandex_billing_health import (
+    YandexBillingSnapshot,
+    crossed_balance_threshold,
+    get_yandex_billing_snapshot,
+)
 
 
 log = logging.getLogger(__name__)
@@ -482,13 +487,71 @@ async def _deliver_provider_alerts(
     return not failed
 
 
+def _billing_state_and_alerts(
+    snapshot: YandexBillingSnapshot,
+    previous: dict[str, Any] | None,
+) -> tuple[dict[str, Any], list[str]]:
+    prev = previous if isinstance(previous, dict) else {}
+    if not snapshot.configured:
+        return {"configured": False}, []
+
+    current: dict[str, Any] = {
+        "configured": True,
+        "available": snapshot.available,
+        "active": snapshot.active,
+        "currency": snapshot.currency,
+        "balance": "" if snapshot.balance is None else str(snapshot.balance),
+        "error_code": snapshot.error_code,
+    }
+    alerts: list[str] = []
+
+    if not snapshot.available:
+        if bool(prev.get("available", True)) or str(prev.get("error_code") or "") != snapshot.error_code:
+            alerts.append(
+                "🟠 Yandex Billing telemetry недоступна\n"
+                f"Причина: {snapshot.error_code or 'unknown'}\n"
+                "Проверка реального денежного баланса временно невозможна."
+            )
+        return current, alerts
+
+    if prev.get("configured") and not bool(prev.get("available", True)):
+        alerts.append("🟢 Yandex Billing telemetry восстановилась.")
+
+    if not snapshot.active and prev.get("active") is not False:
+        alerts.append(
+            "🔴 Платёжный аккаунт Yandex Cloud неактивен. "
+            "Платные генерации могут остановиться."
+        )
+
+    previous_balance = None
+    raw_previous_balance = str(prev.get("balance") or "").strip()
+    if raw_previous_balance:
+        try:
+            from decimal import Decimal
+            previous_balance = Decimal(raw_previous_balance)
+        except Exception:  # validator: allow-wide-except
+            previous_balance = None
+
+    if snapshot.balance is not None:
+        threshold = crossed_balance_threshold(snapshot.balance, previous_balance)
+        if threshold is not None:
+            alerts.append(
+                "💰 Yandex Cloud: заканчиваются деньги\n"
+                f"Баланс: {snapshot.balance} {snapshot.currency or ''}\n"
+                f"Порог: {threshold} {snapshot.currency or ''}"
+            )
+
+    return current, alerts
+
+
 async def _tick(bot: Any) -> None:
     global _last_error
     global _last_tick_monotonic
 
-    snapshot, provider_snapshot = await asyncio.gather(
+    snapshot, provider_snapshot, billing_snapshot = await asyncio.gather(
         asyncio.to_thread(get_platform_resource_snapshot),
         asyncio.to_thread(get_visual_provider_health_snapshot),
+        asyncio.to_thread(get_yandex_billing_snapshot),
     )
     state = await asyncio.to_thread(_load_state)
     today = datetime.now(timezone.utc).date().isoformat()
@@ -506,6 +569,20 @@ async def _tick(bot: Any) -> None:
         await asyncio.to_thread(_save_state, state)
     elif state.get("provider_state") != provider_state:
         state["provider_state"] = provider_state
+
+    billing_state, billing_alerts = _billing_state_and_alerts(
+        billing_snapshot,
+        state.get("billing_state") if isinstance(state, dict) else None,
+    )
+    if billing_alerts:
+        if not await _deliver_provider_alerts(bot, alerts=billing_alerts):
+            _last_error = "yandex_billing_alert_delivery_failed"
+            _last_tick_monotonic = time.monotonic()
+            return
+        state["billing_state"] = billing_state
+        await asyncio.to_thread(_save_state, state)
+    elif state.get("billing_state") != billing_state:
+        state["billing_state"] = billing_state
 
     if not snapshot.telemetry_available:
         error_code = snapshot.error_code or "visual_gateway_usage_unavailable"
@@ -532,6 +609,7 @@ async def _tick(bot: Any) -> None:
             "telemetry_day": "",
             "telemetry_error": "",
             "provider_state": state.get("provider_state", provider_state),
+            "billing_state": state.get("billing_state", billing_state),
         }
 
     previous_levels = state.get("levels") if isinstance(state.get("levels"), dict) else {}
@@ -561,6 +639,7 @@ async def _tick(bot: Any) -> None:
             "telemetry_day": "",
             "telemetry_error": "",
             "provider_state": provider_state,
+            "billing_state": billing_state,
         },
     )
     _last_error = ""
