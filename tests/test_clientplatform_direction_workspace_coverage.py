@@ -51,6 +51,10 @@ class FakeState:
     def __init__(self, data: dict[str, Any] | None = None) -> None:
         self.data: Any = dict(data or {})
         self.clear_count = 0
+        self.states: list[Any] = []
+
+    async def set_state(self, value: Any) -> None:
+        self.states.append(value)
 
     async def get_data(self) -> Any:
         return self.data
