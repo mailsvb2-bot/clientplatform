@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from types import SimpleNamespace
-
 from services import yandex_billing_health as billing
 
 
