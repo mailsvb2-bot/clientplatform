@@ -208,7 +208,15 @@ class YandexArtProvider:
     def _authorization(self) -> str:
         scheme = str(os.getenv("YANDEX_ART_AUTH_SCHEME", "") or "").strip()
         if not scheme:
-            scheme = "Bearer" if str(os.getenv("YANDEX_ART_IAM_TOKEN", "") or "").strip() else "Api-Key"
+            # Prefer the durable API key when both credentials are present.
+            # A stale IAM token must not shadow a valid long-lived API key.
+            scheme = (
+                "Api-Key"
+                if str(os.getenv("YANDEX_API_KEY", "") or "").strip()
+                else "Bearer"
+                if str(os.getenv("YANDEX_ART_IAM_TOKEN", "") or "").strip()
+                else "Api-Key"
+            )
         return f"{scheme} {self.config.api_key}"
 
     def submit(self, brief: CreativeBrief) -> CreativeJob:
