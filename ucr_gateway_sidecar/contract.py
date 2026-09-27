@@ -35,6 +35,19 @@ CALL_REQUEST_TYPES = {
     "SignalCall": "CallSignalRequest",
 }
 UNIVERSAL_CONFERENCE_REQUEST_TYPES = {
+    "CreateConference": "UniversalCreateConferenceRequest",
+    "ResolveConference": "UniversalResolveConferenceRequest",
+    "GetConference": "UniversalGetConferenceRequest",
+    "TransitionConference": "UniversalConferenceLifecycleRequest",
+    "SetEntryOpen": "UniversalSetEntryOpenRequest",
+    "EnsureParticipant": "UniversalEnsureParticipantRequest",
+    "EnsureParticipantDevice": "UniversalEnsureParticipantDeviceRequest",
+    "UpdateParticipant": "UniversalUpdateParticipantRequest",
+    "RemoveParticipant": "UniversalRemoveParticipantRequest",
+    "ListParticipants": "UniversalListParticipantsRequest",
+    "PrepareConferenceRuntime": "UniversalPrepareConferenceRuntimeRequest",
+    "IssueJoinGrant": "UniversalIssueJoinGrantRequest",
+    "RevokeJoinGrant": "UniversalRevokeJoinGrantRequest",
     "GetParticipantAttendance": "UniversalGetParticipantAttendanceRequest",
     "GetCapabilities": "UniversalGetCapabilitiesRequest",
 }
@@ -48,6 +61,16 @@ MUTATING_METHODS = frozenset(
         (UCR_INTEGRATION_SERVICE, "CreateCommunicationIntent"),
         (UCR_CALL_SERVICE, "StartCall"),
         (UCR_CALL_SERVICE, "SignalCall"),
+        (UCR_UNIVERSAL_CONFERENCE_SERVICE, "CreateConference"),
+        (UCR_UNIVERSAL_CONFERENCE_SERVICE, "TransitionConference"),
+        (UCR_UNIVERSAL_CONFERENCE_SERVICE, "SetEntryOpen"),
+        (UCR_UNIVERSAL_CONFERENCE_SERVICE, "EnsureParticipant"),
+        (UCR_UNIVERSAL_CONFERENCE_SERVICE, "EnsureParticipantDevice"),
+        (UCR_UNIVERSAL_CONFERENCE_SERVICE, "UpdateParticipant"),
+        (UCR_UNIVERSAL_CONFERENCE_SERVICE, "RemoveParticipant"),
+        (UCR_UNIVERSAL_CONFERENCE_SERVICE, "PrepareConferenceRuntime"),
+        (UCR_UNIVERSAL_CONFERENCE_SERVICE, "IssueJoinGrant"),
+        (UCR_UNIVERSAL_CONFERENCE_SERVICE, "RevokeJoinGrant"),
     }
 )
 
