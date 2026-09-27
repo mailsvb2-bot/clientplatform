@@ -351,5 +351,14 @@ class VisualGatewayService:
 
     def snapshot(self, country_code: str = "") -> dict[str, Any]:
         payload = dict(provider_snapshot(self._effective_country(country_code)))
-        payload["runtime"] = self.engine.runtime_snapshot()
+        runtime_snapshot = getattr(self.engine, "runtime_snapshot", None)
+        payload["runtime"] = (
+            runtime_snapshot()
+            if callable(runtime_snapshot)
+            else {
+                "image": {},
+                "video": {},
+                "circuits_open_seconds": {},
+            }
+        )
         return payload
