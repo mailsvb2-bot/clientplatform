@@ -7,6 +7,22 @@ import pytest
 
 from clientplatform.runtime import platform_resource_monitor as monitor
 from services import platform_resource_limits as limits
+from services import visual_provider_health as provider_health
+
+
+
+
+@pytest.fixture(autouse=True)
+def _stable_visual_provider_health(monkeypatch):
+    monkeypatch.setattr(
+        monitor,
+        "get_visual_provider_health_snapshot",
+        lambda: provider_health.VisualProviderHealthSnapshot(
+            available=True,
+            configured_image=("yandexart",),
+            configured_video=("yandexart_motion",),
+        ),
+    )
 
 
 def _snapshot(*, used: int = 0, limit: int = 30) -> limits.PlatformResourceSnapshot:
@@ -281,6 +297,88 @@ def test_resource_operator_chat_ids_accept_private_and_group_ids(monkeypatch):
     )
 
     assert monitor._resource_alert_chat_ids() == (-100987654321, 123)
+
+
+
+def test_provider_watch_alerts_on_model_lifecycle_fallback_and_circuit():
+    snapshot = provider_health.VisualProviderHealthSnapshot(
+        available=True,
+        configured_image=("yandexart", "gigachat"),
+        configured_video=("yandexart_motion",),
+        models={
+            "yandexart": {
+                "model": "art://folder/yandex-art-2.0",
+                "model_id": "yandex-art-2.0",
+                "deprecated_at": "2026-09-07",
+                "days_remaining": -20,
+                "replacement": "aliceai-image-art-3.0",
+                "status": "deprecated",
+            }
+        },
+        runtime={
+            "image": {
+                "provider": "gigachat",
+                "model": "GigaChat-2-Pro",
+                "error_code": "",
+                "updated_at_epoch": 100,
+                "failover": True,
+            },
+            "circuits_open_seconds": {"yandexart": 850},
+        },
+    )
+
+    state, alerts = monitor._provider_state_and_alerts(snapshot, {})
+
+    rendered = "\n".join(alerts)
+    assert "Модель уже снята с поддержки" in rendered
+    assert "aliceai-image-art-3.0" in rendered
+    assert "Сработал автоматический fallback" in rendered
+    assert "gigachat" in rendered
+    assert "circuit breaker" in rendered
+    assert state["runtime"]["image"]["provider"] == "gigachat"
+
+
+def test_provider_watch_reports_model_change_and_recovery_once():
+    previous = {
+        "available": False,
+        "configured_image": [],
+        "configured_video": [],
+        "models": {
+            "yandexart": {
+                "model": "art://folder/yandex-art-2.0",
+                "model_id": "yandex-art-2.0",
+                "lifecycle_level": 5,
+                "deprecated_at": "2026-09-07",
+            }
+        },
+        "runtime": {},
+        "circuits": {},
+    }
+    snapshot = provider_health.VisualProviderHealthSnapshot(
+        available=True,
+        configured_image=("yandexart",),
+        configured_video=("yandexart_motion",),
+        models={
+            "yandexart": {
+                "model": "art://folder/aliceai-image-art-3.0",
+                "model_id": "aliceai-image-art-3.0",
+                "deprecated_at": "",
+                "days_remaining": None,
+                "replacement": "",
+                "status": "active",
+            }
+        },
+        runtime={},
+    )
+
+    current, alerts = monitor._provider_state_and_alerts(snapshot, previous)
+    rendered = "\n".join(alerts)
+    assert "Gateway восстановился" in rendered
+    assert "Модель генерации автоматически/операторски изменена" in rendered
+    assert "aliceai-image-art-3.0" in rendered
+
+    _again, repeated = monitor._provider_state_and_alerts(snapshot, current)
+    assert repeated == []
 
 
 def test_monitor_loop_survives_database_driver_error(monkeypatch):
