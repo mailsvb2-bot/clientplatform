@@ -21,6 +21,7 @@ def _clear_provider_routing(monkeypatch):
         "VISUAL_ALLOW_REQUEST_PROVIDER_OVERRIDE",
         "VISUAL_IMAGE_PROVIDER",
         "VISUAL_VIDEO_PROVIDER",
+        "VISUAL_VIDEO_MOTION_PRIMARY",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -28,7 +29,7 @@ def _clear_provider_routing(monkeypatch):
 def test_ru_defaults_keep_global_clouds_out(monkeypatch):
     _clear_provider_routing(monkeypatch)
     assert provider_order("image", "RU") == ("yandexart", "gigachat", "selfhosted")
-    assert provider_order("video", "RU") == ("selfhosted", "yandexart_motion")
+    assert provider_order("video", "RU") == ("selfhosted", "selfhosted_backup", "yandexart_motion")
 
 
 def test_ru_video_prefers_native_providers_before_motion_fallback(monkeypatch):
@@ -36,6 +37,7 @@ def test_ru_video_prefers_native_providers_before_motion_fallback(monkeypatch):
     monkeypatch.setenv("VISUAL_ALLOW_GLOBAL_PROVIDERS_IN_RU", "1")
     assert provider_order("video", "RU") == (
         "selfhosted",
+        "selfhosted_backup",
         "runway",
         "openai",
         "yandexart_motion",
@@ -45,7 +47,7 @@ def test_ru_video_prefers_native_providers_before_motion_fallback(monkeypatch):
 def test_operator_can_explicitly_restore_motion_first(monkeypatch):
     _clear_provider_routing(monkeypatch)
     monkeypatch.setenv("VISUAL_VIDEO_MOTION_PRIMARY", "1")
-    assert provider_order("video", "RU") == ("yandexart_motion", "selfhosted")
+    assert provider_order("video", "RU") == ("yandexart_motion", "selfhosted", "selfhosted_backup")
 
 
 def test_global_defaults_prefer_runway_for_video(monkeypatch):
@@ -210,7 +212,20 @@ def test_provider_snapshot_reports_motion_fallback_mode(monkeypatch):
     monkeypatch.setenv("YANDEX_API_KEY", "key")
     monkeypatch.setenv("YANDEX_ART_FOLDER_ID", "folder")
     monkeypatch.delenv("VISUAL_SELFHOST_BASE_URL", raising=False)
+    monkeypatch.delenv("VISUAL_SELFHOST_BACKUP_BASE_URL", raising=False)
 
+    class Catalog:
+        configured = True
+        available = True
+        current_model_present = True
+        art_models = ("art://folder/aliceai-image-art-3.0",)
+        all_model_count = 1
+        error_code = ""
+
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.get_yandex_model_catalog",
+        lambda _config: Catalog(),
+    )
     snapshot = provider_snapshot("RU")
 
     assert snapshot["video_generation_mode"] == "motion"
@@ -253,6 +268,50 @@ def test_submit_does_not_failover_after_ambiguous_provider_error_by_default(monk
     job = VisualCreativeEngine(enabled=True).submit(CreativeBrief(kind="image", prompt="x"))
     assert job.status == "failed"
     assert calls == ["broken"]
+
+
+def test_submit_fails_over_after_proven_connection_refusal(monkeypatch):
+    from visual_provider_gateway.engine import VisualCreativeEngine
+    from visual_provider_gateway.models import CreativeJob
+
+    calls = []
+
+    class UnreachableProvider:
+        def configured(self, kind):
+            return True
+
+        def submit(self, brief):
+            calls.append("primary")
+            raise providers.ProviderTransportError("connect_unreachable")
+
+    class BackupProvider:
+        def configured(self, kind):
+            return True
+
+        def submit(self, brief):
+            calls.append("backup")
+            return CreativeJob(
+                provider="selfhosted_backup",
+                kind=brief.kind,
+                status="queued",
+                external_id="backup-1",
+            )
+
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.provider_order",
+        lambda *_args, **_kwargs: ("selfhosted", "selfhosted_backup"),
+    )
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.build_provider",
+        lambda name: UnreachableProvider() if name == "selfhosted" else BackupProvider(),
+    )
+
+    job = VisualCreativeEngine(enabled=True).submit(
+        CreativeBrief(kind="video", prompt="x")
+    )
+
+    assert job.provider == "selfhosted_backup"
+    assert calls == ["primary", "backup"]
 
 
 def test_submit_fails_over_after_definitive_invalid_request(monkeypatch):
