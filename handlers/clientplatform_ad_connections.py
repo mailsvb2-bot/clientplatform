@@ -37,6 +37,7 @@ from clientplatform.application.visual_creatives import (
     materialize_ad_visual,
     poll_ad_visual,
     visual_generation_ready,
+    visual_video_generation_mode,
 )
 from clientplatform.domain.ad_connections import (
     AdConnectionError,
@@ -718,11 +719,19 @@ async def _render_ad_visual(
         business_id = str(data["business_id"])
         publication_job_id = str(data["job_id"])
         country_code = os.getenv("VISUAL_DEPLOYMENT_COUNTRY", "")
-        ready = await asyncio.to_thread(
-            visual_generation_ready,
-            kind=kind,
-            country_code=country_code,
-        )
+        if kind == "video":
+            video_mode = await asyncio.to_thread(
+                visual_video_generation_mode,
+                country_code=country_code,
+            )
+            ready = video_mode != "unavailable"
+        else:
+            video_mode = ""
+            ready = await asyncio.to_thread(
+                visual_generation_ready,
+                kind=kind,
+                country_code=country_code,
+            )
         if not ready:
             await callback.answer(
                 visual_provider_unavailable_message(kind),
@@ -776,7 +785,11 @@ async def _render_ad_visual(
             return
         await state.update_data(creative_job_id="")
         caption = (
-            "Готовое рекламное видео"
+            (
+                "Оживлённая рекламная AI-картинка"
+                if job.provider == "yandexart_motion"
+                else "Готовое рекламное AI-видео"
+            )
             if job.kind == "video"
             else "Готовое рекламное изображение"
         )
@@ -870,7 +883,11 @@ async def refresh_ad_visual(callback: CallbackQuery, state: FSMContext) -> None:
             return
         await state.update_data(creative_job_id="")
         caption = (
-            "Готовое рекламное видео"
+            (
+                "Оживлённая рекламная AI-картинка"
+                if job.provider == "yandexart_motion"
+                else "Готовое рекламное AI-видео"
+            )
             if job.kind == "video"
             else "Готовое рекламное изображение"
         )
