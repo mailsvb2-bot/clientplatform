@@ -24,7 +24,7 @@ Both endpoints require:
 
 Mutating methods additionally require the validated `Idempotency-Key` already required by the ClientPlatform caller boundary. The sidecar does not invent semantic state from that key: canonical UCR IDs and UCR's durable owners remain authoritative for duplicate/conflict behavior.
 
-Only the reviewed public method whitelist from `ucr.v1.IntegrationService`, `ucr.v1.CallService` and the read-only `ucr.v1.UniversalConferenceService` attendance/capability surface in `docs/UCR_GATEWAY.md` is callable. Unknown services and methods are rejected before gRPC I/O.
+Only the reviewed public method whitelist from `ucr.v1.IntegrationService`, `ucr.v1.CallService` and the bounded `ucr.v1.UniversalConferenceService` subset in `docs/UCR_GATEWAY.md` is callable. Unknown services and methods are rejected before gRPC I/O.
 
 ## UCR Service Principal
 

@@ -53,6 +53,19 @@ class UcrCallMethod(str, Enum):
 
 
 class UcrUniversalConferenceMethod(str, Enum):
+    CREATE_CONFERENCE = "CreateConference"
+    RESOLVE_CONFERENCE = "ResolveConference"
+    GET_CONFERENCE = "GetConference"
+    TRANSITION_CONFERENCE = "TransitionConference"
+    SET_ENTRY_OPEN = "SetEntryOpen"
+    ENSURE_PARTICIPANT = "EnsureParticipant"
+    ENSURE_PARTICIPANT_DEVICE = "EnsureParticipantDevice"
+    UPDATE_PARTICIPANT = "UpdateParticipant"
+    REMOVE_PARTICIPANT = "RemoveParticipant"
+    LIST_PARTICIPANTS = "ListParticipants"
+    PREPARE_CONFERENCE_RUNTIME = "PrepareConferenceRuntime"
+    ISSUE_JOIN_GRANT = "IssueJoinGrant"
+    REVOKE_JOIN_GRANT = "RevokeJoinGrant"
     GET_PARTICIPANT_ATTENDANCE = "GetParticipantAttendance"
     GET_CAPABILITIES = "GetCapabilities"
 
@@ -68,6 +81,20 @@ _INTEGRATION_MUTATIONS = frozenset(
     }
 )
 _CALL_MUTATIONS = frozenset({UcrCallMethod.START_CALL, UcrCallMethod.SIGNAL_CALL})
+_UNIVERSAL_CONFERENCE_MUTATIONS = frozenset(
+    {
+        UcrUniversalConferenceMethod.CREATE_CONFERENCE,
+        UcrUniversalConferenceMethod.TRANSITION_CONFERENCE,
+        UcrUniversalConferenceMethod.SET_ENTRY_OPEN,
+        UcrUniversalConferenceMethod.ENSURE_PARTICIPANT,
+        UcrUniversalConferenceMethod.ENSURE_PARTICIPANT_DEVICE,
+        UcrUniversalConferenceMethod.UPDATE_PARTICIPANT,
+        UcrUniversalConferenceMethod.REMOVE_PARTICIPANT,
+        UcrUniversalConferenceMethod.PREPARE_CONFERENCE_RUNTIME,
+        UcrUniversalConferenceMethod.ISSUE_JOIN_GRANT,
+        UcrUniversalConferenceMethod.REVOKE_JOIN_GRANT,
+    }
+)
 
 
 class UcrGatewayError(RuntimeError):
@@ -242,14 +269,15 @@ class UcrGatewayClient:
         *,
         method: UcrUniversalConferenceMethod,
         request: Mapping[str, Any],
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         normalized_method = _require_enum(method, UcrUniversalConferenceMethod)
         return await self._invoke_rpc(
             service=UCR_UNIVERSAL_CONFERENCE_SERVICE,
             method=normalized_method.value,
             request=request,
-            mutating=False,
-            idempotency_key=None,
+            mutating=normalized_method in _UNIVERSAL_CONFERENCE_MUTATIONS,
+            idempotency_key=idempotency_key,
         )
 
     async def _invoke_rpc(
