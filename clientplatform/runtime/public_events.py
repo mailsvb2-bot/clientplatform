@@ -22,6 +22,10 @@ from clientplatform.application.event_public_surface import (
 from clientplatform.application.event_registration_channels import (
     issue_event_registration_channel_links_in_transaction,
 )
+from clientplatform.application.event_conference_join import (
+    issue_managed_event_session_join,
+    is_managed_event_session_provider,
+)
 from clientplatform.application.event_sessions import select_event_session_for_join
 from clientplatform.application.events import (
     EventUnavailable,
@@ -31,6 +35,8 @@ from clientplatform.application.events import (
 )
 from clientplatform.infrastructure.event_repository import EventNotFound, EventRepository
 from clientplatform.infrastructure.event_session_repository import EventSessionRepository
+from clientplatform.runtime.conference_provider import ConferenceProviderError
+from clientplatform.runtime.ucr_gateway import UcrGatewayError
 from services.db import get_db, get_db_ro
 from services.db.core import ambient_savepoint
 from services.messenger.links import build_entry_targets
@@ -558,6 +564,46 @@ async def public_event_marketing_unsubscribe_confirm(request: web.Request) -> we
     )
 
 
+def _public_event_join_context(token: str, position: int | None):
+    with get_db_ro() as conn:
+        repository = EventRepository(conn)
+        registration = repository.get_registration_by_token(token=token)
+        row = conn.execute(
+            "SELECT public_slug FROM clientplatform_events "
+            "WHERE id=? AND business_id=? AND status='published' LIMIT 1",
+            (registration.event_id, registration.business_id),
+        ).fetchone()
+        if row is None:
+            raise EventNotFound("event not found")
+        slug = str(row["public_slug"] if hasattr(row, "keys") else row[0])
+        event = repository.get_public_owner_event(public_slug=slug)
+        sessions = EventSessionRepository(conn).list_for_event_record(event=event)
+        try:
+            session = select_event_session_for_join(sessions, position=position)
+        except (LookupError, ValueError) as exc:
+            raise EventNotFound("event session not found") from exc
+        return registration, event, session
+
+
+def _mark_public_event_join_click(*, token: str, expected_registration_id: str) -> None:
+    with get_db() as conn:
+        repository = EventRepository(conn)
+        registration = repository.get_registration_by_token(token=token)
+        if registration.id != expected_registration_id:
+            raise EventNotFound("registration token changed")
+        row = conn.execute(
+            "SELECT public_slug FROM clientplatform_events "
+            "WHERE id=? AND business_id=? AND status='published' LIMIT 1",
+            (registration.event_id, registration.business_id),
+        ).fetchone()
+        if row is None:
+            raise EventNotFound("event not found")
+        event = repository.get_public_owner_event(
+            public_slug=str(row["public_slug"] if hasattr(row, "keys") else row[0])
+        )
+        repository.mark_join_click(registration=registration, event=event)
+
+
 async def public_event_join(request: web.Request) -> web.Response:
     token = str(request.match_info.get("token") or "").strip()
     raw_position = str(request.match_info.get("position") or "").strip()
@@ -569,36 +615,56 @@ async def public_event_join(request: web.Request) -> web.Response:
         return _page("Ссылка недействительна", "<h1>Ссылка недействительна</h1>", status=404)
 
     try:
-        with get_db() as conn:
-            repository = EventRepository(conn)
-            registration = repository.get_registration_by_token(token=token)
-            row = conn.execute(
-                "SELECT public_slug FROM clientplatform_events WHERE id=? AND business_id=? LIMIT 1",
-                (registration.event_id, registration.business_id),
-            ).fetchone()
-            if row is None:
-                raise EventNotFound("event not found")
-            slug = str(row["public_slug"] if hasattr(row, "keys") else row[0])
-            event = repository.get_public_owner_event(public_slug=slug)
-            sessions = EventSessionRepository(conn).list_for_event_record(event=event)
-            try:
-                session = select_event_session_for_join(sessions, position=position)
-            except (LookupError, ValueError) as exc:
-                raise EventNotFound("event session not found") from exc
-            if not session.join_is_ready or not session.join_url:
-                return _page(
-                    "Ссылка на эфир ещё не добавлена",
-                    "<h1>Ссылка на эфир появится здесь позже</h1>"
-                    "<p>Регистрация сохранена. Откройте эту же персональную ссылку ближе к началу мероприятия.</p>",
-                    status=200,
-                )
-            repository.mark_join_click(
-                registration=registration,
-                event=event,
-            )
-            location = session.join_url
+        registration, _event, session = await asyncio.to_thread(
+            _public_event_join_context,
+            token,
+            position,
+        )
     except EventNotFound:
         return _page("Ссылка недействительна", "<h1>Ссылка недействительна</h1>", status=404)
+
+    if is_managed_event_session_provider(session):
+        try:
+            join = await issue_managed_event_session_join(
+                registration=registration,
+                session=session,
+            )
+        except (ConferenceProviderError, UcrGatewayError, ValueError):
+            LOGGER.warning(
+                "managed event conference join unavailable",
+                extra={
+                    "business_id": registration.business_id,
+                    "event_id": registration.event_id,
+                    "session_id": session.id,
+                    "provider_key": session.provider_key,
+                },
+            )
+            return _page(
+                "Эфир временно недоступен",
+                "<h1>Не удалось открыть эфир</h1>"
+                "<p>Регистрация сохранена. Попробуйте открыть эту же персональную ссылку ещё раз.</p>",
+                status=503,
+            )
+        location = join.url
+    else:
+        if not session.join_is_ready or not session.join_url:
+            return _page(
+                "Ссылка на эфир ещё не добавлена",
+                "<h1>Ссылка на эфир появится здесь позже</h1>"
+                "<p>Регистрация сохранена. Откройте эту же персональную ссылку ближе к началу мероприятия.</p>",
+                status=200,
+            )
+        location = session.join_url
+
+    try:
+        await asyncio.to_thread(
+            _mark_public_event_join_click,
+            token=token,
+            expected_registration_id=registration.id,
+        )
+    except EventNotFound:
+        return _page("Ссылка недействительна", "<h1>Ссылка недействительна</h1>", status=404)
+
     return web.Response(
         status=302,
         headers={**SECURITY_HEADERS, "Location": location},

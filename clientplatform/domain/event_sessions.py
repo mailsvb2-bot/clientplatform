@@ -9,6 +9,7 @@ from clientplatform.domain.events import (
     EventValidationError,
     normalize_provider_key,
     normalize_provider_label,
+    provider_join_is_configured,
     normalize_utc,
     validate_external_https_url,
 )
@@ -71,7 +72,7 @@ class EventSession:
 
     @property
     def join_is_ready(self) -> bool:
-        return bool(self.join_url) and self.provider_key != "pending"
+        return provider_join_is_configured(self.provider_key, join_url=self.join_url)
 
 
 def legacy_event_session(event: Event) -> EventSession:

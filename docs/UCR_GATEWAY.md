@@ -21,6 +21,9 @@ The adapter is disabled by default.
 - `CLIENTPLATFORM_UCR_GATEWAY_TOKEN_REFERENCE=secret://env/CLIENTPLATFORM_SECRET_UCR_GATEWAY_TOKEN` selects the credential reference. A raw token is never valid configuration.
 - `CLIENTPLATFORM_UCR_GATEWAY_TIMEOUT_SEC` defaults to `5.0` and is bounded to 0.25..30 seconds.
 - `CLIENTPLATFORM_UCR_GATEWAY_MAX_RESPONSE_BYTES` defaults to 131072 and is bounded to 1 KiB..1 MiB.
+- `CLIENTPLATFORM_UCR_CONFERENCE_INTEGRATION_ID` selects the non-secret UCR integration
+  identifier used only by the managed conference provider. It is required before the
+  ClientPlatform webinar wizard may select the managed UCR venue.
 
 The default secret value is expected in `CLIENTPLATFORM_SECRET_UCR_GATEWAY_TOKEN`; only its `secret://env/...` reference belongs in configuration or persisted records.
 
@@ -155,11 +158,22 @@ is a shared external-room target.
 
 UCR `IssueJoinGrant` is different: it produces a participant-specific, single-use
 grant. Therefore an UCR grant MUST NOT be persisted into the shared
-`EventSession.join_url` field. A future user-facing UCR webinar hookup must issue the
-grant at the authenticated participant join/redirect boundary, after resolving the
-canonical event registration and tenant context. Until that vertical slice exists,
-this gateway is an infrastructure capability and does not claim that paid UCR-hosted
-webinars are production-ready.
+`EventSession.join_url` field.
+
+The ClientPlatform public event join boundary now implements that separation. A managed
+UCR EventSession stores `provider_key=ucr` and no shared room URL. On a valid personal
+registration join request ClientPlatform derives only opaque business-scoped identifiers
+from the canonical EventSession/registration IDs, idempotently creates/prepares the
+managed conference, ensures the attendee, requests a fresh single-use grant, revalidates
+that the registration and event are still active, records the normal ClientPlatform
+join-click signal, and redirects to the returned HTTPS grant. Name, e-mail and phone are
+not sent to UCR for this path.
+
+The wizard exposes the managed venue only as usable when both the existing gateway flag
+and `CLIENTPLATFORM_UCR_CONFERENCE_INTEGRATION_ID` are configured. Gateway/network/
+capability failures return a bounded ClientPlatform 503 page and never fall back to a
+shared or guessed room URL. Production deployment/activation is still a separate owner
+decision.
 
 `StartCall` receives the canonical UCR request supplied by the caller. ClientPlatform does not turn a short `(tenant, conversation, participants)` tuple into a fabricated `CallSession` because UCR owns the exact call model and its required authority/revision fields.
 

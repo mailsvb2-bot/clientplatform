@@ -24,6 +24,7 @@ _REGISTRATION_STATUSES = frozenset({"registered", "cancelled"})
 _PROVIDER_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _PUBLIC_SLUG_RE = re.compile(r"^[A-Za-z0-9_-]{20,96}$")
 _CAPABILITY_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
+_MANAGED_JOIN_PROVIDER_KEYS = frozenset({"ucr"})
 
 _PROVIDER_HOST_HINTS: tuple[tuple[str, str], ...] = (
     ("zoom.us", "zoom"),
@@ -164,6 +165,15 @@ def normalize_provider_label(value: object | None) -> str | None:
     return label or None
 
 
+def provider_join_is_configured(provider_key: object, *, join_url: object | None) -> bool:
+    """Return whether a provider has enough canonical configuration for join routing."""
+
+    normalized = normalize_provider_key(provider_key, join_url=join_url)
+    if normalized in _MANAGED_JOIN_PROVIDER_KEYS:
+        return True
+    return bool(str(join_url or "").strip()) and normalized != "pending"
+
+
 def new_public_slug() -> str:
     return secrets.token_urlsafe(24)
 
@@ -252,7 +262,7 @@ class Event:
 
     @property
     def join_is_ready(self) -> bool:
-        return bool(self.join_url) and self.provider_key != "pending"
+        return provider_join_is_configured(self.provider_key, join_url=self.join_url)
 
     def accepts_registrations(self, *, now: datetime | None = None) -> bool:
         current = normalize_utc(now or datetime.now(timezone.utc), field_name="now")
@@ -356,6 +366,7 @@ __all__ = [
     "normalize_phone",
     "normalize_provider_key",
     "normalize_provider_label",
+    "provider_join_is_configured",
     "normalize_registration_status",
     "normalize_timezone_name",
     "normalize_utc",
