@@ -14,11 +14,13 @@ if _HAS_AIOGRAM:
     from handlers import clientplatform_activity_directions as directions_ui
     from handlers import clientplatform_control as control
     from handlers import clientplatform_direction_context as direction_context
+    from handlers import clientplatform_program_builder as program_builder
 else:
     ActivityDirectionStatus = None
     directions_ui = None
     control = None
     direction_context = None
+    program_builder = None
 
 
 class FakeUser:
@@ -412,6 +414,133 @@ class DirectionWorkspaceCoverageTests(unittest.IsolatedAsyncioTestCase):
         stale = FakeCallback("cp:results:too:many:parts:here")
         await control.show_results(stale, FakeState())
         self.assertTrue(stale.answers[-1][1]["show_alert"])
+
+
+    async def test_small_direction_workspace_guard_branches(self) -> None:
+        assert directions_ui is not None
+        business_id = str(uuid4())
+        direction_id = str(uuid4())
+        business_token = directions_ui.control._uuid_token(business_id)
+        direction_token = directions_ui.control._uuid_token(direction_id)
+
+        class LegacyCallback:
+            def __init__(self) -> None:
+                self.data = "old"
+
+        legacy = LegacyCallback()
+        self.assertIs(
+            directions_ui._routed_callback(legacy, "new"),
+            legacy,
+        )
+        self.assertEqual(legacy.data, "new")
+
+        actor = SimpleNamespace()
+        archived = SimpleNamespace(
+            id=direction_id,
+            title="Архив",
+            status=ActivityDirectionStatus.ARCHIVED,
+        )
+
+        async def fake_actor(_user_id: int, _business_id: str):
+            return actor
+
+        callback = FakeCallback(
+            f"cp:dirarc:{business_token}:{direction_token}"
+        )
+        with (
+            patch.object(directions_ui.asyncio, "to_thread", direct_to_thread),
+            patch.object(directions_ui.control, "_actor", fake_actor),
+            patch.object(directions_ui, "get_activity_direction", return_value=archived),
+        ):
+            await directions_ui.archive_direction(callback, FakeState())
+        self.assertTrue(callback.answers[-1][1]["show_alert"])
+
+    async def test_program_direction_selection_guards_and_success_paths(self) -> None:
+        assert program_builder is not None
+        business_id = str(uuid4())
+        direction_id = str(uuid4())
+        business_token = program_builder.control._uuid_token(business_id)
+        direction_token = program_builder.control._uuid_token(direction_id)
+        actor = SimpleNamespace()
+
+        async def fake_actor(_user_id: int, selected_business_id: str):
+            self.assertEqual(selected_business_id, business_id)
+            return actor
+
+        missing = FakeCallback(
+            f"cp:progdir:{business_token}:{direction_token}"
+        )
+        missing_state = FakeState()
+        with (
+            patch.object(program_builder.asyncio, "to_thread", direct_to_thread),
+            patch.object(program_builder.control, "_actor", fake_actor),
+            patch.object(program_builder, "list_activity_directions", return_value=[]),
+        ):
+            await program_builder.choose_program_direction(missing, missing_state)
+        self.assertTrue(missing.answers[-1][1]["show_alert"])
+
+        direction = SimpleNamespace(id=direction_id)
+        chosen = FakeCallback(
+            f"cp:progdir:{business_token}:{direction_token}"
+        )
+        chosen_state = FakeState()
+        with (
+            patch.object(program_builder.asyncio, "to_thread", direct_to_thread),
+            patch.object(program_builder.control, "_actor", fake_actor),
+            patch.object(
+                program_builder,
+                "list_activity_directions",
+                return_value=[direction],
+            ),
+            patch.object(
+                program_builder.control,
+                "_callback_message",
+                lambda item: item.message,
+            ),
+        ):
+            await program_builder.choose_program_direction(chosen, chosen_state)
+        self.assertEqual(chosen_state.data["business_id"], business_id)
+        self.assertEqual(chosen_state.data["direction_id"], direction_id)
+        self.assertIn("Напишите название программы", chosen.message.answers[-1][0])
+
+        unscoped = FakeCallback(f"cp:progdirnone:{business_token}")
+        unscoped_state = FakeState()
+        with (
+            patch.object(program_builder.control, "_actor", fake_actor),
+            patch.object(
+                program_builder.control,
+                "_callback_message",
+                lambda item: item.message,
+            ),
+        ):
+            await program_builder.choose_program_without_direction(
+                unscoped, unscoped_state
+            )
+        self.assertEqual(unscoped_state.data["business_id"], business_id)
+        self.assertIsNone(unscoped_state.data["direction_id"])
+
+    async def test_program_draft_keyboard_hides_add_at_limit(self) -> None:
+        assert program_builder is not None
+        business_id = str(uuid4())
+        program_id = str(uuid4())
+        program = SimpleNamespace(
+            business_id=business_id,
+            id=program_id,
+        )
+        below_limit = SimpleNamespace(
+            program=program,
+            lessons=[object()] * (program_builder._MAX_LESSONS_PER_PROGRAM - 1),
+        )
+        at_limit = SimpleNamespace(
+            program=program,
+            lessons=[object()] * program_builder._MAX_LESSONS_PER_PROGRAM,
+        )
+        below = program_builder._draft_keyboard(below_limit)
+        full = program_builder._draft_keyboard(at_limit)
+        below_labels = [button.text for row in below.inline_keyboard for button in row]
+        full_labels = [button.text for row in full.inline_keyboard for button in row]
+        self.assertIn("Добавить ещё урок", below_labels)
+        self.assertNotIn("Добавить ещё урок", full_labels)
 
 
 if __name__ == "__main__":
