@@ -223,7 +223,6 @@ async def create_application():
             raise
 
     async def _on_shutdown(bot: Bot | None):
-        del bot
         nonlocal webhook_runtime, health_runtime, db_writer_started
 
         async def stop_webhook_runtime() -> None:
