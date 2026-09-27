@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 from typing import Any, Mapping
 
 from clientplatform.runtime.conference_provider import (
@@ -62,6 +63,29 @@ def _result(response: Mapping[str, Any]) -> Mapping[str, Any]:
     if not isinstance(result, Mapping):
         raise ConferenceProviderUnavailable("UCR conference response is missing result")
     return result
+
+
+def _protobuf_bytes(value: object, *, field_name: str) -> bytes:
+    if not isinstance(value, str):
+        raise ConferenceProviderUnavailable(
+            f"UCR conference {field_name} must be protobuf JSON bytes"
+        )
+    raw = value.strip()
+    if not raw or len(raw) > 8192:
+        raise ConferenceProviderUnavailable(
+            f"UCR conference {field_name} must be protobuf JSON bytes"
+        )
+    try:
+        decoded = base64.b64decode(raw.encode("ascii"), validate=True)
+    except (UnicodeEncodeError, ValueError) as exc:
+        raise ConferenceProviderUnavailable(
+            f"UCR conference {field_name} must be protobuf JSON bytes"
+        ) from exc
+    if not decoded or len(decoded) > 4096:
+        raise ConferenceProviderUnavailable(
+            f"UCR conference {field_name} is out of range"
+        )
+    return decoded
 
 
 class UcrConferenceProvider:
@@ -350,6 +374,15 @@ class UcrConferenceProvider:
         raw = _result(response).get("attendance")
         if not isinstance(raw, Mapping):
             raise ConferenceProviderUnavailable("UCR attendance is unavailable")
+        echoed_user_id = _protobuf_bytes(
+            raw.get("externalUserId"),
+            field_name="attendance.externalUserId",
+        )
+        expected_user_id = str(external_user_id).strip().encode("utf-8")
+        if not hmac.compare_digest(echoed_user_id, expected_user_id):
+            raise ConferenceProviderUnavailable(
+                "UCR attendance participant does not match request"
+            )
         return ConferenceAttendance(
             connected=bool(raw.get("connected")),
             total_connected_seconds=int(raw.get("totalConnectedSeconds") or 0),
