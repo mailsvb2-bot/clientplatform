@@ -134,12 +134,15 @@ async def _open_and_prepare(
         tenant_id=session.business_id,
         idempotency_key=reconcile_key,
     )
-    await provider.set_lifecycle(
-        conference,
-        tenant_id=session.business_id,
-        lifecycle=ConferenceLifecycle.WAITING,
-        idempotency_key=f"waiting:{event.id}:{session.position}",
-    )
+    if conference.lifecycle in {ConferenceLifecycle.ENDING, ConferenceLifecycle.ENDED}:
+        raise ValueError("managed conference is no longer joinable")
+    if conference.lifecycle in {None, ConferenceLifecycle.SCHEDULED}:
+        conference = await provider.set_lifecycle(
+            conference,
+            tenant_id=session.business_id,
+            lifecycle=ConferenceLifecycle.WAITING,
+            idempotency_key=f"waiting:{event.id}:{session.position}",
+        )
     await provider.set_entry_open(
         conference,
         tenant_id=session.business_id,
