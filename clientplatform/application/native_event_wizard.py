@@ -615,10 +615,15 @@ def _accept_room(
             for item in list_event_sessions(actor=actor, event_id=event_id)
             if item.join_url
         )
+    if venue.key == "ucr" and not ucr_managed_event_provider_available():
+        context["step"] = "venue"
+        _save(actor, platform=platform, surface=surface, context=context)
+        return CustomerInteractionMessage(
+            text="Управляемый эфир ClientPlatform пока не подключён в этой среде.",
+            rows=_venue_message().rows,
+        )
     try:
         if venue.key == "ucr":
-            if not ucr_managed_event_provider_available():
-                raise ValueError("managed conference provider is unavailable")
             join_url = None
         else:
             join_url = normalize_session_join_url(raw_url, existing_urls=existing_urls)
