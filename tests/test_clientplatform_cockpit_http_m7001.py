@@ -302,7 +302,7 @@ class CockpitHttpM7001Tests(unittest.IsolatedAsyncioTestCase):
             requested_business_id=_BUSINESS_A,
         )
 
-    async def test_cockpit_live_materializes_managed_owner_join_url(self) -> None:
+    async def test_cockpit_materializes_managed_owner_join_url(self) -> None:
         principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)
 
         class Snapshot:
