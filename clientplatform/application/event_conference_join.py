@@ -16,6 +16,7 @@ from clientplatform.runtime.conference_provider import (
     ConferenceLifecycle,
     ConferenceMode,
     ConferenceProvider,
+    ConferenceRef,
     ConferenceRole,
 )
 from clientplatform.runtime.ucr_conference_provider import UcrConferenceProvider
@@ -89,7 +90,7 @@ async def _prepare_managed_conference(
     event: Event,
     session: EventSession,
     provider: ConferenceProvider,
-) -> tuple[object, str]:
+) -> tuple[ConferenceRef, str]:
     _validate_event_session(event=event, session=session)
     external_id = _conference_external_id(event=event, session=session)
     conference = await provider.create(
@@ -119,23 +120,23 @@ async def _prepare_managed_conference(
 async def _open_and_prepare(
     *,
     provider: ConferenceProvider,
-    conference: object,
+    conference: ConferenceRef,
     event: Event,
     session: EventSession,
 ) -> None:
     await provider.prepare(
-        conference,  # type: ignore[arg-type]
+        conference,
         tenant_id=session.business_id,
         idempotency_key=f"runtime:{event.id}:{session.position}",
     )
     await provider.set_lifecycle(
-        conference,  # type: ignore[arg-type]
+        conference,
         tenant_id=session.business_id,
         lifecycle=ConferenceLifecycle.WAITING,
         idempotency_key=f"waiting:{event.id}:{session.position}",
     )
     await provider.set_entry_open(
-        conference,  # type: ignore[arg-type]
+        conference,
         tenant_id=session.business_id,
         open=True,
         idempotency_key=f"entry-open:{event.id}:{session.position}",
