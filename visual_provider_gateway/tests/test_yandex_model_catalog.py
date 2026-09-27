@@ -92,7 +92,7 @@ def test_catalog_cache_avoids_repeated_provider_calls(monkeypatch):
     monkeypatch.setenv("YANDEX_MODEL_CATALOG_TTL_SECONDS", "900")
     monkeypatch.setattr(catalog.urllib.request, "urlopen", fake_urlopen)
 
-    first = catalog.get_yandex_model_catalog(_config())
+    first = catalog.refresh_yandex_model_catalog(_config())
     second = catalog.get_yandex_model_catalog(_config())
 
     assert first == second
