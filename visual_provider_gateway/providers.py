@@ -169,7 +169,7 @@ def _validate_media_url(config: ProviderConfig, url: str) -> None:
         raise ProviderTransportError("invalid_media_url")
     base = urllib.parse.urlparse(config.base_url)
     same_selfhost = (
-        config.name == "selfhosted"
+        config.name in {"selfhosted", "selfhosted_backup"}
         and bool(base.hostname)
         and parsed.hostname.casefold() == str(base.hostname).casefold()
     )
@@ -792,7 +792,7 @@ class SelfHostedVisualProvider:
             timeout=self.config.timeout_seconds,
             max_bytes=self.config.max_json_bytes,
         )
-        job = _normalized_gateway_job(data, brief.kind, provider="selfhosted")
+        job = _normalized_gateway_job(data, brief.kind, provider=self.config.name)
         return self._materialize(job, data)
 
     def poll(self, job: CreativeJob) -> CreativeJob:
@@ -805,7 +805,7 @@ class SelfHostedVisualProvider:
             timeout=self.config.timeout_seconds,
             max_bytes=self.config.max_json_bytes,
         )
-        refreshed = _normalized_gateway_job(data, job.kind, provider="selfhosted", fallback_id=job.external_id)
+        refreshed = _normalized_gateway_job(data, job.kind, provider=self.config.name, fallback_id=job.external_id)
         return self._materialize(refreshed, data)
 
     def _materialize(self, job: CreativeJob, data: dict[str, Any]) -> CreativeJob:
