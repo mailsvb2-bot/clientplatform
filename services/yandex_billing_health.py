@@ -101,7 +101,7 @@ def crossed_balance_threshold(
     balance: Decimal,
     previous_balance: Decimal | None,
 ) -> Decimal | None:
-    for threshold in billing_thresholds():
+    for threshold in reversed(billing_thresholds()):
         if balance <= threshold and (
             previous_balance is None or previous_balance > threshold
         ):
