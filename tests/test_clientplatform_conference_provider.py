@@ -265,6 +265,57 @@ class ConferenceProviderTests(unittest.IsolatedAsyncioTestCase):
                         idempotency_key="join:user-a",
                     )
 
+    async def test_ucr_capabilities_reject_string_booleans(self):
+        gateway = _Gateway()
+        gateway.capabilities["productionWebrtc"] = "false"
+        provider = UcrConferenceProvider(
+            gateway=gateway,  # type: ignore[arg-type]
+            integration_id="clientplatform-prod",
+        )
+        with self.assertRaisesRegex(
+            ConferenceProviderUnavailable,
+            "must be boolean",
+        ):
+            await provider.capabilities(tenant_id="tenant-a")
+
+    async def test_ucr_attendance_rejects_nonfinite_semantic_types(self):
+        gateway = _Gateway()
+
+        async def malformed(**kwargs: Any):
+            if kwargs["method"] is UcrUniversalConferenceMethod.GET_PARTICIPANT_ATTENDANCE:
+                return {
+                    "result": {
+                        "attendance": {
+                            "externalUserId": "dXNlci1h",
+                            "connected": "false",
+                            "totalConnectedSeconds": "-1",
+                            "joinCount": 1,
+                            "reconnectCount": 0,
+                        }
+                    }
+                }
+            return await _Gateway().invoke_universal_conference(**kwargs)
+
+        gateway.invoke_universal_conference = malformed  # type: ignore[method-assign]
+        provider = UcrConferenceProvider(
+            gateway=gateway,  # type: ignore[arg-type]
+            integration_id="clientplatform-prod",
+        )
+        ref = ConferenceRef(
+            provider_key="ucr",
+            external_conference_id="event-a",
+            provider_conference_id="ucr-conf-1",
+        )
+        with self.assertRaisesRegex(
+            ConferenceProviderUnavailable,
+            "must be boolean",
+        ):
+            await provider.attendance(
+                ref,
+                tenant_id="tenant-a",
+                external_user_id="user-a",
+            )
+
     async def test_ucr_attendance_rejects_wrong_participant_echo(self):
         gateway = _Gateway()
 
