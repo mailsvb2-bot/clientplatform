@@ -425,6 +425,7 @@ class VisualCreativeEngine:
             "visual_provider_submit_http_403",
             "visual_provider_submit_http_404",
             "visual_provider_submit_http_410",
+            "visual_provider_submit_connect_unreachable",
         }:
             return
         self._circuit_open_until[provider] = time.monotonic() + self._circuit_seconds()
@@ -511,6 +512,7 @@ class VisualCreativeEngine:
                 "visual_provider_submit_http_404",
                 "visual_provider_submit_http_410",
                 "visual_provider_submit_http_422",
+                "visual_provider_submit_connect_unreachable",
             }
             safe_policy_failover = (
                 definitive_rejection and not normalized.preferred_provider
