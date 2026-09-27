@@ -6,6 +6,7 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable
 
 from aiogram.exceptions import TelegramAPIError
@@ -527,9 +528,8 @@ def _billing_state_and_alerts(
     raw_previous_balance = str(prev.get("balance") or "").strip()
     if raw_previous_balance:
         try:
-            from decimal import Decimal
             previous_balance = Decimal(raw_previous_balance)
-        except Exception:  # validator: allow-wide-except
+        except InvalidOperation:
             previous_balance = None
 
     if snapshot.balance is not None:
