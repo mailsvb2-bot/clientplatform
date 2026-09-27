@@ -524,6 +524,90 @@ def test_yandexart_motion_video_renders_current_alice_keyframe(monkeypatch, tmp_
     assert source.exists() is False
 
 
+def test_yandex_model_candidate_failover_after_deprecated_model(monkeypatch, tmp_path):
+    from visual_provider_gateway.providers import YandexArtProvider
+
+    calls = []
+    encoded = base64.b64encode(b"new-model").decode("ascii")
+
+    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0, ca_bundle_file=""):
+        calls.append(payload["model"])
+        if payload["model"].endswith("/yandex-art-2.0"):
+            raise providers.ProviderTransportError("http_403")
+        return {"data": [{"b64_json": encoded}]}
+
+    monkeypatch.setenv(
+        "YANDEX_ART_MODEL_CANDIDATES",
+        "art://folder/aliceai-image-art-3.0",
+    )
+    monkeypatch.setattr(providers, "_json_request", fake_json_request)
+    provider = YandexArtProvider(
+        ProviderConfig(
+            name="yandexart",
+            base_url="https://ai.api.cloud.yandex.net",
+            api_key="key",
+            folder_id="folder",
+            model_image="art://folder/yandex-art-2.0",
+            output_dir=str(tmp_path),
+        )
+    )
+
+    job = provider.submit(CreativeBrief(kind="image", prompt="x"))
+
+    assert calls == [
+        "art://folder/yandex-art-2.0",
+        "art://folder/aliceai-image-art-3.0",
+    ]
+    assert job.status == "succeeded"
+    assert job.model == "art://folder/aliceai-image-art-3.0"
+
+
+def test_definitive_provider_rejection_opens_circuit_and_skips_next_request(monkeypatch):
+    from visual_provider_gateway.engine import VisualCreativeEngine
+
+    calls = []
+
+    class BrokenProvider:
+        def configured(self, kind):
+            return True
+
+        def submit(self, brief):
+            calls.append("broken")
+            raise providers.ProviderTransportError("http_403")
+
+    class SecondProvider:
+        def configured(self, kind):
+            return True
+
+        def submit(self, brief):
+            calls.append("second")
+            return CreativeJob(
+                provider="second",
+                kind=brief.kind,
+                status="succeeded",
+                model="m2",
+            )
+
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.provider_order",
+        lambda *_args, **_kwargs: ("broken", "second"),
+    )
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.build_provider",
+        lambda name: BrokenProvider() if name == "broken" else SecondProvider(),
+    )
+    engine = VisualCreativeEngine(enabled=True)
+
+    first = engine.submit(CreativeBrief(kind="image", prompt="x"))
+    second = engine.submit(CreativeBrief(kind="image", prompt="y"))
+
+    assert first.provider == "second"
+    assert second.provider == "second"
+    assert calls == ["broken", "second", "second"]
+    runtime = engine.runtime_snapshot()
+    assert "broken" in runtime["circuits_open_seconds"]
+
+
 def test_visual_provider_gateway_image_contains_ffmpeg_contract():
     from pathlib import Path
 
