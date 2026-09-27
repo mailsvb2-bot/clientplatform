@@ -141,8 +141,11 @@ not create a second conference engine:
 - `GetParticipantAttendance`
 - `GetCapabilities`
 
-Mutations require the existing gateway idempotency key. UCR remains the canonical owner
-of conference/runtime/device state and durable duplicate/conflict semantics.
+Mutations require the existing gateway idempotency key. Stable state-setting operations
+reuse stable retry keys, while `PrepareConferenceRuntime` is reconciled with a
+deterministic participant/owner-scoped key so adding a later participant cannot be
+suppressed by an earlier prepare replay. UCR remains the canonical owner of
+conference/runtime/device state and durable duplicate/conflict semantics.
 
 The provider-neutral ClientPlatform boundary lives in
 `clientplatform/runtime/conference_provider.py`. UCR is one managed provider behind
