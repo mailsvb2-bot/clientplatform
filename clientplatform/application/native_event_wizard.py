@@ -5,6 +5,9 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from clientplatform.application.event_content_plans import set_event_content_mode
+from clientplatform.application.event_conference_join import (
+    ucr_managed_event_provider_available,
+)
 from clientplatform.application.event_owner_flow import (
     MultiSessionOnlineEventCreateRequest,
     OnlineEventSessionCreateRequest,
@@ -534,6 +537,14 @@ def handle_native_event_wizard_text(
                 "pending_label": parsed.local_label,
             }
         )
+        if context.get("venue") == "ucr":
+            return _accept_room(
+                actor,
+                context=context,
+                raw_url="",
+                platform=platform,
+                surface=surface,
+            )
         _save(actor, platform=platform, surface=surface, context=context)
         return _room_message(context)
 
@@ -596,6 +607,7 @@ def _accept_room(
     surface: str,
 ) -> CustomerInteractionMessage:
     event_id = context.get("event_id", "")
+    venue = webinar_venue(context["venue"])
     existing_urls: tuple[str, ...] = ()
     if event_id:
         existing_urls = tuple(
@@ -604,9 +616,14 @@ def _accept_room(
             if item.join_url
         )
     try:
-        join_url = normalize_session_join_url(raw_url, existing_urls=existing_urls)
-        if int(context["count"]) > 1 and join_url is None:
-            raise ValueError("multi-session event requires a room for every session")
+        if venue.key == "ucr":
+            if not ucr_managed_event_provider_available():
+                raise ValueError("managed conference provider is unavailable")
+            join_url = None
+        else:
+            join_url = normalize_session_join_url(raw_url, existing_urls=existing_urls)
+            if int(context["count"]) > 1 and join_url is None:
+                raise ValueError("multi-session event requires a room for every session")
     except ValueError:
         _save(actor, platform=platform, surface=surface, context=context)
         return CustomerInteractionMessage(
@@ -617,7 +634,6 @@ def _accept_room(
             rows=_room_message(context).rows,
         )
 
-    venue = webinar_venue(context["venue"])
     provider_key = "auto" if venue.key == "other" else venue.key
     session = OnlineEventSessionCreateRequest(
         starts_at=datetime.fromisoformat(context["pending_starts"]),
@@ -1027,6 +1043,11 @@ def handle_native_event_wizard_action(
         if len(args) != 2:
             raise ValueError("invalid venue action")
         venue = webinar_venue(args[1])
+        if venue.key == "ucr" and not ucr_managed_event_provider_available():
+            return CustomerInteractionMessage(
+                text="Управляемый эфир ClientPlatform пока не подключён в этой среде.",
+                rows=_venue_message().rows,
+            )
         if not venue.public_room_supported:
             return CustomerInteractionMessage(text=venue.note, rows=_venue_message().rows)
         context.update(
@@ -1085,6 +1106,14 @@ def handle_native_event_wizard_action(
                 "pending_label": window.local_label,
             }
         )
+        if context.get("venue") == "ucr":
+            return _accept_room(
+                actor,
+                context=context,
+                raw_url="",
+                platform=platform,
+                surface=surface,
+            )
         _save(actor, platform=platform, surface=surface, context=context)
         return _room_message(context)
 
