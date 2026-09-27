@@ -123,6 +123,38 @@ def test_yandexart_can_use_explicit_model_uri_without_separate_folder():
     assert provider.configured("image") is True
 
 
+def test_yandex_api_key_wins_over_stale_iam_token(monkeypatch):
+    from visual_provider_gateway.engine import provider_configs
+    from visual_provider_gateway.providers import YandexArtProvider
+
+    monkeypatch.setenv("YANDEX_API_KEY", "durable-api-key")
+    monkeypatch.setenv("YANDEX_ART_IAM_TOKEN", "expired-iam-token")
+    monkeypatch.delenv("YANDEX_ART_AUTH_SCHEME", raising=False)
+    monkeypatch.setenv("YANDEX_ART_FOLDER_ID", "folder")
+
+    config = provider_configs()["yandexart"]
+    provider = YandexArtProvider(config)
+
+    assert config.api_key == "durable-api-key"
+    assert provider._authorization() == "Api-Key durable-api-key"
+
+
+def test_yandex_iam_token_still_works_when_no_api_key_exists(monkeypatch):
+    from visual_provider_gateway.engine import provider_configs
+    from visual_provider_gateway.providers import YandexArtProvider
+
+    monkeypatch.delenv("YANDEX_API_KEY", raising=False)
+    monkeypatch.setenv("YANDEX_ART_IAM_TOKEN", "current-iam-token")
+    monkeypatch.delenv("YANDEX_ART_AUTH_SCHEME", raising=False)
+    monkeypatch.setenv("YANDEX_ART_FOLDER_ID", "folder")
+
+    config = provider_configs()["yandexart"]
+    provider = YandexArtProvider(config)
+
+    assert config.api_key == "current-iam-token"
+    assert provider._authorization() == "Bearer current-iam-token"
+
+
 def test_provider_snapshot_strips_base_url_credentials_and_paths(monkeypatch):
     monkeypatch.setenv("VISUAL_OPENAI_BASE_URL", "https://user:secret@example.com/private/api?token=x")
     snapshot = provider_snapshot("DE")
