@@ -56,14 +56,14 @@ def test_catalog_reads_available_art_models_and_current_presence(monkeypatch):
     def fake_urlopen(request, timeout):
         observed["url"] = request.full_url
         observed["authorization"] = request.headers.get("Authorization")
-        observed["project"] = request.headers.get("X-project")
+        observed["project"] = request.headers.get("Openai-project")
         observed["timeout"] = timeout
         return _Response(json.dumps(payload).encode("utf-8"))
 
     monkeypatch.setenv("YANDEX_API_KEY", "api-key")
     monkeypatch.setattr(catalog.urllib.request, "urlopen", fake_urlopen)
 
-    snapshot = catalog.get_yandex_model_catalog(_config())
+    snapshot = catalog.refresh_yandex_model_catalog(_config())
 
     assert snapshot.available is True
     assert snapshot.current_model_present is True
@@ -99,6 +99,25 @@ def test_catalog_cache_avoids_repeated_provider_calls(monkeypatch):
     assert calls == 1
 
 
+def test_health_path_returns_immediately_and_schedules_background_refresh(monkeypatch):
+    catalog.clear_yandex_model_catalog_cache()
+    scheduled = []
+
+    monkeypatch.setattr(
+        catalog,
+        "_ensure_refresh",
+        lambda key, config, ttl: scheduled.append((key, config.folder_id, ttl)),
+    )
+
+    snapshot = catalog.get_yandex_model_catalog(_config())
+
+    assert snapshot.configured is True
+    assert snapshot.available is False
+    assert snapshot.error_code == ""
+    assert len(scheduled) == 1
+    assert scheduled[0][1] == "folder"
+
+
 def test_catalog_reports_missing_current_model(monkeypatch):
     catalog.clear_yandex_model_catalog_cache()
     monkeypatch.setenv("YANDEX_API_KEY", "api-key")
@@ -110,7 +129,7 @@ def test_catalog_reports_missing_current_model(monkeypatch):
         ),
     )
 
-    snapshot = catalog.get_yandex_model_catalog(_config())
+    snapshot = catalog.refresh_yandex_model_catalog(_config())
 
     assert snapshot.available is True
     assert snapshot.current_model_present is False
@@ -131,7 +150,7 @@ def test_catalog_normalizes_http_and_invalid_response_failures(monkeypatch):
         )
 
     monkeypatch.setattr(catalog.urllib.request, "urlopen", forbidden)
-    snapshot = catalog.get_yandex_model_catalog(_config())
+    snapshot = catalog.refresh_yandex_model_catalog(_config())
     assert snapshot.error_code == "yandex_models_http_403"
 
     catalog.clear_yandex_model_catalog_cache()
@@ -140,7 +159,7 @@ def test_catalog_normalizes_http_and_invalid_response_failures(monkeypatch):
         "urlopen",
         lambda *_args, **_kwargs: _Response(b"[]"),
     )
-    snapshot = catalog.get_yandex_model_catalog(_config())
+    snapshot = catalog.refresh_yandex_model_catalog(_config())
     assert snapshot.error_code == "yandex_models_invalid_response"
 
 
@@ -154,6 +173,6 @@ def test_catalog_rejects_oversized_response(monkeypatch):
         lambda *_args, **_kwargs: _Response(b"x" * (64 * 1024 + 1)),
     )
 
-    snapshot = catalog.get_yandex_model_catalog(_config())
+    snapshot = catalog.refresh_yandex_model_catalog(_config())
 
     assert snapshot.error_code == "yandex_models_response_too_large"
