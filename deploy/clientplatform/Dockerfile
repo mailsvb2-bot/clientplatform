@@ -29,6 +29,7 @@ RUN apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=60 update \
        libssl3 \
        libuuid1 \
        netbase \
+       openssl \
        tzdata \
        zlib1g \
     && rm -rf /var/lib/apt/lists/* \
@@ -38,6 +39,7 @@ RUN apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=60 update \
     && test "$(pg_restore --version | awk '{print $3}' | cut -d. -f1)" = "16" \
     && test "$(psql --version | awk '{print $3}' | cut -d. -f1)" = "16" \
     && age --version \
+    && openssl version \
     && groupadd --system --gid 10001 clientplatform \
     && useradd --system --uid 10001 --gid clientplatform --home /var/lib/clientplatform clientplatform \
     && mkdir -p \
