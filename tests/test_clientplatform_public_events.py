@@ -6,7 +6,7 @@ import importlib.util
 import sqlite3
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from clientplatform.application.event_public_surface import (
     SECURITY_HEADERS,
@@ -280,3 +280,132 @@ class PublicEventCommercialConsentRuntimeTests(unittest.IsolatedAsyncioTestCase)
             "Повторная регистрация не изменяет рекламное согласие",
             response.text,
         )
+
+@unittest.skipUnless(_AIOHTTP_AVAILABLE, "aiohttp runtime dependency is not installed")
+class PublicEventManagedConferenceJoinTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _request():
+        return SimpleNamespace(
+            match_info={
+                "token": "A" * 40,
+                "position": "1",
+            }
+        )
+
+    @staticmethod
+    def _context():
+        registration = SimpleNamespace(
+            id="33333333-3333-4333-8333-333333333333",
+            event_id="22222222-2222-4222-8222-222222222222",
+            business_id="11111111-1111-4111-8111-111111111111",
+        )
+        event = SimpleNamespace(id=registration.event_id)
+        session = SimpleNamespace(
+            id="44444444-4444-4444-8444-444444444444",
+            provider_key="ucr",
+            join_is_ready=True,
+            join_url=None,
+        )
+        return registration, event, session
+
+    async def test_managed_join_redirects_to_personal_grant_then_marks_click(self) -> None:
+        registration, event, session = self._context()
+        issue = AsyncMock(
+            return_value=SimpleNamespace(url="https://join.example.test/personal-grant")
+        )
+        mark = Mock()
+        with (
+            patch.object(
+                public_events_runtime,
+                "_public_event_join_context",
+                return_value=(registration, event, session),
+            ),
+            patch.object(
+                public_events_runtime,
+                "is_managed_event_session_provider",
+                return_value=True,
+            ),
+            patch.object(
+                public_events_runtime,
+                "issue_managed_event_session_join",
+                issue,
+            ),
+            patch.object(public_events_runtime, "_mark_public_event_join_click", mark),
+        ):
+            response = await public_events_runtime.public_event_join(self._request())
+
+        self.assertEqual(response.status, 302)
+        self.assertEqual(
+            response.headers["Location"],
+            "https://join.example.test/personal-grant",
+        )
+        issue.assert_awaited_once_with(
+            registration=registration,
+            session=session,
+        )
+        mark.assert_called_once_with(
+            token="A" * 40,
+            expected_registration_id=registration.id,
+        )
+
+    async def test_provider_failure_returns_503_without_join_click(self) -> None:
+        registration, event, session = self._context()
+        issue = AsyncMock(
+            side_effect=public_events_runtime.ConferenceProviderError("unavailable")
+        )
+        mark = Mock()
+        with (
+            patch.object(
+                public_events_runtime,
+                "_public_event_join_context",
+                return_value=(registration, event, session),
+            ),
+            patch.object(
+                public_events_runtime,
+                "is_managed_event_session_provider",
+                return_value=True,
+            ),
+            patch.object(
+                public_events_runtime,
+                "issue_managed_event_session_join",
+                issue,
+            ),
+            patch.object(public_events_runtime, "_mark_public_event_join_click", mark),
+        ):
+            response = await public_events_runtime.public_event_join(self._request())
+
+        self.assertEqual(response.status, 503)
+        self.assertNotIn("Location", response.headers)
+        mark.assert_not_called()
+
+    async def test_cancelled_registration_race_never_exposes_issued_grant(self) -> None:
+        registration, event, session = self._context()
+        issue = AsyncMock(
+            return_value=SimpleNamespace(url="https://join.example.test/orphan-grant")
+        )
+        mark = Mock(side_effect=public_events_runtime.EventNotFound("cancelled"))
+        with (
+            patch.object(
+                public_events_runtime,
+                "_public_event_join_context",
+                return_value=(registration, event, session),
+            ),
+            patch.object(
+                public_events_runtime,
+                "is_managed_event_session_provider",
+                return_value=True,
+            ),
+            patch.object(
+                public_events_runtime,
+                "issue_managed_event_session_join",
+                issue,
+            ),
+            patch.object(public_events_runtime, "_mark_public_event_join_click", mark),
+        ):
+            response = await public_events_runtime.public_event_join(self._request())
+
+        self.assertEqual(response.status, 404)
+        self.assertNotIn("Location", response.headers)
+        issue.assert_awaited_once()
+        mark.assert_called_once()
+
