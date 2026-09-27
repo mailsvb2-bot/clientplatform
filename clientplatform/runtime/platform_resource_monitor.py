@@ -335,6 +335,9 @@ def _provider_state_and_alerts(
         "available": snapshot.available,
         "configured_image": list(snapshot.configured_image),
         "configured_video": list(snapshot.configured_video),
+        "configured_video_native": list(snapshot.configured_video_native),
+        "configured_video_motion": list(snapshot.configured_video_motion),
+        "video_generation_mode": snapshot.video_generation_mode,
         "models": {},
         "runtime": {},
         "circuits": {},
@@ -369,6 +372,25 @@ def _provider_state_and_alerts(
             alerts.append(
                 f"🟢 Провайдеры для {kind} снова доступны: {', '.join(providers)}."
             )
+
+    previous_video_mode = str(prev.get("video_generation_mode") or "")
+    video_mode = str(snapshot.video_generation_mode or "unavailable")
+    if video_mode == "motion" and previous_video_mode != "motion":
+        alerts.append(
+            "🟠 Полноценная AI-генерация видео недоступна\n"
+            "Работает только motion fallback: AI-кадр + движение камеры.\n"
+            "Проверьте native video worker/provider."
+        )
+    elif video_mode == "native" and previous_video_mode in {"motion", "unavailable"}:
+        alerts.append("🟢 Полноценная AI-генерация видео восстановлена.")
+    elif (
+        video_mode == "unavailable"
+        and snapshot.configured_video
+        and previous_video_mode != "unavailable"
+    ):
+        alerts.append(
+            "🔴 Video providers настроены, но рабочий video capability tier не определён."
+        )
 
     prev_models = prev.get("models") if isinstance(prev.get("models"), dict) else {}
     for provider, raw in snapshot.models.items():
