@@ -126,6 +126,17 @@ def provider_configs() -> dict[str, ProviderConfig]:
             max_media_bytes=max_media,
             output_dir=output_dir,
         ),
+        "selfhosted_backup": ProviderConfig(
+            name="selfhosted_backup",
+            base_url=_env("VISUAL_SELFHOST_BACKUP_BASE_URL", ""),
+            api_key=_env("VISUAL_SELFHOST_BACKUP_TOKEN", ""),
+            model_image=_env("VISUAL_SELFHOST_BACKUP_IMAGE_MODEL", ""),
+            model_video=_env("VISUAL_SELFHOST_BACKUP_VIDEO_MODEL", ""),
+            timeout_seconds=timeout,
+            max_json_bytes=max_json,
+            max_media_bytes=max_media,
+            output_dir=output_dir,
+        ),
     }
 
 
@@ -175,7 +186,7 @@ def _policy_order(kind: str, country_code: str = "") -> tuple[str, ...]:
         if kind == "image":
             order = _csv("VISUAL_RU_IMAGE_ORDER", "yandexart,gigachat,selfhosted")
         else:
-            order = _csv("VISUAL_RU_VIDEO_ORDER", "yandexart_motion,selfhosted")
+            order = _csv("VISUAL_RU_VIDEO_ORDER", "selfhosted,selfhosted_backup,yandexart_motion")
         if _truthy("VISUAL_ALLOW_GLOBAL_PROVIDERS_IN_RU", "0"):
             global_order = _csv(
                 "VISUAL_GLOBAL_IMAGE_ORDER" if kind == "image" else "VISUAL_GLOBAL_VIDEO_ORDER",
