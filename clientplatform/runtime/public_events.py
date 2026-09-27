@@ -616,7 +616,7 @@ async def public_event_join(request: web.Request) -> web.Response:
         return _page("Ссылка недействительна", "<h1>Ссылка недействительна</h1>", status=404)
 
     try:
-        registration, _event, session = await asyncio.to_thread(
+        registration, event, session = await asyncio.to_thread(
             _public_event_join_context,
             token,
             position,
@@ -628,7 +628,7 @@ async def public_event_join(request: web.Request) -> web.Response:
         try:
             join = await issue_managed_event_session_join(
                 registration=registration,
-                event=_event,
+                event=event,
                 session=session,
             )
         except (ConferenceProviderError, UcrGatewayError, ValueError):
