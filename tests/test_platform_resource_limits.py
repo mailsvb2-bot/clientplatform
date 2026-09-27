@@ -8,6 +8,7 @@ import pytest
 from clientplatform.runtime import platform_resource_monitor as monitor
 from services import platform_resource_limits as limits
 from services import visual_provider_health as provider_health
+from services import yandex_billing_health as billing_health
 
 
 
@@ -21,6 +22,14 @@ def _stable_visual_provider_health(monkeypatch):
             available=True,
             configured_image=("yandexart",),
             configured_video=("yandexart_motion",),
+        ),
+    )
+    monkeypatch.setattr(
+        monitor,
+        "get_yandex_billing_snapshot",
+        lambda: billing_health.YandexBillingSnapshot(
+            configured=False,
+            available=False,
         ),
     )
 
@@ -336,6 +345,61 @@ def test_provider_watch_alerts_on_model_lifecycle_fallback_and_circuit():
     assert "gigachat" in rendered
     assert "circuit breaker" in rendered
     assert state["runtime"]["image"]["provider"] == "gigachat"
+
+
+def test_billing_watch_alerts_when_real_balance_crosses_threshold(monkeypatch):
+    from decimal import Decimal
+
+    monkeypatch.setenv("YANDEX_BILLING_ALERT_THRESHOLDS", "5000,2000,1000,500,100,0")
+    snapshot = billing_health.YandexBillingSnapshot(
+        configured=True,
+        available=True,
+        active=True,
+        balance=Decimal("450"),
+        currency="RUB",
+    )
+
+    state, alerts = monitor._billing_state_and_alerts(
+        snapshot,
+        {
+            "configured": True,
+            "available": True,
+            "active": True,
+            "balance": "1500",
+            "currency": "RUB",
+        },
+    )
+
+    rendered = "\n".join(alerts)
+    assert "заканчиваются деньги" in rendered
+    assert "450 RUB" in rendered
+    assert "500 RUB" in rendered
+    assert state["balance"] == "450"
+
+
+def test_billing_watch_reports_telemetry_loss_and_recovery():
+    lost = billing_health.YandexBillingSnapshot(
+        configured=True,
+        available=False,
+        error_code="yandex_billing_http_401",
+    )
+    lost_state, alerts = monitor._billing_state_and_alerts(
+        lost,
+        {"configured": True, "available": True, "balance": "1000"},
+    )
+    assert "Billing telemetry недоступна" in "\n".join(alerts)
+
+    from decimal import Decimal
+
+    recovered = billing_health.YandexBillingSnapshot(
+        configured=True,
+        available=True,
+        active=True,
+        balance=Decimal("1000"),
+        currency="RUB",
+    )
+    _state, recovery_alerts = monitor._billing_state_and_alerts(recovered, lost_state)
+    assert "Billing telemetry восстановилась" in "\n".join(recovery_alerts)
 
 
 def test_provider_watch_reports_model_change_and_recovery_once():
