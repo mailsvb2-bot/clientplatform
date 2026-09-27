@@ -37,10 +37,12 @@ existing webinar wizard and personal registration page.
    no provider-side planned end; the editable EventSession date/time remains exclusively
    ClientPlatform business state. This prevents a schedule edit from splitting one event
    position across multiple provider rooms or conflicting on create replay.
-8. Conference create, owner/participant ensure, runtime preparation, waiting lifecycle
-   and entry-open mutations use stable idempotency keys. Each browser join action receives
-   a separate UUID-scoped idempotency key and requests a fresh single-use grant with a
-   short 15-minute TTL.
+8. Conference create, owner/participant ensure, waiting lifecycle and entry-open
+   mutations use stable retry keys. Runtime preparation is a reconcile operation, so
+   its retry key is deterministically scoped to the participant/owner being reconciled;
+   this prevents a previous successful prepare from suppressing admission of a later
+   participant. Each browser join action receives a separate UUID-scoped idempotency key
+   and requests a fresh single-use grant with a short 15-minute TTL.
 9. Before attendee runtime preparation ClientPlatform always ensures exactly one stable
    conference OWNER derived from the event creator, then the registered ATTENDEE. An
    authorized administrator conducting the webinar joins as HOST rather than becoming a
