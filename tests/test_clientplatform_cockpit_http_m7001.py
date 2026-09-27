@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 _AIOHTTP_AVAILABLE = importlib.util.find_spec("aiohttp") is not None
