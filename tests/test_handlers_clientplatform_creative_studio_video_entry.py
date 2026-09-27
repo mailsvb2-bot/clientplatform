@@ -17,7 +17,20 @@ def _labels_and_callbacks(markup):
 def test_creative_studio_menu_exposes_image_and_video_entry_points() -> None:
     rows = _labels_and_callbacks(studio._menu_rows("business-token", None))
     assert ("✨ Создать картинку", "cpc:new:business-token") in rows
-    assert ("🎬 Создать видео", "cpc:video:business-token") in rows
+    assert ("🎬 Создать AI-видео", "cpc:video:business-token") in rows
+
+
+def test_creative_studio_menu_labels_motion_fallback_truthfully() -> None:
+    rows = _labels_and_callbacks(
+        studio._menu_rows(
+            "business-token",
+            None,
+            video_ready=True,
+            video_mode="motion",
+        )
+    )
+    assert ("🎞 Оживить картинку", "cpc:video:business-token") in rows
+    assert ("🎬 Создать AI-видео", "cpc:video:business-token") not in rows
 
 
 def test_prepared_video_keeps_video_edit_path(monkeypatch) -> None:
