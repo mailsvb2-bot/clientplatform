@@ -32,10 +32,10 @@ def state(data: dict) -> SimpleNamespace:
     )
 
 
-def visual_job(*, status: str = "queued", kind: str = "image", ready: bool = False):
+def visual_job(*, status: str = "queued", kind: str = "image", ready: bool = False, provider: str = "fake"):
     return SimpleNamespace(
         id="gateway-job-1",
-        provider="fake",
+        provider=provider,
         scope_id="business-id",
         kind=kind,
         status=status,
@@ -165,7 +165,7 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
         cb = callback("cpa:creative:video")
         st = state(base_state())
         with (
-            patch.object(ui, "visual_generation_ready", return_value=False),
+            patch.object(ui, "visual_video_generation_mode", return_value="unavailable"),
             patch.object(ui, "create_ad_visual") as create,
             patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
         ):
@@ -246,8 +246,40 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
         target.answer_photo.assert_not_awaited()
         self.assertEqual(
             target.answer_video.await_args.kwargs["caption"],
-            "Готовое рекламное видео",
+            "Готовое рекламное AI-видео",
         )
+
+    async def test_render_ready_motion_fallback_is_labeled_truthfully(self) -> None:
+        cb = callback("cpa:creative:video")
+        st = state(base_state())
+        target = target_message()
+        with tempfile.TemporaryDirectory() as directory:
+            asset = Path(directory) / "creative.mp4"
+            asset.write_bytes(b"video")
+            with (
+                patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+                patch.object(ui, "visual_video_generation_mode", return_value="motion"),
+                patch.object(
+                    ui,
+                    "create_ad_visual",
+                    return_value=visual_job(
+                        status="succeeded",
+                        kind="video",
+                        ready=True,
+                        provider="yandexart_motion",
+                    ),
+                ),
+                patch.object(ui, "materialize_ad_visual", return_value=asset),
+                patch.object(ui, "_message", return_value=target),
+                patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
+            ):
+                await ui.generate_ad_visual(cb, st)
+        target.answer_video.assert_awaited_once()
+        self.assertEqual(
+            target.answer_video.await_args.kwargs["caption"],
+            "Оживлённая рекламная AI-картинка",
+        )
+
 
     async def test_ready_visual_materialization_failure_keeps_text_draft(self) -> None:
         cb = callback()
