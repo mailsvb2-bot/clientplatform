@@ -759,7 +759,7 @@ async def open_webinar_live_room(callback: CallbackQuery) -> None:
     join_targets: list[tuple[object, str]] = []
     managed_failed = False
     for session in live.sessions:
-        if session.provider_key == "ucr":
+        if getattr(session, "provider_key", None) == "ucr":
             try:
                 join = await issue_managed_event_owner_join_for_position(
                     actor=actor,
