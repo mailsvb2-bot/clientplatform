@@ -7,7 +7,7 @@ import pytest
 
 from visual_provider_gateway import providers
 from visual_provider_gateway.engine import provider_order, provider_snapshot
-from visual_provider_gateway.models import CreativeBrief, ProviderConfig
+from visual_provider_gateway.models import CreativeBrief, CreativeJob, ProviderConfig
 from visual_provider_gateway.providers import SelfHostedVisualProvider
 
 
