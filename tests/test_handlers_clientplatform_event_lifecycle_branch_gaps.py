@@ -97,6 +97,73 @@ class WebinarLifecycleBranchGapTests(unittest.IsolatedAsyncioTestCase):
             show_alert=True,
         )
 
+    async def test_open_webinar_room_materializes_managed_owner_grant(self) -> None:
+        cb = callback("cpev:conduct:event-token:business-token")
+        actor = object()
+        reply = message()
+        live = SimpleNamespace(
+            title="Управляемый эфир",
+            sessions=(
+                SimpleNamespace(
+                    position=1,
+                    local_start="25.09.2026 19:00",
+                    provider_key="ucr",
+                    join_ready=True,
+                    join_url=None,
+                ),
+            ),
+        )
+        issue = AsyncMock(
+            return_value=SimpleNamespace(
+                url="https://join.example.test/owner-grant",
+            )
+        )
+        with (
+            patch.object(
+                lifecycle.control,
+                "_token_uuid",
+                side_effect=(EVENT_ID, BUSINESS_ID),
+            ),
+            patch.object(
+                lifecycle.control,
+                "_uuid_token",
+                return_value="business-token",
+            ),
+            patch.object(
+                lifecycle.control,
+                "_actor",
+                new=AsyncMock(return_value=actor),
+            ),
+            patch.object(
+                lifecycle.asyncio,
+                "to_thread",
+                new=AsyncMock(return_value=live),
+            ),
+            patch.object(
+                lifecycle,
+                "issue_managed_event_owner_join_for_position",
+                new=issue,
+            ),
+            patch.object(
+                lifecycle.control,
+                "_callback_message",
+                return_value=reply,
+            ),
+        ):
+            await lifecycle.open_webinar_live_room(cb)
+
+        cb.answer.assert_awaited_once_with()
+        issue.assert_awaited_once_with(
+            actor=actor,
+            event_id=EVENT_ID,
+            position=1,
+        )
+        markup = reply.answer.await_args.kwargs["reply_markup"]
+        self.assertEqual(
+            markup.inline_keyboard[0][0].url,
+            "https://join.example.test/owner-grant",
+        )
+
     async def test_open_webinar_room_renders_single_and_multiday_rooms(self) -> None:
         actor = object()
         single = SimpleNamespace(
