@@ -116,6 +116,10 @@ from runtime.health_server import start_health_runtime
 from services.messenger.setup import build_setup_status
 from clientplatform.runtime.control_bot import bind_control_bot_secret
 from clientplatform.runtime.native_runtime_policy import assert_native_only_runtime_policy
+from clientplatform.runtime.platform_resource_monitor import (
+    start_platform_resource_monitor,
+    stop_platform_resource_monitor,
+)
 
 from core.startup_checks import run_startup_checks
 
@@ -183,6 +187,9 @@ async def create_application():
             if bot is None and webhook_runtime is None:
                 raise RuntimeError("native-only runtime requires canonical HTTP ingress")
 
+            if bot is not None:
+                await start_platform_resource_monitor(bot)
+
             try:
                 health_runtime = await start_health_runtime()
             except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
@@ -243,8 +250,13 @@ async def create_application():
             finally:
                 db_writer_started = False
 
+        async def stop_platform_monitor_runtime() -> None:
+            if bot is not None:
+                await stop_platform_resource_monitor(bot)
+
         await run_shutdown_steps(
             (
+                ShutdownStep("platform resource monitor", stop_platform_monitor_runtime),
                 ShutdownStep("messenger webhook runtime", stop_webhook_runtime),
                 ShutdownStep("health runtime", stop_health_runtime),
                 ShutdownStep("database writer", stop_db_writer_runtime),
