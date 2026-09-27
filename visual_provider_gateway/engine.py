@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
+from datetime import date
 from dataclasses import replace
 
 from .models import CreativeBrief, CreativeJob, ProviderConfig
@@ -213,8 +215,72 @@ def configured_providers(kind: str, country_code: str = "") -> tuple[str, ...]:
     return tuple(names)
 
 
+_KNOWN_MODEL_LIFECYCLE = {
+    "yandex-art-2.0": {
+        "deprecated_at": "2026-09-07",
+        "replacement": "aliceai-image-art-3.0",
+    },
+    "yandex-art/latest": {
+        "deprecated_at": "2026-09-07",
+        "replacement": "aliceai-image-art-3.0",
+    },
+}
+
+
+def _model_lifecycle_overrides() -> dict[str, dict[str, str]]:
+    raw = str(os.getenv("VISUAL_MODEL_LIFECYCLE_JSON", "") or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    result: dict[str, dict[str, str]] = {}
+    for key, value in parsed.items():
+        if not isinstance(value, dict):
+            continue
+        model = str(key or "").strip()
+        if not model:
+            continue
+        result[model] = {
+            "deprecated_at": str(value.get("deprecated_at") or "").strip(),
+            "replacement": str(value.get("replacement") or "").strip(),
+        }
+    return result
+
+
+def _model_lifecycle(model_uri: str) -> dict[str, object]:
+    uri = str(model_uri or "").strip()
+    model_id = uri.rsplit("/", 1)[-1] if uri else ""
+    metadata = dict(_KNOWN_MODEL_LIFECYCLE.get(model_id) or {})
+    override = _model_lifecycle_overrides().get(uri) or _model_lifecycle_overrides().get(model_id)
+    if override:
+        metadata.update(override)
+    deprecated_at = str(metadata.get("deprecated_at") or "").strip()
+    days_remaining: int | None = None
+    status = "active"
+    if deprecated_at:
+        try:
+            deadline = date.fromisoformat(deprecated_at)
+            days_remaining = (deadline - date.today()).days
+            status = "deprecated" if days_remaining < 0 else "deprecating"
+        except ValueError:
+            status = "unknown"
+    return {
+        "model": uri,
+        "model_id": model_id,
+        "deprecated_at": deprecated_at,
+        "days_remaining": days_remaining,
+        "replacement": str(metadata.get("replacement") or ""),
+        "status": status,
+    }
+
+
 def provider_snapshot(country_code: str = "") -> dict[str, object]:
     configs = provider_configs()
+    yandex = configs["yandexart"]
     return {
         "enabled": _truthy("VISUAL_CREATIVE_ENABLED", "0"),
         "country_code": str(country_code or _env("VISUAL_DEPLOYMENT_COUNTRY", "RU")).strip().upper(),
@@ -223,6 +289,24 @@ def provider_snapshot(country_code: str = "") -> dict[str, object]:
         "configured_image": configured_providers("image", country_code),
         "configured_video": configured_providers("video", country_code),
         "providers": {name: cfg.safe_dict() for name, cfg in configs.items()},
+        "models": {
+            "yandexart": {
+                **_model_lifecycle(yandex.model_image),
+                "api_family": "openai_images",
+                "candidate_count": len(
+                    tuple(
+                        dict.fromkeys(
+                            part.strip()
+                            for part in str(
+                                os.getenv("YANDEX_ART_MODEL_CANDIDATES", "")
+                                or yandex.model_image
+                            ).split(",")
+                            if part.strip()
+                        )
+                    )
+                ),
+            }
+        },
     }
 
 
