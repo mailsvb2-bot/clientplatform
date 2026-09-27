@@ -17,6 +17,7 @@ from clientplatform.domain.tenancy import PlatformRole, TenantContext
 from clientplatform.runtime.conference_provider import (
     ConferenceCapabilities,
     ConferenceJoin,
+    ConferenceLifecycle,
     ConferenceRef,
 )
 from clientplatform.runtime.ucr_gateway import UcrGatewayConfigurationError
@@ -98,8 +99,13 @@ def _actor(
 class FakeManagedProvider:
     key = "ucr"
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        lifecycle: ConferenceLifecycle = ConferenceLifecycle.SCHEDULED,
+    ) -> None:
         self.calls: list[tuple[str, object]] = []
+        self.lifecycle = lifecycle
 
     async def capabilities(self, *, tenant_id: str) -> ConferenceCapabilities:
         raise AssertionError("not used directly")
@@ -110,6 +116,7 @@ class FakeManagedProvider:
             provider_key="ucr",
             external_conference_id=spec.external_conference_id,
             provider_conference_id="ucr-conference-1",
+            lifecycle=self.lifecycle,
         )
 
     async def resolve(self, **kwargs):
@@ -117,7 +124,13 @@ class FakeManagedProvider:
 
     async def set_lifecycle(self, conference, **kwargs):
         self.calls.append(("lifecycle", (conference, kwargs)))
-        return conference
+        self.lifecycle = kwargs["lifecycle"]
+        return ConferenceRef(
+            provider_key=conference.provider_key,
+            external_conference_id=conference.external_conference_id,
+            provider_conference_id=conference.provider_conference_id,
+            lifecycle=self.lifecycle,
+        )
 
     async def set_entry_open(self, conference, **kwargs):
         self.calls.append(("entry", (conference, kwargs)))
@@ -220,6 +233,27 @@ class ManagedEventConferenceJoinTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first_spec.external_conference_id, second_spec.external_conference_id)
         self.assertEqual(first_spec.starts_at_unix_ms, second_spec.starts_at_unix_ms)
         self.assertEqual(first_key, second_key)
+
+    async def test_repeat_join_does_not_regress_live_conference_to_waiting(self) -> None:
+        event = _event()
+        session = _session()
+        registration = _registration(session)
+        provider = FakeManagedProvider(lifecycle=ConferenceLifecycle.LIVE)
+
+        await issue_managed_event_session_join(
+            registration=registration,
+            event=event,
+            session=session,
+            provider=provider,
+            join_attempt_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        )
+
+        self.assertNotIn(
+            "lifecycle",
+            [name for name, _payload in provider.calls],
+        )
+        self.assertIn("entry", [name for name, _payload in provider.calls])
+        self.assertIn("join", [name for name, _payload in provider.calls])
 
     async def test_owner_join_uses_canonical_owner_identity(self) -> None:
         event = _event()
