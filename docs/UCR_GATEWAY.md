@@ -161,19 +161,23 @@ grant. Therefore an UCR grant MUST NOT be persisted into the shared
 `EventSession.join_url` field.
 
 The ClientPlatform public event join boundary now implements that separation. A managed
-UCR EventSession stores `provider_key=ucr` and no shared room URL. On a valid personal
-registration join request ClientPlatform derives only opaque business-scoped identifiers
-from the canonical EventSession/registration IDs, idempotently creates/prepares the
-managed conference, ensures the attendee, requests a fresh single-use grant, revalidates
-that the registration and event are still active, records the normal ClientPlatform
-join-click signal, and redirects to the returned HTTPS grant. Name, e-mail and phone are
-not sent to UCR for this path.
+UCR EventSession stores `provider_key=ucr` and no shared room URL. The provider-room
+identity is stable per canonical Event + session position and its provider schedule is
+anchored to immutable Event creation time, so ordinary ClientPlatform schedule edits do
+not create a second UCR room or change the create replay payload. On a valid personal
+registration join request ClientPlatform derives only opaque business-scoped identifiers,
+ensures the event creator as the single conference OWNER plus the registered ATTENDEE,
+prepares the runtime, opens the waiting-room entry gate, requests a 15-minute single-use
+grant, then performs one final conditional database authorization requiring the
+registration to remain registered and the event to remain published before returning the
+redirect. Name, e-mail and phone are not sent to UCR for this path.
 
 The wizard exposes the managed venue only as usable when both the existing gateway flag
-and `CLIENTPLATFORM_UCR_CONFERENCE_INTEGRATION_ID` are configured. Gateway/network/
-capability failures return a bounded ClientPlatform 503 page and never fall back to a
-shared or guessed room URL. Production deployment/activation is still a separate owner
-decision.
+and `CLIENTPLATFORM_UCR_CONFERENCE_INTEGRATION_ID` are configured. Owner/administrator
+entry is also grant-based: the Telegram conduct flow and Cockpit live endpoint request
+fresh OWNER/HOST grants instead of looking for a shared `join_url`. Gateway/network/
+capability failures fail closed and never fall back to a shared or guessed room URL.
+Production deployment/activation is still a separate owner decision.
 
 `StartCall` receives the canonical UCR request supplied by the caller. ClientPlatform does not turn a short `(tenant, conversation, participants)` tuple into a fabricated `CallSession` because UCR owns the exact call model and its required authority/revision fields.
 
