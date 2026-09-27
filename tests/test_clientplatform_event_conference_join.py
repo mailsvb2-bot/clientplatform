@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+import unittest
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
-
-import pytest
 
 from clientplatform.application.event_conference_join import (
     issue_managed_event_session_join,
@@ -17,6 +16,7 @@ from clientplatform.runtime.conference_provider import (
     ConferenceJoin,
     ConferenceRef,
 )
+from clientplatform.runtime.ucr_gateway import UcrGatewayConfigurationError
 
 
 NOW = datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc)
@@ -99,112 +99,120 @@ class FakeManagedProvider:
         raise AssertionError("not used")
 
 
-@pytest.mark.asyncio
-async def test_managed_join_uses_opaque_registration_identity_and_stable_setup_keys() -> None:
-    session = _session()
-    registration = _registration(session)
-    provider = FakeManagedProvider()
-    attempt = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+class ManagedEventConferenceJoinTests(unittest.IsolatedAsyncioTestCase):
+    async def test_managed_join_uses_opaque_identity_and_stable_setup_keys(self) -> None:
+        session = _session()
+        registration = _registration(session)
+        provider = FakeManagedProvider()
+        attempt = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
-    join = await issue_managed_event_session_join(
-        registration=registration,
-        session=session,
-        provider=provider,
-        join_attempt_id=attempt,
-    )
-
-    assert join.url == "https://join.example.test/grant"
-    assert [name for name, _ in provider.calls] == [
-        "create",
-        "participant",
-        "prepare",
-        "join",
-    ]
-    create_spec, create_key = provider.calls[0][1]
-    assert create_spec.tenant_id == session.business_id
-    assert create_spec.external_conference_id == f"clientplatform:event-session:{session.id}"
-    assert create_key == f"conference:{session.id}"
-
-    _, participant_kwargs = provider.calls[1][1]
-    assert participant_kwargs["external_user_id"] == (
-        f"clientplatform:event-registration:{registration.id}"
-    )
-    assert participant_kwargs["idempotency_key"] == (
-        f"participant:{session.id}:{registration.id}"
-    )
-    _, join_kwargs = provider.calls[3][1]
-    assert join_kwargs["idempotency_key"].endswith(attempt)
-
-    serialized = repr(provider.calls)
-    assert registration.email not in serialized
-    assert registration.name not in serialized
-    assert str(registration.phone) not in serialized
-
-
-@pytest.mark.asyncio
-async def test_managed_join_rejects_cross_tenant_registration_before_provider_io() -> None:
-    session = _session()
-    registration = _registration(session, business_id=str(uuid4()))
-    provider = FakeManagedProvider()
-
-    with pytest.raises(ValueError, match="does not belong"):
-        await issue_managed_event_session_join(
+        join = await issue_managed_event_session_join(
             registration=registration,
             session=session,
             provider=provider,
+            join_attempt_id=attempt,
         )
 
-    assert provider.calls == []
+        self.assertEqual(join.url, "https://join.example.test/grant")
+        self.assertEqual(
+            [name for name, _ in provider.calls],
+            ["create", "participant", "prepare", "join"],
+        )
+        create_spec, create_key = provider.calls[0][1]
+        self.assertEqual(create_spec.tenant_id, session.business_id)
+        self.assertEqual(
+            create_spec.external_conference_id,
+            f"clientplatform:event-session:{session.id}",
+        )
+        self.assertEqual(create_key, f"conference:{session.id}")
+
+        _, participant_kwargs = provider.calls[1][1]
+        self.assertEqual(
+            participant_kwargs["external_user_id"],
+            f"clientplatform:event-registration:{registration.id}",
+        )
+        self.assertEqual(
+            participant_kwargs["idempotency_key"],
+            f"participant:{session.id}:{registration.id}",
+        )
+        _, join_kwargs = provider.calls[3][1]
+        self.assertTrue(join_kwargs["idempotency_key"].endswith(attempt))
+
+        serialized = repr(provider.calls)
+        self.assertNotIn(registration.email, serialized)
+        self.assertNotIn(registration.name, serialized)
+        self.assertNotIn(str(registration.phone), serialized)
+
+    async def test_managed_join_rejects_cross_tenant_before_provider_io(self) -> None:
+        session = _session()
+        registration = _registration(session, business_id=str(uuid4()))
+        provider = FakeManagedProvider()
+
+        with self.assertRaisesRegex(ValueError, "does not belong"):
+            await issue_managed_event_session_join(
+                registration=registration,
+                session=session,
+                provider=provider,
+            )
+
+        self.assertEqual(provider.calls, [])
+
+    async def test_managed_join_rejects_non_managed_session_before_provider_io(self) -> None:
+        session = _session()
+        external = EventSession(
+            id=session.id,
+            business_id=session.business_id,
+            event_id=session.event_id,
+            position=session.position,
+            starts_at=session.starts_at,
+            ends_at=session.ends_at,
+            provider_key="external",
+            provider_label=None,
+            join_url="https://room.example.test/live",
+            created_at=session.created_at,
+            updated_at=session.updated_at,
+        )
+        registration = _registration(external)
+        provider = FakeManagedProvider()
+
+        with self.assertRaisesRegex(ValueError, "not managed"):
+            await issue_managed_event_session_join(
+                registration=registration,
+                session=external,
+                provider=provider,
+            )
+
+        self.assertEqual(provider.calls, [])
 
 
-@pytest.mark.asyncio
-async def test_managed_join_rejects_non_managed_session_before_provider_io() -> None:
-    session = _session()
-    external = EventSession(
-        id=session.id,
-        business_id=session.business_id,
-        event_id=session.event_id,
-        position=session.position,
-        starts_at=session.starts_at,
-        ends_at=session.ends_at,
-        provider_key="external",
-        provider_label=None,
-        join_url="https://room.example.test/live",
-        created_at=session.created_at,
-        updated_at=session.updated_at,
-    )
-    registration = _registration(external)
-    provider = FakeManagedProvider()
-
-    with pytest.raises(ValueError, match="not managed"):
-        await issue_managed_event_session_join(
-            registration=registration,
-            session=external,
-            provider=provider,
+class ManagedEventConferenceConfigTests(unittest.TestCase):
+    def test_ucr_managed_venue_requires_gateway_and_integration_id(self) -> None:
+        base = {
+            "CLIENTPLATFORM_UCR_GATEWAY_URL": "https://gateway.example.test",
+        }
+        self.assertFalse(ucr_managed_event_provider_available(base))
+        self.assertFalse(
+            ucr_managed_event_provider_available(
+                {**base, "CLIENTPLATFORM_UCR_GATEWAY_ENABLED": "true"}
+            )
+        )
+        enabled = {
+            **base,
+            "CLIENTPLATFORM_UCR_GATEWAY_ENABLED": "true",
+            "CLIENTPLATFORM_UCR_CONFERENCE_INTEGRATION_ID": "clientplatform-prod",
+        }
+        self.assertTrue(ucr_managed_event_provider_available(enabled))
+        self.assertEqual(
+            ucr_conference_integration_id(enabled),
+            "clientplatform-prod",
         )
 
-    assert provider.calls == []
+    def test_ucr_conference_integration_id_rejects_control_characters(self) -> None:
+        with self.assertRaisesRegex(UcrGatewayConfigurationError, "invalid"):
+            ucr_conference_integration_id(
+                {"CLIENTPLATFORM_UCR_CONFERENCE_INTEGRATION_ID": "bad\nvalue"}
+            )
 
 
-def test_ucr_managed_venue_requires_both_gateway_and_integration_id() -> None:
-    base = {
-        "CLIENTPLATFORM_UCR_GATEWAY_URL": "https://gateway.example.test",
-    }
-    assert not ucr_managed_event_provider_available(base)
-    assert not ucr_managed_event_provider_available(
-        {**base, "CLIENTPLATFORM_UCR_GATEWAY_ENABLED": "true"}
-    )
-    enabled = {
-        **base,
-        "CLIENTPLATFORM_UCR_GATEWAY_ENABLED": "true",
-        "CLIENTPLATFORM_UCR_CONFERENCE_INTEGRATION_ID": "clientplatform-prod",
-    }
-    assert ucr_managed_event_provider_available(enabled)
-    assert ucr_conference_integration_id(enabled) == "clientplatform-prod"
-
-
-def test_ucr_conference_integration_id_rejects_control_characters() -> None:
-    with pytest.raises(Exception, match="invalid"):
-        ucr_conference_integration_id(
-            {"CLIENTPLATFORM_UCR_CONFERENCE_INTEGRATION_ID": "bad\nvalue"}
-        )
+if __name__ == "__main__":
+    unittest.main()
