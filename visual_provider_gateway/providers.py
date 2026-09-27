@@ -195,6 +195,22 @@ def _download_asset(config: ProviderConfig, job: CreativeJob, url: str) -> Creat
     return _store_asset(config, job, raw)
 
 
+def _yandex_image_model_candidates(config: ProviderConfig) -> tuple[str, ...]:
+    configured = str(config.model_image or "").strip()
+    raw = str(os.getenv("YANDEX_ART_MODEL_CANDIDATES", "") or "").strip()
+    candidates = [configured] if configured else []
+    candidates.extend(part.strip() for part in raw.split(",") if part.strip())
+    if config.folder_id:
+        candidates.append(f"art://{config.folder_id}/aliceai-image-art-3.0")
+    return tuple(dict.fromkeys(item for item in candidates if item))
+
+
+def _definitive_model_rejection(exc: BaseException) -> bool:
+    if not isinstance(exc, ProviderTransportError):
+        return False
+    return str(exc or "").strip() in {"http_403", "http_404", "http_410"}
+
+
 class YandexArtProvider:
     def __init__(self, config: ProviderConfig) -> None:
         self.config = config
@@ -222,48 +238,63 @@ class YandexArtProvider:
     def submit(self, brief: CreativeBrief) -> CreativeJob:
         if not self.configured(brief.kind):
             raise ProviderTransportError("provider_not_configured")
-        model_uri = self.config.model_image or f"art://{self.config.folder_id}/aliceai-image-art-3.0"
-        data = _json_request(
-            "POST",
-            self.config.base_url.rstrip("/") + "/v1/images/generations",
-            headers={
-                "Authorization": self._authorization(),
-                "OpenAI-Project": self.config.folder_id,
-            },
-            payload={
-                "model": model_uri,
-                "prompt": brief.prompt,
-                "size": _openai_image_size(brief.aspect_ratio),
-            },
-            timeout=self.config.timeout_seconds,
-            max_bytes=self.config.max_json_bytes,
-        )
-        rows = data.get("data") if isinstance(data.get("data"), list) else []
-        row = rows[0] if rows and isinstance(rows[0], dict) else {}
-        encoded = str(row.get("b64_json") or "")
-        job = CreativeJob(
-            provider="yandexart",
-            kind="image",
-            status="succeeded",
-            external_id=uuid.uuid4().hex,
-            model=model_uri,
-            mime_type="image/png",
-        )
-        if encoded:
+        last_error: BaseException | None = None
+        for model_uri in _yandex_image_model_candidates(self.config):
             try:
-                raw = base64.b64decode(encoded, validate=True)
-            except (binascii.Error, ValueError, TypeError):
-                job.status = "failed"
-                job.error_code = "invalid_image_encoding"
-                return job
-            return _store_asset(self.config, job, raw)
-        url = str(row.get("url") or "").strip()
-        if url:
-            job.media_url = url
-            return _download_asset(self.config, job, url)
-        job.status = "failed"
-        job.error_code = "missing_image"
-        return job
+                data = _json_request(
+                    "POST",
+                    self.config.base_url.rstrip("/") + "/v1/images/generations",
+                    headers={
+                        "Authorization": self._authorization(),
+                        "OpenAI-Project": self.config.folder_id,
+                    },
+                    payload={
+                        "model": model_uri,
+                        "prompt": brief.prompt,
+                        "size": _openai_image_size(brief.aspect_ratio),
+                    },
+                    timeout=self.config.timeout_seconds,
+                    max_bytes=self.config.max_json_bytes,
+                )
+            except ProviderTransportError as exc:
+                last_error = exc
+                if _definitive_model_rejection(exc):
+                    continue
+                raise
+
+            rows = data.get("data") if isinstance(data.get("data"), list) else []
+            row = rows[0] if rows and isinstance(rows[0], dict) else {}
+            encoded = str(row.get("b64_json") or "")
+            job = CreativeJob(
+                provider="yandexart",
+                kind="image",
+                status="succeeded",
+                external_id=uuid.uuid4().hex,
+                model=model_uri,
+                mime_type="image/png",
+                provider_payload={
+                    "model_candidates": _yandex_image_model_candidates(self.config),
+                },
+            )
+            if encoded:
+                try:
+                    raw = base64.b64decode(encoded, validate=True)
+                except (binascii.Error, ValueError, TypeError):
+                    job.status = "failed"
+                    job.error_code = "invalid_image_encoding"
+                    return job
+                return _store_asset(self.config, job, raw)
+            url = str(row.get("url") or "").strip()
+            if url:
+                job.media_url = url
+                return _download_asset(self.config, job, url)
+            job.status = "failed"
+            job.error_code = "missing_image"
+            return job
+
+        if last_error is not None:
+            raise last_error
+        raise ProviderTransportError("provider_not_configured")
 
     def poll(self, job: CreativeJob) -> CreativeJob:
         return job
