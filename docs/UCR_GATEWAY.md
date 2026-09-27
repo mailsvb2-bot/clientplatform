@@ -118,12 +118,34 @@ Read operation:
 
 ### `ucr.v1.UniversalConferenceService`
 
-This pin exposes only the two reviewed read-only methods needed for the first UIII attendance consumer slice:
+The Conference Provider Gateway may call only this reviewed subset already present in
+the pinned UCR revision. ClientPlatform does not copy Group/Call/Device state and does
+not create a second conference engine:
 
+- `CreateConference`
+- `ResolveConference`
+- `GetConference`
+- `TransitionConference`
+- `SetEntryOpen`
+- `EnsureParticipant`
+- `EnsureParticipantDevice`
+- `UpdateParticipant`
+- `RemoveParticipant`
+- `ListParticipants`
+- `PrepareConferenceRuntime`
+- `IssueJoinGrant`
+- `RevokeJoinGrant`
 - `GetParticipantAttendance`
 - `GetCapabilities`
 
-Conference creation, participant mutation, runtime preparation and join-grant mutation remain outside the ClientPlatform gateway in this slice. The adapter does not infer or synthesize those operations.
+Mutations require the existing gateway idempotency key. UCR remains the canonical owner
+of conference/runtime/device state and durable duplicate/conflict semantics.
+
+The provider-neutral ClientPlatform boundary lives in
+`clientplatform/runtime/conference_provider.py`. UCR is one managed provider behind
+that boundary, not a hard-coded webinar backend. Link-only HTTPS rooms may be exposed
+through the same boundary, but all unsupported management and attendance operations
+fail closed instead of pretending success.
 
 `StartCall` receives the canonical UCR request supplied by the caller. ClientPlatform does not turn a short `(tenant, conversation, participants)` tuple into a fabricated `CallSession` because UCR owns the exact call model and its required authority/revision fields.
 
