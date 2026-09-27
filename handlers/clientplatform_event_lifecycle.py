@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from clientplatform.application.event_content_plans import set_event_content_mode
 from clientplatform.application.event_conference_join import (
+    issue_managed_event_owner_join_for_position,
     ucr_managed_event_provider_available,
 )
 from clientplatform.application.cockpit_events import resolve_event_live_snapshot
@@ -44,6 +45,8 @@ from clientplatform.domain.event_content import (
     parse_event_content_mode,
 )
 from clientplatform.domain.tenancy import TenantPermissionDenied
+from clientplatform.runtime.conference_provider import ConferenceProviderError
+from clientplatform.runtime.ucr_gateway import UcrGatewayError
 from clientplatform.presentation.event_schedule_picker import (
     MAX_CALENDAR_MONTHS,
     QUICK_DURATIONS,
@@ -753,26 +756,51 @@ async def open_webinar_live_room(callback: CallbackQuery) -> None:
     except RuntimeError:
         await callback.answer("Не удалось открыть эфир этого вебинара", show_alert=True)
         return
-    ready = tuple(
-        session
-        for session in live.sessions
-        if session.join_ready and session.join_url
-    )
-    if not ready:
-        await callback.answer("Сначала добавьте ссылку на эфир", show_alert=True)
+    join_targets: list[tuple[object, str]] = []
+    managed_failed = False
+    for session in live.sessions:
+        if session.provider_key == "ucr":
+            try:
+                join = await issue_managed_event_owner_join_for_position(
+                    actor=actor,
+                    event_id=event_id,
+                    position=session.position,
+                )
+            except (
+                ConferenceProviderError,
+                UcrGatewayError,
+                LookupError,
+                ValueError,
+            ):
+                managed_failed = True
+                continue
+            join_targets.append((session, join.url))
+            continue
+        if session.join_ready and session.join_url:
+            join_targets.append((session, session.join_url))
+    if not join_targets:
+        await callback.answer(
+            (
+                "Управляемый эфир пока не готов к входу. "
+                "Проверьте подключение UCR и повторите после появления участника."
+                if managed_failed
+                else "Сначала добавьте ссылку на эфир"
+            ),
+            show_alert=True,
+        )
         return
     rows = [
         [
             InlineKeyboardButton(
                 text=(
                     f"▶️ Открыть день {session.position}"
-                    if len(ready) > 1
+                    if len(join_targets) > 1
                     else "▶️ Открыть эфир"
                 ),
-                url=session.join_url,
+                url=join_url,
             )
         ]
-        for session in ready
+        for session, join_url in join_targets
     ]
     rows.append(
         [
@@ -785,7 +813,7 @@ async def open_webinar_live_room(callback: CallbackQuery) -> None:
     await callback.answer()
     schedule = "\n".join(
         f"День {session.position}: {session.local_start}"
-        for session in ready
+        for session, _join_url in join_targets
     )
     await control._callback_message(callback).answer(
         f"▶️ {live.title}\n\n{schedule}\n\nВыберите нужный эфир:",
