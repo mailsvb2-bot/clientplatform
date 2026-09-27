@@ -242,6 +242,37 @@ def test_early_join_click_is_not_counted_as_attendance_or_show_up() -> None:
     conn.close()
 
 
+def test_redirect_authorization_allows_early_active_join_without_counting_funnel() -> None:
+    conn = _setup_conn()
+    actor = _owner(conn, 101, "Практика")
+    event = _published(conn, actor, starts_in_hours=4)
+    with patch(
+        "clientplatform.application.event_notifications._public_base_url",
+        return_value="https://clientplatform.example.test",
+    ):
+        result = register_public_attendee_in_transaction(
+            conn,
+            public_slug=event.public_slug,
+            name="Анна",
+            email="anna@example.test",
+            consent=True,
+        )
+
+    authorized = EventRepository(conn).authorize_join_redirect(
+        registration=result.registration,
+        event=event,
+        now=event.starts_at - timedelta(hours=2),
+    )
+
+    assert authorized is True
+    row = conn.execute(
+        "SELECT first_join_click_at FROM clientplatform_event_registrations WHERE id=?",
+        (result.registration.id,),
+    ).fetchone()
+    assert row["first_join_click_at"] is None
+    conn.close()
+
+
 def test_join_click_fails_closed_if_event_was_cancelled_after_stale_read() -> None:
     conn = _setup_conn()
     actor = _owner(conn, 101, "Практика")
