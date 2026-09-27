@@ -285,9 +285,16 @@ class VisualCreativeEngine:
             failures.append(f"{name}:{submit_failure_code}")
             # A timed-out/failed POST can be ambiguous: the provider may have
             # accepted and billed the job even though we never received its ID.
-            # Default to fail-closed instead of starting another paid provider
-            # request. Operators may explicitly opt into that cost/risk tradeoff.
-            if _should_stop_after_submit_failure(normalized):
+            # Authentication rejection is different: HTTP 401/403 is a definitive
+            # pre-acceptance failure, so an automatic policy route may safely try
+            # the next already-configured provider without risking a duplicate
+            # paid generation. An explicitly requested provider remains strict.
+            auth_rejected = submit_failure_code in {
+                "visual_provider_submit_http_401",
+                "visual_provider_submit_http_403",
+            }
+            safe_policy_failover = auth_rejected and not normalized.preferred_provider
+            if not safe_policy_failover and _should_stop_after_submit_failure(normalized):
                 break
         return CreativeJob(
             provider="none",
