@@ -27,28 +27,44 @@ existing webinar wizard and personal registration page.
 5. Network I/O happens after the database read scope is closed; no database transaction
    is held across UCR calls.
 6. ClientPlatform uses opaque IDs only:
-   - conference external id: `clientplatform:event-session:<session UUID>`;
-   - participant external id: `clientplatform:event-registration:<registration UUID>`.
+   - conference external id: `clientplatform:event:<event UUID>:session:<position>`;
+   - canonical conference owner: `clientplatform:event-owner:<creator membership UUID>`;
+   - attendee: `clientplatform:event-registration:<registration UUID>`;
+   - another authorized manager joins as `clientplatform:event-host:<membership UUID>`.
    Name, e-mail and phone are not sent for join routing.
-7. Conference create, participant ensure and runtime prepare use stable idempotency keys.
-   Each browser join action receives a separate UUID-scoped idempotency key and requests
-   a fresh single-use join grant.
-8. The returned grant URL is never persisted into EventSession or Event.
-9. Immediately before redirect ClientPlatform revalidates that the registration and
-   event are still active. A cancellation race therefore fails closed; an already
-   issued orphan grant is bounded by UCR TTL and is not exposed to the cancelled user.
-10. Provider/gateway/capability failure renders a bounded 503 ClientPlatform page and
+7. Provider-room identity and create payload are stable across ClientPlatform schedule
+   edits. The UCR room-lifetime schedule is anchored to immutable Event.created_at with
+   no provider-side planned end; the editable EventSession date/time remains exclusively
+   ClientPlatform business state. This prevents a schedule edit from splitting one event
+   position across multiple provider rooms or conflicting on create replay.
+8. Conference create, owner/participant ensure, runtime preparation, waiting lifecycle
+   and entry-open mutations use stable idempotency keys. Each browser join action receives
+   a separate UUID-scoped idempotency key and requests a fresh single-use grant with a
+   short 15-minute TTL.
+9. Before attendee runtime preparation ClientPlatform always ensures exactly one stable
+   conference OWNER derived from the event creator, then the registered ATTENDEE. An
+   authorized administrator conducting the webinar joins as HOST rather than becoming a
+   second owner.
+10. The returned grant URL is never persisted into EventSession or Event. Owner/host
+    grants are generated on demand by both the Telegram conduct flow and Cockpit live
+    endpoint.
+11. Immediately before attendee redirect ClientPlatform executes a conditional join-click
+    update that requires both the registration to remain registered and the event to
+    remain published in the same SQL statement. Failure aborts the redirect, so an
+    already-issued grant is not exposed after a detected cancellation race.
+12. Provider/gateway/capability failure renders a bounded 503 ClientPlatform page and
     does not fall back to a guessed/shared URL.
-11. The existing join-click funnel signal is recorded only after provider join issuance
-    succeeds and the registration is revalidated.
-12. This ADR changes no UCR repository code and authorizes no production deployment or
+13. The existing join-click funnel signal is recorded only after provider join issuance
+    succeeds and the final conditional authorization succeeds.
+14. This ADR changes no UCR repository code and authorizes no production deployment or
     feature-flag activation.
 
 ## Consequences
 
 The existing ClientPlatform webinar user path can use a managed conference provider
 without introducing a second webinar domain or leaking a participant grant through
-shared event state. External-link providers retain their existing behavior.
+shared event state. Owners/admins use the same canonical event from Telegram and
+Cockpit, while external-link providers retain their existing behavior.
 
 Production use still requires the separately managed UCR gateway/listener, service
 principal permissions, integration id, realtime capability proof and explicit owner
