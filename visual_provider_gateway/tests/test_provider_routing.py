@@ -28,6 +28,23 @@ def _clear_provider_routing(monkeypatch):
 def test_ru_defaults_keep_global_clouds_out(monkeypatch):
     _clear_provider_routing(monkeypatch)
     assert provider_order("image", "RU") == ("yandexart", "gigachat", "selfhosted")
+    assert provider_order("video", "RU") == ("selfhosted", "yandexart_motion")
+
+
+def test_ru_video_prefers_native_providers_before_motion_fallback(monkeypatch):
+    _clear_provider_routing(monkeypatch)
+    monkeypatch.setenv("VISUAL_ALLOW_GLOBAL_PROVIDERS_IN_RU", "1")
+    assert provider_order("video", "RU") == (
+        "selfhosted",
+        "runway",
+        "openai",
+        "yandexart_motion",
+    )
+
+
+def test_operator_can_explicitly_restore_motion_first(monkeypatch):
+    _clear_provider_routing(monkeypatch)
+    monkeypatch.setenv("VISUAL_VIDEO_MOTION_PRIMARY", "1")
     assert provider_order("video", "RU") == ("yandexart_motion", "selfhosted")
 
 
@@ -168,6 +185,39 @@ def test_yandex_iam_token_still_works_when_no_api_key_exists(monkeypatch):
     assert provider._authorization() == "Bearer current-iam-token"
 
 
+def test_provider_snapshot_reports_native_video_mode(monkeypatch):
+    from visual_provider_gateway.engine import provider_snapshot
+
+    _clear_provider_routing(monkeypatch)
+    monkeypatch.setenv("VISUAL_CREATIVE_ENABLED", "1")
+    monkeypatch.setenv("VISUAL_SELFHOST_BASE_URL", "http://worker:9000")
+    monkeypatch.setenv("VISUAL_SELFHOST_VIDEO_MODEL", "wan2.2-t2v-a14b")
+    monkeypatch.delenv("YANDEX_API_KEY", raising=False)
+    monkeypatch.delenv("YANDEX_ART_IAM_TOKEN", raising=False)
+
+    snapshot = provider_snapshot("RU")
+
+    assert snapshot["video_generation_mode"] == "native"
+    assert snapshot["configured_video_native"] == ("selfhosted",)
+    assert snapshot["configured_video_motion"] == ()
+
+
+def test_provider_snapshot_reports_motion_fallback_mode(monkeypatch):
+    from visual_provider_gateway.engine import provider_snapshot
+
+    _clear_provider_routing(monkeypatch)
+    monkeypatch.setenv("VISUAL_CREATIVE_ENABLED", "1")
+    monkeypatch.setenv("YANDEX_API_KEY", "key")
+    monkeypatch.setenv("YANDEX_ART_FOLDER_ID", "folder")
+    monkeypatch.delenv("VISUAL_SELFHOST_BASE_URL", raising=False)
+
+    snapshot = provider_snapshot("RU")
+
+    assert snapshot["video_generation_mode"] == "motion"
+    assert snapshot["configured_video_native"] == ()
+    assert snapshot["configured_video_motion"] == ("yandexart_motion",)
+
+
 def test_provider_snapshot_strips_base_url_credentials_and_paths(monkeypatch):
     monkeypatch.setenv("VISUAL_OPENAI_BASE_URL", "https://user:secret@example.com/private/api?token=x")
     snapshot = provider_snapshot("DE")
@@ -203,6 +253,49 @@ def test_submit_does_not_failover_after_ambiguous_provider_error_by_default(monk
     job = VisualCreativeEngine(enabled=True).submit(CreativeBrief(kind="image", prompt="x"))
     assert job.status == "failed"
     assert calls == ["broken"]
+
+
+def test_submit_fails_over_after_definitive_invalid_request(monkeypatch):
+    from visual_provider_gateway.engine import VisualCreativeEngine
+    from visual_provider_gateway.models import CreativeJob
+
+    calls = []
+
+    class RejectedProvider:
+        def configured(self, kind):
+            return True
+
+        def submit(self, brief):
+            calls.append("rejected")
+            raise providers.ProviderTransportError("http_422")
+
+    class MotionFallback:
+        def configured(self, kind):
+            return True
+
+        def submit(self, brief):
+            calls.append("motion")
+            return CreativeJob(
+                provider="yandexart_motion",
+                kind=brief.kind,
+                status="succeeded",
+                external_id="motion-1",
+            )
+
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.provider_order",
+        lambda *_args, **_kwargs: ("runway", "yandexart_motion"),
+    )
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.build_provider",
+        lambda name: RejectedProvider() if name == "runway" else MotionFallback(),
+    )
+    job = VisualCreativeEngine(enabled=True).submit(
+        CreativeBrief(kind="video", prompt="x")
+    )
+
+    assert job.provider == "yandexart_motion"
+    assert calls == ["rejected", "motion"]
 
 
 def test_submit_fails_over_after_definitive_auth_rejection(monkeypatch):
