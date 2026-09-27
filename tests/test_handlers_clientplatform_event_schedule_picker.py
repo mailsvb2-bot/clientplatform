@@ -66,7 +66,7 @@ class EventSchedulePickerHandlerTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Zoom", venue_labels)
             self.assertIn("Webinar.ru", venue_labels)
             self.assertIn("GetCourse", venue_labels)
-            self.assertIn("UCR", venue_labels)
+            self.assertIn("ClientPlatform эфир", venue_labels)
             self.assertIn("Другой сервис", venue_labels)
 
             calendar_keyboard = lifecycle._calendar_keyboard(
@@ -184,7 +184,7 @@ class EventSchedulePickerHandlerTests(unittest.IsolatedAsyncioTestCase):
         )
         callback.answer.assert_awaited_once_with()
 
-    async def test_external_venue_starts_calendar_and_ucr_fails_honestly(self) -> None:
+    async def test_external_venue_starts_calendar_and_managed_venue_fails_closed(self) -> None:
         state = _State(
             {
                 "event_business_id": BUSINESS_ID,
@@ -215,7 +215,7 @@ class EventSchedulePickerHandlerTests(unittest.IsolatedAsyncioTestCase):
             await lifecycle.choose_webinar_venue(ucr, state)
         prompt.assert_not_awaited()
         self.assertTrue(ucr.answer.await_args.kwargs["show_alert"])
-        self.assertIn("не выдаёт", ucr.answer.await_args.args[0])
+        self.assertIn("не подключён", ucr.answer.await_args.args[0])
 
     async def test_date_time_duration_builds_pending_session_without_manual_interval(self) -> None:
         state = _State(
