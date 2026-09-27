@@ -377,13 +377,89 @@ def _provider_state_and_alerts(
         model = str(raw.get("model") or "")
         model_id = str(raw.get("model_id") or model)
         lifecycle = _lifecycle_level(raw.get("days_remaining"), raw.get("status"))
+        available_art_models_raw = raw.get("available_art_models")
+        available_art_models = (
+            tuple(
+                str(item)
+                for item in available_art_models_raw
+                if str(item).strip()
+            )
+            if isinstance(available_art_models_raw, (list, tuple))
+            else ()
+        )
+        catalog_available = bool(raw.get("catalog_available"))
+        configured_model_present = bool(raw.get("configured_model_present"))
+        catalog_error = str(raw.get("catalog_error") or "")
         current["models"][provider] = {
             "model": model,
             "model_id": model_id,
             "lifecycle_level": lifecycle,
             "deprecated_at": str(raw.get("deprecated_at") or ""),
+            "catalog_available": catalog_available,
+            "configured_model_present": configured_model_present,
+            "catalog_error": catalog_error,
+            "available_art_models": list(available_art_models),
         }
         previous_model = prev_models.get(provider)
+        if catalog_available:
+            previous_catalog_available = (
+                bool(previous_model.get("catalog_available"))
+                if isinstance(previous_model, dict)
+                else False
+            )
+            previous_models = (
+                set(str(item) for item in previous_model.get("available_art_models", []))
+                if isinstance(previous_model, dict)
+                and isinstance(previous_model.get("available_art_models"), list)
+                else set()
+            )
+            discovered = [
+                item
+                for item in available_art_models
+                if item not in previous_models
+            ]
+            if (
+                isinstance(previous_model, dict)
+                and not previous_catalog_available
+            ):
+                alerts.append(
+                    f"🟢 Каталог моделей {provider} снова доступен."
+                )
+            if discovered and previous_models:
+                alerts.append(
+                    "🆕 Yandex AI Studio: появились новые image-модели\n"
+                    + "\n".join(discovered[:5])
+                    + (
+                        f"\n… и ещё {len(discovered) - 5}"
+                        if len(discovered) > 5
+                        else ""
+                    )
+                    + "\nНовая модель не включается автоматически, пока не разрешена политикой."
+                )
+            if model and not configured_model_present:
+                alerts.append(
+                    "🔴 Текущая image-модель отсутствует в каталоге Yandex AI Studio\n"
+                    f"{provider}: {model}\n"
+                    + (
+                        "Доступные art-модели:\n"
+                        + "\n".join(available_art_models[:5])
+                        if available_art_models
+                        else "Доступных art-моделей каталог не вернул."
+                    )
+                )
+        elif catalog_error:
+            previous_error = (
+                str(previous_model.get("catalog_error") or "")
+                if isinstance(previous_model, dict)
+                else ""
+            )
+            if previous_error != catalog_error:
+                alerts.append(
+                    "🟠 Каталог моделей Yandex AI Studio недоступен\n"
+                    f"Причина: {catalog_error}\n"
+                    "Проверка появления/исчезновения моделей временно невозможна."
+                )
+
         if isinstance(previous_model, dict):
             old_model = str(previous_model.get("model") or "")
             if old_model and model and old_model != model:
