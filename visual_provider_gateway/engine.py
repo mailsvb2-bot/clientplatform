@@ -254,8 +254,18 @@ def _model_lifecycle_overrides() -> dict[str, dict[str, str]]:
 def _model_lifecycle(model_uri: str) -> dict[str, object]:
     uri = str(model_uri or "").strip()
     model_id = uri.rsplit("/", 1)[-1] if uri else ""
-    metadata = dict(_KNOWN_MODEL_LIFECYCLE.get(model_id) or {})
-    override = _model_lifecycle_overrides().get(uri) or _model_lifecycle_overrides().get(model_id)
+    lifecycle_key = model_id
+    for known in _KNOWN_MODEL_LIFECYCLE:
+        if uri.endswith("/" + known) or uri == known:
+            lifecycle_key = known
+            break
+    metadata = dict(_KNOWN_MODEL_LIFECYCLE.get(lifecycle_key) or {})
+    overrides = _model_lifecycle_overrides()
+    override = (
+        overrides.get(uri)
+        or overrides.get(lifecycle_key)
+        or overrides.get(model_id)
+    )
     if override:
         metadata.update(override)
     deprecated_at = str(metadata.get("deprecated_at") or "").strip()
