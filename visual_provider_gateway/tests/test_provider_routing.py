@@ -1,3 +1,4 @@
+import base64
 from __future__ import annotations
 
 import pytest
@@ -117,7 +118,7 @@ def test_yandexart_can_use_explicit_model_uri_without_separate_folder():
             name="yandexart",
             base_url="https://ai.api.cloud.yandex.net:443",
             api_key="test",
-            model_image="art://folder/yandex-art/latest",
+            model_image="art://folder/aliceai-image-art-3.0",
         )
     )
     assert provider.configured("image") is True
@@ -434,22 +435,74 @@ def test_submit_never_exposes_unstructured_transport_error_text(monkeypatch):
     assert secret_marker not in rendered
 
 
-def test_yandexart_motion_video_uses_image_operation_and_preserves_video_contract(monkeypatch):
-    from visual_provider_gateway.providers import YandexArtMotionVideoProvider
+def test_yandexart_uses_current_alice_images_api(monkeypatch, tmp_path):
+    from visual_provider_gateway.providers import YandexArtProvider
 
     observed = {}
+    encoded = base64.b64encode(b"png-bytes").decode("ascii")
 
-    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0):
+    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0, ca_bundle_file=""):
         observed.update({"method": method, "url": url, "headers": headers, "payload": payload})
-        return {"id": "operation-1"}
+        return {"data": [{"b64_json": encoded}]}
 
     monkeypatch.setattr(providers, "_json_request", fake_json_request)
+    provider = YandexArtProvider(
+        ProviderConfig(
+            name="yandexart",
+            base_url="https://ai.api.cloud.yandex.net",
+            api_key="test",
+            folder_id="folder",
+            model_image="art://folder/aliceai-image-art-3.0",
+            output_dir=str(tmp_path),
+        )
+    )
+    job = provider.submit(
+        CreativeBrief(kind="image", prompt="new sink advertising image", aspect_ratio="16:9")
+    )
+
+    assert observed["url"].endswith("/v1/images/generations")
+    assert observed["headers"]["OpenAI-Project"] == "folder"
+    assert observed["payload"]["model"] == "art://folder/aliceai-image-art-3.0"
+    assert observed["payload"]["size"] == "1536x1024"
+    assert job.status == "succeeded"
+    assert job.mime_type == "image/png"
+    assert Path(job.asset_path).read_bytes() == b"png-bytes"
+
+
+def test_yandexart_motion_video_renders_current_alice_keyframe(monkeypatch, tmp_path):
+    from visual_provider_gateway.providers import YandexArtMotionVideoProvider, YandexArtProvider
+
+    source = tmp_path / "keyframe.png"
+    source.write_bytes(b"png")
+    target = tmp_path / "motion.mp4"
+
+    def fake_image_submit(_self, brief):
+        return CreativeJob(
+            provider="yandexart",
+            kind="image",
+            status="succeeded",
+            external_id="image-1",
+            model="art://folder/aliceai-image-art-3.0",
+            mime_type="image/png",
+            asset_path=str(source),
+        )
+
+    def fake_render(_config, **kwargs):
+        assert kwargs["image_path"] == str(source)
+        assert kwargs["duration_seconds"] == 7
+        assert kwargs["aspect_ratio"] == "16:9"
+        target.write_bytes(b"mp4")
+        return str(target)
+
+    monkeypatch.setattr(YandexArtProvider, "submit", fake_image_submit)
+    monkeypatch.setattr(providers, "_render_motion_video", fake_render)
     provider = YandexArtMotionVideoProvider(
         ProviderConfig(
             name="yandexart_motion",
-            base_url="https://ai.api.cloud.yandex.net:443",
             api_key="test",
-            model_image="art://folder/yandex-art/latest",
+            folder_id="folder",
+            model_image="art://folder/aliceai-image-art-3.0",
+            output_dir=str(tmp_path),
         )
     )
     job = provider.submit(
@@ -460,53 +513,12 @@ def test_yandexart_motion_video_uses_image_operation_and_preserves_video_contrac
             aspect_ratio="16:9",
         )
     )
-    assert observed["url"].endswith("/foundationModels/v1/imageGenerationAsync")
+
+    assert job.status == "succeeded"
     assert job.provider == "yandexart_motion"
     assert job.kind == "video"
-    assert job.status == "queued"
-    assert job.provider_payload["duration_seconds"] == 7
-    assert job.provider_payload["aspect_ratio"] == "16:9"
-
-
-def test_yandexart_motion_poll_converts_keyframe_and_removes_source(monkeypatch, tmp_path):
-    from visual_provider_gateway.models import CreativeJob
-    from visual_provider_gateway.providers import YandexArtMotionVideoProvider, YandexArtProvider
-
-    source = tmp_path / "keyframe.jpg"
-    source.write_bytes(b"jpeg")
-    target = tmp_path / "motion.mp4"
-
-    def fake_image_poll(_self, job):
-        job.status = "succeeded"
-        job.mime_type = "image/jpeg"
-        job.asset_path = str(source)
-        return job
-
-    def fake_render(_config, **kwargs):
-        assert kwargs["image_path"] == str(source)
-        assert kwargs["duration_seconds"] == 5
-        assert kwargs["aspect_ratio"] == "1:1"
-        target.write_bytes(b"mp4")
-        return str(target)
-
-    monkeypatch.setattr(YandexArtProvider, "poll", fake_image_poll)
-    monkeypatch.setattr(providers, "_render_motion_video", fake_render)
-    provider = YandexArtMotionVideoProvider(
-        ProviderConfig(name="yandexart_motion", api_key="test", model_image="art://folder/model")
-    )
-    job = CreativeJob(
-        provider="yandexart_motion",
-        kind="video",
-        status="running",
-        external_id="operation-1",
-        provider_payload={"duration_seconds": 5, "aspect_ratio": "1:1"},
-    )
-    result = provider.poll(job)
-    assert result.status == "succeeded"
-    assert result.kind == "video"
-    assert result.provider == "yandexart_motion"
-    assert result.mime_type == "video/mp4"
-    assert result.asset_path == str(target)
+    assert job.mime_type == "video/mp4"
+    assert job.asset_path == str(target)
     assert source.exists() is False
 
 
