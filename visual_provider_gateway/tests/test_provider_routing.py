@@ -160,6 +160,84 @@ def test_submit_does_not_failover_after_ambiguous_provider_error_by_default(monk
     assert calls == ["broken"]
 
 
+def test_submit_fails_over_after_definitive_auth_rejection(monkeypatch):
+    from visual_provider_gateway.engine import VisualCreativeEngine
+    from visual_provider_gateway.models import CreativeJob
+
+    calls = []
+
+    class UnauthorizedProvider:
+        def configured(self, kind):
+            return True
+        def submit(self, brief):
+            calls.append("unauthorized")
+            raise providers.ProviderTransportError("http_403")
+
+    class SecondProvider:
+        def configured(self, kind):
+            return True
+        def submit(self, brief):
+            calls.append("second")
+            return CreativeJob(
+                provider="second",
+                kind=brief.kind,
+                status="queued",
+                external_id="j2",
+            )
+
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.provider_order",
+        lambda *_args, **_kwargs: ("unauthorized", "second"),
+    )
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.build_provider",
+        lambda name: UnauthorizedProvider() if name == "unauthorized" else SecondProvider(),
+    )
+    monkeypatch.delenv("VISUAL_ALLOW_PROVIDER_FAILOVER_AFTER_ERROR", raising=False)
+
+    job = VisualCreativeEngine(enabled=True).submit(
+        CreativeBrief(kind="image", prompt="x")
+    )
+
+    assert job.provider == "second"
+    assert calls == ["unauthorized", "second"]
+
+
+def test_explicit_provider_does_not_escape_auth_rejection(monkeypatch):
+    from visual_provider_gateway.engine import VisualCreativeEngine
+
+    calls = []
+
+    class UnauthorizedProvider:
+        def configured(self, kind):
+            return True
+        def submit(self, brief):
+            calls.append("unauthorized")
+            raise providers.ProviderTransportError("http_401")
+
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.provider_order",
+        lambda *_args, **_kwargs: ("unauthorized", "second"),
+    )
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.build_provider",
+        lambda _name: UnauthorizedProvider(),
+    )
+    monkeypatch.delenv("VISUAL_ALLOW_PROVIDER_FAILOVER_AFTER_ERROR", raising=False)
+
+    job = VisualCreativeEngine(enabled=True).submit(
+        CreativeBrief(
+            kind="image",
+            prompt="x",
+            preferred_provider="unauthorized",
+        )
+    )
+
+    assert job.status == "failed"
+    assert job.error_code == "visual_provider_submit_http_401"
+    assert calls == ["unauthorized"]
+
+
 def test_submit_can_failover_only_with_explicit_operator_opt_in(monkeypatch):
     from visual_provider_gateway.engine import VisualCreativeEngine
     from visual_provider_gateway.models import CreativeJob
