@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import errno
 import ipaddress
 import json
 import mimetypes
@@ -83,7 +84,26 @@ def _request(
         except (OSError, ProviderTransportError):
             pass
         raise ProviderTransportError(f"http_{getattr(exc, 'code', 0)}") from None
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+    except urllib.error.URLError as exc:
+        reason = exc.reason
+        if isinstance(reason, (ConnectionRefusedError, socket.gaierror)):
+            raise ProviderTransportError("connect_unreachable") from None
+        if isinstance(reason, OSError) and reason.errno in {
+            errno.ECONNREFUSED,
+            errno.ENETUNREACH,
+            errno.EHOSTUNREACH,
+        }:
+            raise ProviderTransportError("connect_unreachable") from None
+        raise ProviderTransportError(type(exc).__name__) from None
+    except TimeoutError as exc:
+        raise ProviderTransportError(type(exc).__name__) from None
+    except OSError as exc:
+        if exc.errno in {
+            errno.ECONNREFUSED,
+            errno.ENETUNREACH,
+            errno.EHOSTUNREACH,
+        }:
+            raise ProviderTransportError("connect_unreachable") from None
         raise ProviderTransportError(type(exc).__name__) from None
 
 
