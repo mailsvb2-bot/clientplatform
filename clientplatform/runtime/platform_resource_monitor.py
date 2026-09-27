@@ -436,7 +436,12 @@ def _provider_state_and_alerts(
                     )
                     + "\nНовая модель не включается автоматически, пока не разрешена политикой."
                 )
-            if model and not configured_model_present:
+            previously_missing = (
+                isinstance(previous_model, dict)
+                and str(previous_model.get("model") or "") == model
+                and previous_model.get("configured_model_present") is False
+            )
+            if model and not configured_model_present and not previously_missing:
                 alerts.append(
                     "🔴 Текущая image-модель отсутствует в каталоге Yandex AI Studio\n"
                     f"{provider}: {model}\n"
