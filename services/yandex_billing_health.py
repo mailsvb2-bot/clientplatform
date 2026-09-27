@@ -8,6 +8,8 @@ import urllib.request
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
+from services.yandex_iam_token import get_yandex_billing_iam_token
+
 
 @dataclass(frozen=True, slots=True)
 class YandexBillingSnapshot:
@@ -16,6 +18,8 @@ class YandexBillingSnapshot:
     active: bool = False
     balance: Decimal | None = None
     currency: str = ""
+    auth_mode: str = ""
+    auth_expires_at_epoch: float = 0.0
     error_code: str = ""
 
 
@@ -29,9 +33,19 @@ def _safe_error(exc: BaseException) -> str:
 
 def get_yandex_billing_snapshot() -> YandexBillingSnapshot:
     account_id = str(os.getenv("YANDEX_BILLING_ACCOUNT_ID", "") or "").strip()
-    iam_token = str(os.getenv("YANDEX_BILLING_IAM_TOKEN", "") or "").strip()
-    if not account_id or not iam_token:
+    auth = get_yandex_billing_iam_token()
+    if not account_id:
         return YandexBillingSnapshot(configured=False, available=False)
+    if not auth.configured:
+        return YandexBillingSnapshot(configured=False, available=False)
+    if not auth.available or not auth.token:
+        return YandexBillingSnapshot(
+            configured=True,
+            available=False,
+            auth_mode=auth.auth_mode,
+            error_code=auth.error_code or "yandex_billing_auth_unavailable",
+        )
+    iam_token = auth.token
 
     quoted = urllib.parse.quote(account_id, safe="")
     request = urllib.request.Request(
@@ -49,30 +63,40 @@ def get_yandex_billing_snapshot() -> YandexBillingSnapshot:
                 return YandexBillingSnapshot(
                     configured=True,
                     available=False,
+                    auth_mode=auth.auth_mode,
+                    auth_expires_at_epoch=auth.expires_at_epoch,
                     error_code="yandex_billing_response_too_large",
                 )
     except urllib.error.HTTPError as exc:
         return YandexBillingSnapshot(
             configured=True,
             available=False,
+            auth_mode=auth.auth_mode,
+            auth_expires_at_epoch=auth.expires_at_epoch,
             error_code=_safe_error(exc),
         )
     except urllib.error.URLError as exc:
         return YandexBillingSnapshot(
             configured=True,
             available=False,
+            auth_mode=auth.auth_mode,
+            auth_expires_at_epoch=auth.expires_at_epoch,
             error_code=_safe_error(exc),
         )
     except TimeoutError as exc:
         return YandexBillingSnapshot(
             configured=True,
             available=False,
+            auth_mode=auth.auth_mode,
+            auth_expires_at_epoch=auth.expires_at_epoch,
             error_code=_safe_error(exc),
         )
     except OSError as exc:
         return YandexBillingSnapshot(
             configured=True,
             available=False,
+            auth_mode=auth.auth_mode,
+            auth_expires_at_epoch=auth.expires_at_epoch,
             error_code=_safe_error(exc),
         )
 
@@ -85,24 +109,32 @@ def get_yandex_billing_snapshot() -> YandexBillingSnapshot:
         return YandexBillingSnapshot(
             configured=True,
             available=False,
+            auth_mode=auth.auth_mode,
+            auth_expires_at_epoch=auth.expires_at_epoch,
             error_code="yandex_billing_invalid_response",
         )
     except json.JSONDecodeError:
         return YandexBillingSnapshot(
             configured=True,
             available=False,
+            auth_mode=auth.auth_mode,
+            auth_expires_at_epoch=auth.expires_at_epoch,
             error_code="yandex_billing_invalid_response",
         )
     except InvalidOperation:
         return YandexBillingSnapshot(
             configured=True,
             available=False,
+            auth_mode=auth.auth_mode,
+            auth_expires_at_epoch=auth.expires_at_epoch,
             error_code="yandex_billing_invalid_response",
         )
     except ValueError:
         return YandexBillingSnapshot(
             configured=True,
             available=False,
+            auth_mode=auth.auth_mode,
+            auth_expires_at_epoch=auth.expires_at_epoch,
             error_code="yandex_billing_invalid_response",
         )
 
@@ -112,6 +144,8 @@ def get_yandex_billing_snapshot() -> YandexBillingSnapshot:
         active=bool(payload.get("active")),
         balance=balance,
         currency=str(payload.get("currency") or ""),
+        auth_mode=auth.auth_mode,
+        auth_expires_at_epoch=auth.expires_at_epoch,
     )
 
 

@@ -18,6 +18,7 @@ from .providers import (
     YandexArtMotionVideoProvider,
     YandexArtProvider,
 )
+from .yandex_model_catalog import get_yandex_model_catalog
 
 _RU_COUNTRIES = {"RU", "RUS"}
 
@@ -291,6 +292,7 @@ def _model_lifecycle(model_uri: str) -> dict[str, object]:
 def provider_snapshot(country_code: str = "") -> dict[str, object]:
     configs = provider_configs()
     yandex = configs["yandexart"]
+    catalog = get_yandex_model_catalog(yandex)
     return {
         "enabled": _truthy("VISUAL_CREATIVE_ENABLED", "0"),
         "country_code": str(country_code or _env("VISUAL_DEPLOYMENT_COUNTRY", "RU")).strip().upper(),
@@ -303,6 +305,12 @@ def provider_snapshot(country_code: str = "") -> dict[str, object]:
             "yandexart": {
                 **_model_lifecycle(yandex.model_image),
                 "api_family": "openai_images",
+                "catalog_configured": catalog.configured,
+                "catalog_available": catalog.available,
+                "catalog_error": catalog.error_code,
+                "configured_model_present": catalog.current_model_present,
+                "available_art_models": catalog.art_models,
+                "available_model_count": catalog.all_model_count,
                 "candidate_count": len(
                     tuple(
                         dict.fromkeys(
