@@ -12,8 +12,6 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
-
 
 _IAM_AUDIENCE = "https://iam.api.cloud.yandex.net/iam/v1/tokens"
 _IAM_URL = _IAM_AUDIENCE
@@ -212,6 +210,7 @@ def _exchange_jwt(jwt_token: str) -> tuple[str, float]:
 
 
 def get_yandex_billing_iam_token() -> YandexIamTokenResult:
+    global _cached_token, _cached_expires_epoch, _cached_key_fingerprint
     static_token = str(os.getenv("YANDEX_BILLING_IAM_TOKEN", "") or "").strip()
     key = _load_authorized_key()
     if key is None:
@@ -279,7 +278,6 @@ def get_yandex_billing_iam_token() -> YandexIamTokenResult:
             ),
         )
 
-    global _cached_token, _cached_expires_epoch, _cached_key_fingerprint
     with _cache_lock:
         _cached_token = token
         _cached_expires_epoch = expires_epoch
