@@ -578,6 +578,8 @@ def _billing_state_and_alerts(
         "active": snapshot.active,
         "currency": snapshot.currency,
         "balance": "" if snapshot.balance is None else str(snapshot.balance),
+        "auth_mode": snapshot.auth_mode,
+        "auth_expires_at_epoch": snapshot.auth_expires_at_epoch,
         "error_code": snapshot.error_code,
     }
     alerts: list[str] = []
@@ -593,6 +595,23 @@ def _billing_state_and_alerts(
 
     if prev.get("configured") and not bool(prev.get("available", True)):
         alerts.append("🟢 Yandex Billing telemetry восстановилась.")
+
+    previous_auth_mode = str(prev.get("auth_mode") or "")
+    if snapshot.auth_mode == "static_iam_token" and previous_auth_mode != "static_iam_token":
+        alerts.append(
+            "🟠 Yandex Billing использует статический IAM-token\n"
+            "Он ограничен по времени и требует ручной замены. "
+            "Для production лучше подключить authorized key, чтобы ClientPlatform "
+            "обновлял IAM-token автоматически."
+        )
+    elif (
+        snapshot.auth_mode == "authorized_key"
+        and previous_auth_mode
+        and previous_auth_mode != "authorized_key"
+    ):
+        alerts.append(
+            "🟢 Yandex Billing переведён на автоматически обновляемый IAM-token."
+        )
 
     if not snapshot.active and prev.get("active") is not False:
         alerts.append(
