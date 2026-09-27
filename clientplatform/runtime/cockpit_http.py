@@ -21,8 +21,12 @@ from clientplatform.application.cockpit_home import (
     resolve_cockpit_home,
 )
 from clientplatform.application.cockpit_events import (
+    resolve_cockpit_event_actor,
     resolve_cockpit_event_live,
     resolve_cockpit_events,
+)
+from clientplatform.application.event_conference_join import (
+    issue_managed_event_owner_join_for_position,
 )
 from clientplatform.application.cockpit_services import (
     archive_cockpit_service,
@@ -83,6 +87,8 @@ from clientplatform.domain.customers import CustomerNotFound
 from clientplatform.domain.external_products import ExternalProductNotFound
 from clientplatform.domain.sales import SalesInvariantViolation, SalesLeadNotFound
 from clientplatform.domain.tenancy import TenantAccessDenied, TenantPermissionDenied
+from clientplatform.runtime.conference_provider import ConferenceProviderError
+from clientplatform.runtime.ucr_gateway import UcrGatewayError
 from clientplatform.runtime.telegram_webapp_auth import (
     TelegramWebAppAuthError,
     verify_telegram_webapp_init_data,
@@ -878,11 +884,18 @@ async def cockpit_event_live(request: web.Request) -> web.Response:
     if not isinstance(event_id, str) or not event_id.strip():
         return _error(400, "event_id_required")
     try:
-        live = await asyncio.to_thread(
-            resolve_cockpit_event_live,
-            telegram_user_id=user_id,
-            requested_business_id=requested_business,
-            event_id=event_id,
+        live, actor = await asyncio.gather(
+            asyncio.to_thread(
+                resolve_cockpit_event_live,
+                telegram_user_id=user_id,
+                requested_business_id=requested_business,
+                event_id=event_id,
+            ),
+            asyncio.to_thread(
+                resolve_cockpit_event_actor,
+                telegram_user_id=user_id,
+                requested_business_id=requested_business,
+            ),
         )
     except TenantAccessDenied:
         return _error(403, "business_access_denied")
@@ -896,7 +909,32 @@ async def cockpit_event_live(request: web.Request) -> web.Response:
         return _error(503, "events_unavailable")
     except RuntimeError:
         return _error(503, "events_unavailable")
-    return web.json_response({"ok": True, **live.as_dict()}, headers=_base_headers())
+
+    payload = live.as_dict()
+    sessions = payload.get("sessions")
+    if isinstance(sessions, list):
+        for session in sessions:
+            if not isinstance(session, dict) or session.get("provider_key") != "ucr":
+                continue
+            try:
+                position = int(session.get("position") or 0)
+                join = await issue_managed_event_owner_join_for_position(
+                    actor=actor,
+                    event_id=event_id,
+                    position=position,
+                )
+            except (
+                ConferenceProviderError,
+                UcrGatewayError,
+                LookupError,
+                ValueError,
+            ):
+                session["join_ready"] = False
+                session["join_url"] = None
+                continue
+            session["join_ready"] = True
+            session["join_url"] = join.url
+    return web.json_response({"ok": True, **payload}, headers=_base_headers())
 
 
 async def cockpit_calendar(request: web.Request) -> web.Response:
