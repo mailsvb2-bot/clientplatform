@@ -276,7 +276,7 @@ class NativeEventWizardTests(unittest.TestCase):
             )
         )
 
-    def test_ucr_is_explicitly_unavailable_until_public_room_link_exists(self) -> None:
+    def test_ucr_managed_venue_is_available_only_when_gateway_is_configured(self) -> None:
         self.store.update(
             {
                 "step": "venue",
@@ -289,15 +289,31 @@ class NativeEventWizardTests(unittest.TestCase):
         with (
             patch.object(wizard, "_context", side_effect=self._context),
             patch.object(wizard, "_save", side_effect=self._save),
+            patch.object(wizard, "ucr_managed_event_provider_available", return_value=False),
         ):
-            message = wizard.handle_native_event_wizard_action(
+            unavailable = wizard.handle_native_event_wizard_action(
                 self.actor,
                 args=("venue", "ucr"),
                 platform=self.platform,
                 surface=self.surface,
             )
-        self.assertIn("не выдаёт", message.text)
+        self.assertIn("не подключён", unavailable.text)
         self.assertEqual(self.store["step"], "venue")
+
+        with (
+            patch.object(wizard, "_context", side_effect=self._context),
+            patch.object(wizard, "_save", side_effect=self._save),
+            patch.object(wizard, "ucr_managed_event_provider_available", return_value=True),
+        ):
+            available = wizard.handle_native_event_wizard_action(
+                self.actor,
+                args=("venue", "ucr"),
+                platform=self.platform,
+                surface=self.surface,
+            )
+        self.assertIn("выберите дату", available.text.lower())
+        self.assertEqual(self.store["step"], "date")
+        self.assertEqual(self.store["venue"], "ucr")
 
 
 def test_native_warmup_preview_edit_reset_and_post_creation_setup() -> None:
