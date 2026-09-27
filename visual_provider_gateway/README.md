@@ -40,7 +40,7 @@ YANDEX_API_KEY=...
 # or YANDEX_ART_IAM_TOKEN=...
 ```
 
-RU image routing defaults to `yandexart,gigachat,selfhosted`. For video, the gateway now classifies providers as **native video** (`selfhosted`, and operator-enabled Runway/OpenAI) versus **motion fallback** (`yandexart_motion`). Native video providers are always tried before motion fallback unless the operator explicitly sets `VISUAL_VIDEO_MOTION_PRIMARY=1`. With the default RU policy this makes the effective order `selfhosted,selfhosted_backup,yandexart_motion`; the two self-hosted endpoints can be placed on independent Russia-resident GPU workers for a provider-neutral primary/backup tier. enabling global providers for RU extends the native tier before the fallback. The `yandexart_motion` adapter is deliberately not presented as text-to-video: it creates one YandexART keyframe and renders a short MP4 with ffmpeg.
+RU image routing defaults to `yandexart,gigachat,selfhosted`. For video, the gateway now classifies providers as **native video** (`selfhosted`, and operator-enabled Runway/OpenAI) versus **motion fallback** (`yandexart_motion`). Native video providers are always tried before motion fallback unless the operator explicitly sets `VISUAL_VIDEO_MOTION_PRIMARY=1`. With the default RU policy this makes the effective order `selfhosted,selfhosted_backup,yandexart_motion`; the two self-hosted endpoints can be placed on independent Russia-resident GPU workers for a provider-neutral primary/backup tier. Enabling global providers for RU extends the native tier before the fallback. The `yandexart_motion` adapter is deliberately not presented as text-to-video: it creates one YandexART keyframe and renders a short MP4 with ffmpeg.
 
 ## API
 
