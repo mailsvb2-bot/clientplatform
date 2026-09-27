@@ -132,6 +132,24 @@ class ConferenceProviderTests(unittest.IsolatedAsyncioTestCase):
                 idempotency_key="runtime:event-a",
             )
 
+    async def test_link_only_join_rejects_foreign_provider_reference(self):
+        provider = ExternalHttpsRoomProvider(
+            key="external",
+            room_url="https://meet.example.test/room",
+        )
+        foreign = ConferenceRef(
+            provider_key="ucr",
+            external_conference_id="event-a",
+            provider_conference_id="ucr-conf-1",
+        )
+        with self.assertRaisesRegex(ValueError, "different provider"):
+            await provider.issue_join(
+                foreign,
+                tenant_id="tenant-a",
+                external_user_id="user-a",
+                idempotency_key="join:user-a",
+            )
+
     async def test_registry_routes_without_owning_business_state(self):
         provider = ExternalHttpsRoomProvider(
             key="external",
