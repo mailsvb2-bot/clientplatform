@@ -40,13 +40,14 @@ YANDEX_API_KEY=...
 # or YANDEX_ART_IAM_TOKEN=...
 ```
 
-RU image routing defaults to `yandexart,gigachat,selfhosted`; RU video routing defaults to `yandexart_motion,selfhosted`. The `yandexart_motion` adapter reuses the YandexART keyframe provider and renders the resulting short MP4 with ffmpeg inside the provider-gateway image. International provider routes remain opt-in/operator-configured.
+RU image routing defaults to `yandexart,gigachat,selfhosted`. For video, the gateway now classifies providers as **native video** (`selfhosted`, and operator-enabled Runway/OpenAI) versus **motion fallback** (`yandexart_motion`). Native video providers are always tried before motion fallback unless the operator explicitly sets `VISUAL_VIDEO_MOTION_PRIMARY=1`. With the default RU policy this makes the effective order `selfhosted,yandexart_motion`; enabling global providers for RU extends the native tier before the fallback. The `yandexart_motion` adapter is deliberately not presented as text-to-video: it creates one YandexART keyframe and renders a short MP4 with ffmpeg.
 
 ## API
 
 Authenticated endpoints used by the canonical wrapper:
 
 - `GET /v1/providers`
+  - includes additive `configured_video_native`, `configured_video_motion`, and `video_generation_mode` (`native|motion|unavailable`) fields for truthful owner UX
 - `GET /v1/usage`
 - `POST /v1/creative/generations`
 - `GET /v1/creative/generations/{id}?scope_id=...`
