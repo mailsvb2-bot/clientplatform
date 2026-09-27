@@ -161,7 +161,23 @@ class ClientPlatformUcrGatewayConfigTests(unittest.TestCase):
         )
         self.assertEqual(
             {method.value for method in UcrUniversalConferenceMethod},
-            {"GetParticipantAttendance", "GetCapabilities"},
+            {
+                "CreateConference",
+                "ResolveConference",
+                "GetConference",
+                "TransitionConference",
+                "SetEntryOpen",
+                "EnsureParticipant",
+                "EnsureParticipantDevice",
+                "UpdateParticipant",
+                "RemoveParticipant",
+                "ListParticipants",
+                "PrepareConferenceRuntime",
+                "IssueJoinGrant",
+                "RevokeJoinGrant",
+                "GetParticipantAttendance",
+                "GetCapabilities",
+            },
         )
 
 
