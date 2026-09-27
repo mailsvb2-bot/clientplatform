@@ -402,6 +402,115 @@ def test_billing_watch_reports_telemetry_loss_and_recovery():
     assert "Billing telemetry восстановилась" in "\n".join(recovery_alerts)
 
 
+def test_provider_watch_reports_catalog_loss_new_models_and_missing_current():
+    previous = {
+        "available": True,
+        "configured_image": ["yandexart"],
+        "configured_video": ["yandexart_motion"],
+        "models": {
+            "yandexart": {
+                "model": "art://folder/aliceai-image-art-3.0",
+                "model_id": "aliceai-image-art-3.0",
+                "lifecycle_level": 0,
+                "deprecated_at": "",
+                "catalog_available": True,
+                "configured_model_present": True,
+                "catalog_error": "",
+                "available_art_models": [
+                    "art://folder/aliceai-image-art-3.0"
+                ],
+            }
+        },
+        "runtime": {},
+        "circuits": {},
+    }
+    snapshot = provider_health.VisualProviderHealthSnapshot(
+        available=True,
+        configured_image=("yandexart",),
+        configured_video=("yandexart_motion",),
+        models={
+            "yandexart": {
+                "model": "art://folder/aliceai-image-art-3.0",
+                "model_id": "aliceai-image-art-3.0",
+                "deprecated_at": "",
+                "days_remaining": None,
+                "replacement": "",
+                "status": "active",
+                "catalog_available": True,
+                "catalog_error": "",
+                "configured_model_present": False,
+                "available_art_models": (
+                    "art://folder/aliceai-image-art-3.0",
+                    "art://folder/aliceai-image-art-4.0",
+                ),
+            }
+        },
+        runtime={},
+    )
+
+    _state, alerts = monitor._provider_state_and_alerts(snapshot, previous)
+
+    rendered = "\n".join(alerts)
+    assert "появились новые image-модели" in rendered
+    assert "aliceai-image-art-4.0" in rendered
+    assert "отсутствует в каталоге" in rendered
+    assert "не включается автоматически" in rendered
+
+
+def test_provider_watch_reports_catalog_telemetry_failure_once():
+    snapshot = provider_health.VisualProviderHealthSnapshot(
+        available=True,
+        configured_image=("yandexart",),
+        configured_video=("yandexart_motion",),
+        models={
+            "yandexart": {
+                "model": "art://folder/aliceai-image-art-3.0",
+                "model_id": "aliceai-image-art-3.0",
+                "status": "active",
+                "catalog_available": False,
+                "catalog_error": "yandex_models_http_403",
+            }
+        },
+        runtime={},
+    )
+
+    current, alerts = monitor._provider_state_and_alerts(snapshot, {})
+    assert "Каталог моделей Yandex AI Studio недоступен" in "\n".join(alerts)
+
+    _same, repeated = monitor._provider_state_and_alerts(snapshot, current)
+    assert repeated == []
+
+
+def test_billing_watch_warns_once_for_static_iam_and_reports_renewable_upgrade():
+    from decimal import Decimal
+
+    static = billing_health.YandexBillingSnapshot(
+        configured=True,
+        available=True,
+        active=True,
+        balance=Decimal("3000"),
+        currency="RUB",
+        auth_mode="static_iam_token",
+    )
+    static_state, alerts = monitor._billing_state_and_alerts(static, {})
+    assert "статический IAM-token" in "\n".join(alerts)
+
+    _same, repeated = monitor._billing_state_and_alerts(static, static_state)
+    assert repeated == []
+
+    renewable = billing_health.YandexBillingSnapshot(
+        configured=True,
+        available=True,
+        active=True,
+        balance=Decimal("3000"),
+        currency="RUB",
+        auth_mode="authorized_key",
+        auth_expires_at_epoch=9999999999.0,
+    )
+    _state, upgraded = monitor._billing_state_and_alerts(renewable, static_state)
+    assert "автоматически обновляемый IAM-token" in "\n".join(upgraded)
+
+
 def test_provider_watch_reports_model_change_and_recovery_once():
     previous = {
         "available": False,
