@@ -45,13 +45,14 @@ def _session(
     session_id: str | None = None,
     starts_at: datetime | None = None,
 ) -> EventSession:
+    effective_start = starts_at or (NOW + timedelta(hours=2))
     return EventSession(
         id=session_id or str(uuid4()),
         business_id=business_id,
         event_id=EVENT_ID,
         position=1,
-        starts_at=starts_at or (NOW + timedelta(hours=2)),
-        ends_at=NOW + timedelta(hours=4),
+        starts_at=effective_start,
+        ends_at=effective_start + timedelta(hours=2),
         provider_key="ucr",
         provider_label="ClientPlatform эфир",
         join_url=None,
