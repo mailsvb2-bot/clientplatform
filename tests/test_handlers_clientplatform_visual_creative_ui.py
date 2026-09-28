@@ -213,6 +213,7 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
                     return_value=visual_job(status="succeeded", ready=True),
                 ),
                 patch.object(ui, "materialize_ad_visual", return_value=asset) as materialize,
+                patch.object(ui, "_attach_generated_image", new=AsyncMock()) as attach_generated,
                 patch.object(ui, "_message", return_value=target),
                 patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
             ):
@@ -225,7 +226,8 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
             "Готовое рекламное изображение",
         )
         st.update_data.assert_awaited_with(creative_job_id="")
-        self.assertIn("текстовый DRAFT", target.answer.await_args.args[0])
+        attach_generated.assert_awaited_once()
+        self.assertIn("provider reference", target.answer.await_args.args[0])
 
     async def test_render_ready_video_materializes_and_sends(self) -> None:
         cb = callback("cpa:creative:video")
@@ -342,6 +344,7 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
                     return_value=visual_job(status="succeeded", ready=True),
                 ) as poll_visual,
                 patch.object(ui, "materialize_ad_visual", return_value=asset) as materialize,
+                patch.object(ui, "_attach_generated_image", new=AsyncMock()) as attach_generated,
                 patch.object(ui, "_message", return_value=target),
                 patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
             ):
@@ -350,7 +353,8 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(materialize.call_args.kwargs["repair_blank_bands"])
         st.update_data.assert_awaited_with(creative_job_id="")
         target.answer_photo.assert_awaited_once()
-        self.assertIn("не прикрепляется", target.answer.await_args.args[0])
+        attach_generated.assert_awaited_once()
+        self.assertIn("загружена в Яндекс Директ", target.answer.await_args.args[0])
 
     async def test_refresh_pending_keeps_explicit_refresh_or_skip(self) -> None:
         cb = callback("cpa:creative:refresh")
@@ -458,6 +462,7 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
         rows = message.answer.await_args.kwargs["reply_markup"]
         callbacks = [value for row in rows for _, value in row]
         self.assertIn("cpa:creative:image", callbacks)
+        self.assertIn("cpa:media:upload", callbacks)
         self.assertIn("cpa:creative:video", callbacks)
         self.assertIn("cpa:confirm", callbacks)
         self.assertIn("DRAFT", message.answer.await_args.args[0])
