@@ -13,7 +13,6 @@ def ensure(c: sqlite3.Connection) -> None:
             business_id TEXT NOT NULL,
             kind TEXT NOT NULL,
             source TEXT NOT NULL,
-            storage_path TEXT NOT NULL DEFAULT '',
             content_type TEXT NOT NULL,
             original_name TEXT NOT NULL,
             sha256 TEXT NOT NULL,
@@ -33,7 +32,6 @@ def ensure(c: sqlite3.Connection) -> None:
                 REFERENCES business_members(id, business_id),
             CHECK(kind IN ('image', 'video')),
             CHECK(source IN ('upload', 'generated')),
-            CHECK(storage_path=''),
             CHECK(
                 (kind='image' AND provider_image_hash IS NOT NULL)
                 OR (kind='video' AND provider_video_id IS NOT NULL)
