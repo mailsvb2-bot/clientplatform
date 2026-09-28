@@ -4,7 +4,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from PIL import Image
 from unittest.mock import patch
 
 from clientplatform.application import visual_creatives
@@ -15,6 +14,13 @@ from services.visual_creative_gateway import (
 
 
 class VisualCreativeApplicationTests(unittest.TestCase):
+    def _pillow_image(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow is not installed in dependency-light Canon")
+        return Image
+
     def test_clientplatform_image_visual_brief_is_presentation_only(self) -> None:
         brief = visual_creatives.build_ad_visual_brief(
             title="Консультация психолога",
@@ -218,6 +224,7 @@ class VisualCreativeApplicationTests(unittest.TestCase):
             self.assertEqual(visual_creatives.materialize_ad_visual(job), expected)
 
     def test_materialization_repairs_large_uniform_bottom_band(self) -> None:
+        Image = self._pillow_image()
         job = VisualCreativeJob(
             id="job-image",
             provider="yandexart",
@@ -240,6 +247,7 @@ class VisualCreativeApplicationTests(unittest.TestCase):
                 self.assertLess(repaired.width, 200)
 
     def test_materialization_keeps_moderate_intentional_copy_space(self) -> None:
+        Image = self._pillow_image()
         job = VisualCreativeJob(
             id="job-image",
             provider="fake",
@@ -261,6 +269,7 @@ class VisualCreativeApplicationTests(unittest.TestCase):
                 self.assertEqual(repaired.size, (200, 300))
 
     def test_materialization_can_preserve_large_intentional_copy_space(self) -> None:
+        Image = self._pillow_image()
         job = VisualCreativeJob(
             id="job-image",
             provider="fake",
@@ -286,6 +295,7 @@ class VisualCreativeApplicationTests(unittest.TestCase):
 
 
     def test_materialization_crops_large_transparent_padding(self) -> None:
+        Image = self._pillow_image()
         job = VisualCreativeJob(
             id="job-image",
             provider="yandexart",
