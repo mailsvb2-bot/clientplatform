@@ -468,26 +468,28 @@ jobs:
           sys.stdout.buffer.write(raw)
           PY
           test -s "$host_asset"
-          privileged docker exec -i "$app_id" python -c '
-import io
-import sys
-from PIL import Image, UnidentifiedImageError
+          validator_code="$(cat <<'PY'
+          import io
+          import sys
+          from PIL import Image, UnidentifiedImageError
 
-raw = sys.stdin.buffer.read(32 * 1024 * 1024 + 1)
-if not raw or len(raw) > 32 * 1024 * 1024:
-    raise SystemExit(45)
-try:
-    with Image.open(io.BytesIO(raw)) as opened:
-        if str(opened.format or "").upper() not in {"JPEG", "PNG", "WEBP"}:
-            raise SystemExit(46)
-        width, height = map(int, opened.size)
-        if width < 64 or height < 64:
-            raise SystemExit(47)
-        opened.verify()
-except (OSError, UnidentifiedImageError):
-    raise SystemExit(48)
-sys.stdout.buffer.write(raw)
-' < "$host_asset" > "$validated_asset"
+          raw = sys.stdin.buffer.read(32 * 1024 * 1024 + 1)
+          if not raw or len(raw) > 32 * 1024 * 1024:
+              raise SystemExit(45)
+          try:
+              with Image.open(io.BytesIO(raw)) as opened:
+                  if str(opened.format or "").upper() not in {"JPEG", "PNG", "WEBP"}:
+                      raise SystemExit(46)
+                  width, height = map(int, opened.size)
+                  if width < 64 or height < 64:
+                      raise SystemExit(47)
+                  opened.verify()
+          except (OSError, UnidentifiedImageError):
+              raise SystemExit(48)
+          sys.stdout.buffer.write(raw)
+          PY
+          )"
+          privileged docker exec -i "$app_id" python -c "$validator_code" < "$host_asset" > "$validated_asset"
           test -s "$validated_asset"
           cmp -s "$host_asset" "$validated_asset"
           cat "$validated_asset"
