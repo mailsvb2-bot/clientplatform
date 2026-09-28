@@ -317,6 +317,63 @@ class VisualCreativeApplicationTests(unittest.TestCase):
                 self.assertEqual(repaired.mode, "RGB")
                 self.assertEqual(repaired.size, (160, 80))
 
+    def test_materialization_rejects_excessive_decoded_dimensions(self) -> None:
+        Image = self._pillow_image()
+        oversized = Image.new("RGB", (64, 64), (10, 20, 30))
+        oversized.size = (_MAX_SIDE := 8193, 64) if False else oversized.size
+        fake = type("FakeImage", (), {"size": (8193, 64)})()
+        with self.assertRaisesRegex(
+            visual_creatives.VisualCreativeError,
+            "visual_creative_invalid_image_dimensions",
+        ):
+            visual_creatives._validate_materialized_image_dimensions(fake)
+
+    def test_materialization_normalizes_decompression_bomb_error(self) -> None:
+        Image = self._pillow_image()
+        job = VisualCreativeJob(
+            id="job-image",
+            provider="fake",
+            scope_id="business-id",
+            kind="image",
+            status="succeeded",
+            asset_ready=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "generated.png"
+            Image.new("RGB", (100, 100), (30, 40, 50)).save(path)
+            original_limit = Image.MAX_IMAGE_PIXELS
+            try:
+                Image.MAX_IMAGE_PIXELS = 1000
+                with patch.object(visual_creatives, "download_visual", return_value=path):
+                    with self.assertRaisesRegex(
+                        visual_creatives.VisualCreativeError,
+                        "visual_creative_invalid_image_asset",
+                    ):
+                        visual_creatives.materialize_ad_visual(job)
+            finally:
+                Image.MAX_IMAGE_PIXELS = original_limit
+
+    def test_materialization_preserves_webp_bytes_for_webp_path(self) -> None:
+        Image = self._pillow_image()
+        if "WEBP" not in Image.registered_extensions().values():
+            self.skipTest("Pillow WebP codec is unavailable")
+        job = VisualCreativeJob(
+            id="job-image",
+            provider="fake",
+            scope_id="business-id",
+            kind="image",
+            status="succeeded",
+            asset_ready=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "generated.webp"
+            Image.new("RGB", (128, 128), (30, 40, 50)).save(path, format="WEBP")
+            with patch.object(visual_creatives, "download_visual", return_value=path):
+                result = visual_creatives.materialize_ad_visual(job)
+            with Image.open(result) as repaired:
+                self.assertEqual(repaired.format, "WEBP")
+                self.assertEqual(repaired.size, (128, 128))
+
     def test_materialization_rejects_non_image_payload(self) -> None:
         self._pillow_image()
         job = VisualCreativeJob(
