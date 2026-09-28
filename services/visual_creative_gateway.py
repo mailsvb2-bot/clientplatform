@@ -538,6 +538,7 @@ def download_render_asset(
         raise VisualCreativeGatewayError("visual_gateway_render_materialization_failed") from exc
     return target
 
+
 def configured_visual_providers(
     kind: str,
     *,
@@ -570,6 +571,29 @@ def configured_visual_providers(
     return tuple(result)
 
 
+def configured_visual_video_mode(*, country_code: str = "") -> str:
+    """Return native/motion/unavailable without exposing provider internals."""
+
+    query = urllib.parse.urlencode({"country_code": str(country_code or "").strip()})
+    value = _json("GET", f"/v1/providers?{query}")
+    if not bool(value.get("enabled")):
+        return "unavailable"
+    mode = str(value.get("video_generation_mode") or "").strip().lower()
+    if mode in {"native", "motion", "unavailable"}:
+        return mode
+
+    # Backward-compatible fallback for an older upstream during rolling deploys.
+    raw = value.get("configured_video")
+    if not isinstance(raw, (list, tuple)):
+        raise VisualCreativeGatewayError("visual_gateway_invalid_provider_snapshot")
+    names = tuple(str(item or "").strip().lower() for item in raw)
+    if any(name and name != "yandexart_motion" for name in names):
+        return "native"
+    if "yandexart_motion" in names:
+        return "motion"
+    return "unavailable"
+
+
 def gateway_snapshot() -> dict[str, Any]:
     base = str(os.getenv("VISUAL_GATEWAY_URL", "") or "").strip()
     parsed = urllib.parse.urlsplit(base) if base else None
@@ -597,6 +621,7 @@ __all__ = [
     "VisualRenderPack",
     "download_render_asset",
     "configured_visual_providers",
+    "configured_visual_video_mode",
     "download_visual",
     "gateway_snapshot",
     "poll_visual",

@@ -120,6 +120,31 @@ def test_configured_visual_providers_uses_gateway_capability_snapshot(monkeypatc
     assert "country_code=RU" in seen["path"]
 
 
+def test_configured_visual_video_mode_reads_explicit_snapshot(monkeypatch):
+    monkeypatch.setattr(
+        gateway,
+        "_json",
+        lambda *_args, **_kwargs: {
+            "enabled": True,
+            "configured_video": ["runway", "yandexart_motion"],
+            "video_generation_mode": "native",
+        },
+    )
+    assert gateway.configured_visual_video_mode(country_code="RU") == "native"
+
+
+def test_configured_visual_video_mode_supports_rolling_old_upstream(monkeypatch):
+    monkeypatch.setattr(
+        gateway,
+        "_json",
+        lambda *_args, **_kwargs: {
+            "enabled": True,
+            "configured_video": ["yandexart_motion"],
+        },
+    )
+    assert gateway.configured_visual_video_mode(country_code="RU") == "motion"
+
+
 def test_configured_visual_providers_fails_closed_when_generation_disabled(monkeypatch):
     monkeypatch.setattr(
         gateway,

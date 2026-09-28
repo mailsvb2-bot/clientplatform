@@ -126,6 +126,17 @@ def provider_configs() -> dict[str, ProviderConfig]:
             max_media_bytes=max_media,
             output_dir=output_dir,
         ),
+        "selfhosted_backup": ProviderConfig(
+            name="selfhosted_backup",
+            base_url=_env("VISUAL_SELFHOST_BACKUP_BASE_URL", ""),
+            api_key=_env("VISUAL_SELFHOST_BACKUP_TOKEN", ""),
+            model_image=_env("VISUAL_SELFHOST_BACKUP_IMAGE_MODEL", ""),
+            model_video=_env("VISUAL_SELFHOST_BACKUP_VIDEO_MODEL", ""),
+            timeout_seconds=timeout,
+            max_json_bytes=max_json,
+            max_media_bytes=max_media,
+            output_dir=output_dir,
+        ),
     }
 
 
@@ -175,7 +186,7 @@ def _policy_order(kind: str, country_code: str = "") -> tuple[str, ...]:
         if kind == "image":
             order = _csv("VISUAL_RU_IMAGE_ORDER", "yandexart,gigachat,selfhosted")
         else:
-            order = _csv("VISUAL_RU_VIDEO_ORDER", "yandexart_motion,selfhosted")
+            order = _csv("VISUAL_RU_VIDEO_ORDER", "selfhosted,selfhosted_backup,yandexart_motion")
         if _truthy("VISUAL_ALLOW_GLOBAL_PROVIDERS_IN_RU", "0"):
             global_order = _csv(
                 "VISUAL_GLOBAL_IMAGE_ORDER" if kind == "image" else "VISUAL_GLOBAL_VIDEO_ORDER",
@@ -189,11 +200,27 @@ def _policy_order(kind: str, country_code: str = "") -> tuple[str, ...]:
     )
 
 
+def _video_provider_mode(name: str) -> str:
+    """Classify native moving-scene generators vs keyframe motion fallback."""
+
+    return "motion" if str(name or "").strip().lower() == "yandexart_motion" else "native"
+
+
+def _prefer_native_video_order(order: tuple[str, ...]) -> tuple[str, ...]:
+    native = tuple(name for name in order if _video_provider_mode(name) == "native")
+    motion = tuple(name for name in order if _video_provider_mode(name) == "motion")
+    if _truthy("VISUAL_VIDEO_MOTION_PRIMARY", "0"):
+        return tuple(dict.fromkeys((*motion, *native)))
+    return tuple(dict.fromkeys((*native, *motion)))
+
+
 def provider_order(kind: str, country_code: str = "", preferred_provider: str = "") -> tuple[str, ...]:
     normalized_kind = str(kind or "").strip().lower()
     if normalized_kind not in {"image", "video"}:
         raise ValueError("visual kind must be image or video")
     policy = _policy_order(normalized_kind, country_code)
+    if normalized_kind == "video":
+        policy = _prefer_native_video_order(policy)
     explicit = str(preferred_provider or "").strip().lower()
     if not explicit or explicit == "auto":
         return policy
@@ -293,13 +320,30 @@ def provider_snapshot(country_code: str = "") -> dict[str, object]:
     configs = provider_configs()
     yandex = configs["yandexart"]
     catalog = get_yandex_model_catalog(yandex)
+    configured_video = configured_providers("video", country_code)
+    configured_video_native = tuple(
+        name for name in configured_video if _video_provider_mode(name) == "native"
+    )
+    configured_video_motion = tuple(
+        name for name in configured_video if _video_provider_mode(name) == "motion"
+    )
+    video_generation_mode = (
+        "native"
+        if configured_video_native
+        else "motion"
+        if configured_video_motion
+        else "unavailable"
+    )
     return {
         "enabled": _truthy("VISUAL_CREATIVE_ENABLED", "0"),
         "country_code": str(country_code or _env("VISUAL_DEPLOYMENT_COUNTRY", "RU")).strip().upper(),
         "image_order": provider_order("image", country_code),
         "video_order": provider_order("video", country_code),
         "configured_image": configured_providers("image", country_code),
-        "configured_video": configured_providers("video", country_code),
+        "configured_video": configured_video,
+        "configured_video_native": configured_video_native,
+        "configured_video_motion": configured_video_motion,
+        "video_generation_mode": video_generation_mode,
         "providers": {name: cfg.safe_dict() for name, cfg in configs.items()},
         "models": {
             "yandexart": {
@@ -368,7 +412,12 @@ class VisualCreativeEngine:
         )
 
     def _circuit_open(self, provider: str) -> bool:
-        return time.monotonic() < float(self._circuit_open_until.get(provider, 0.0) or 0.0)
+        now = time.monotonic()
+        if now < float(self._circuit_open_until.get(provider, 0.0) or 0.0):
+            return True
+        if provider == "yandexart_motion":
+            return now < float(self._circuit_open_until.get("yandexart", 0.0) or 0.0)
+        return False
 
     def _trip_circuit(self, provider: str, error_code: str) -> None:
         if error_code not in {
@@ -376,6 +425,7 @@ class VisualCreativeEngine:
             "visual_provider_submit_http_403",
             "visual_provider_submit_http_404",
             "visual_provider_submit_http_410",
+            "visual_provider_submit_connect_unreachable",
         }:
             return
         self._circuit_open_until[provider] = time.monotonic() + self._circuit_seconds()
@@ -456,10 +506,13 @@ class VisualCreativeEngine:
             # paid-provider failover. Timeouts/5xx remain fail-closed because the
             # first provider may already have accepted and billed the job.
             definitive_rejection = submit_failure_code in {
+                "visual_provider_submit_http_400",
                 "visual_provider_submit_http_401",
                 "visual_provider_submit_http_403",
                 "visual_provider_submit_http_404",
                 "visual_provider_submit_http_410",
+                "visual_provider_submit_http_422",
+                "visual_provider_submit_connect_unreachable",
             }
             safe_policy_failover = (
                 definitive_rejection and not normalized.preferred_provider

@@ -42,6 +42,7 @@ from clientplatform.application.visual_creatives import (
     normalize_business_image_request,
     poll_ad_visual,
     visual_generation_ready,
+    visual_video_generation_mode,
 )
 from clientplatform.domain.creative_generation import (
     CreativeGenerationReceipt,
@@ -94,6 +95,7 @@ def _menu_rows(
     *,
     image_ready: bool = True,
     video_ready: bool = True,
+    video_mode: str = "native",
 ):
     rows: list[list[tuple[str, str]]] = []
     if active is not None:
@@ -143,7 +145,13 @@ def _menu_rows(
         ])
         rows.append([
             (
-                "🎬 Создать видео" if video_ready else "⚠️ Видео недоступно",
+                (
+                    "🎬 Создать AI-видео"
+                    if video_mode == "native"
+                    else "🎞 Оживить картинку"
+                )
+                if video_ready
+                else "⚠️ Видео недоступно",
                 f"cpc:video:{token}" if video_ready else f"cpc:status:{token}:video",
             )
         ])
@@ -211,24 +219,32 @@ async def send_creative_studio_menu(
     token = control._uuid_token(business_id)
     country_code = os.getenv("VISUAL_DEPLOYMENT_COUNTRY", "")
     try:
-        image_ready, video_ready = await asyncio.gather(
+        image_ready, video_mode = await asyncio.gather(
             asyncio.to_thread(
                 visual_generation_ready,
                 kind="image",
                 country_code=country_code,
             ),
             asyncio.to_thread(
-                visual_generation_ready,
-                kind="video",
+                visual_video_generation_mode,
                 country_code=country_code,
             ),
         )
+        video_ready = video_mode != "unavailable"
     except VisualCreativeError:
         image_ready = False
         video_ready = False
+        video_mode = "unavailable"
+    video_status = (
+        "✅ полноценная AI-генерация"
+        if video_mode == "native"
+        else "🟡 доступно оживление AI-кадра"
+        if video_mode == "motion"
+        else "⚠️ генератор недоступен"
+    )
     status_lines = (
         f"Картинки: {'✅ генератор подключён' if image_ready else '⚠️ генератор недоступен'}\n"
-        f"Видео: {'✅ генератор подключён' if video_ready else '⚠️ генератор недоступен'}"
+        f"Видео: {video_status}"
     )
     if active is None:
         body = (
@@ -265,6 +281,7 @@ async def send_creative_studio_menu(
             active,
             image_ready=image_ready,
             video_ready=video_ready,
+            video_mode=video_mode,
         ),
     )
 
@@ -275,26 +292,43 @@ async def creative_provider_status(callback: CallbackQuery) -> None:
     try:
         await _actor_for_callback(callback, token)
         country_code = os.getenv("VISUAL_DEPLOYMENT_COUNTRY", "")
-        ready = await asyncio.to_thread(
-            visual_generation_ready,
-            kind=kind,
-            country_code=country_code,
-        )
+        if kind == "video":
+            video_mode = await asyncio.to_thread(
+                visual_video_generation_mode,
+                country_code=country_code,
+            )
+            ready = video_mode != "unavailable"
+        else:
+            video_mode = ""
+            ready = await asyncio.to_thread(
+                visual_generation_ready,
+                kind=kind,
+                country_code=country_code,
+            )
     except (TypeError, ValueError, TenantPermissionDenied):
         await callback.answer("Не удалось проверить генератор", show_alert=True)
         return
     except VisualCreativeError:
         await callback.answer("Не удалось проверить генератор", show_alert=True)
         return
-    noun = "видео" if kind == "video" else "картинок"
-    await callback.answer()
-    await control._callback_message(callback).answer(
-        (
+
+    if kind == "video" and ready:
+        status_text = (
+            "✅ Полноценная AI-генерация видео подключена."
+            if video_mode == "native"
+            else "🟡 Сейчас доступно только оживление AI-кадра, а не генерация движущейся сцены."
+        )
+    else:
+        noun = "видео" if kind == "video" else "картинок"
+        status_text = (
             f"✅ Генератор {noun} подключён и доступен."
             if ready
             else f"⚠️ Генератор {noun} сейчас не подключён к production-шлюзу. "
             "Платный AI-вызов не будет запущен."
-        ),
+        )
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        status_text,
         reply_markup=control._keyboard(
             [[("⬅️ К картинкам и видео", f"cpc:open:{token}")]]
         ),
@@ -338,6 +372,24 @@ async def _ask_creative_prompt(
     if active is not None and active.status != CreativeGenerationReceiptStatus.PREPARED:
         await callback.answer("Сначала продолжите уже начатую генерацию", show_alert=True)
         return
+
+    video_mode = ""
+    if kind == "video":
+        try:
+            video_mode = await asyncio.to_thread(
+                visual_video_generation_mode,
+                country_code=os.getenv("VISUAL_DEPLOYMENT_COUNTRY", ""),
+            )
+        except VisualCreativeError:
+            await callback.answer("Не удалось проверить генератор видео", show_alert=True)
+            return
+        if video_mode == "unavailable":
+            await callback.answer(
+                "Видео сейчас недоступно: рабочий production-генератор не подключён.",
+                show_alert=True,
+            )
+            return
+
     await state.set_state(ClientPlatformCreativeStudioState.waiting_prompt)
     await state.set_data(
         {
@@ -349,11 +401,20 @@ async def _ask_creative_prompt(
     await callback.answer()
     target = control._callback_message(callback)
     if kind == "video":
+        if video_mode == "motion":
+            prompt_text = (
+                "Сейчас доступен безопасный резервный режим: ClientPlatform создаст "
+                "AI-кадр и превратит его в короткий MP4 с плавным движением камеры. "
+                "Это не генерация движущейся сцены. Опишите ключевой кадр обычными словами."
+            )
+        else:
+            prompt_text = (
+                "Опишите короткий ролик обычными словами, например: "
+                "«спокойное вертикальное видео уютного кабинета психолога, "
+                "мягкое движение камеры, естественный свет, без текста»."
+            )
         await target.answer(
-            "Какое видео создать?\n\n"
-            "Опишите короткий ролик обычными словами, например: "
-            "«спокойное вертикальное видео уютного кабинета психолога, "
-            "мягкое движение камеры, естественный свет, без текста».",
+            "Какое видео создать?\n\n" + prompt_text,
             reply_markup=control._keyboard(_studio_navigation_rows(token)),
         )
     else:
@@ -467,7 +528,14 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
         f"Задача: {receipt.request_text}\n\n"
         "Генерация может расходовать платную AI-квоту. Платный вызов начнётся "
         "только после кнопки ниже. Даже после перезапуска ClientPlatform продолжит "
-        "этот же запрос, а не создаст новый платный job.",
+        "этот же запрос, а не создаст новый платный job."
+        + (
+            "\n\nДля видео ClientPlatform сначала использует полноценный генератор "
+            "движущейся сцены. Если такой провайдер недоступен до принятия задания, "
+            "может быть использован явно обозначенный motion fallback из AI-кадра."
+            if _receipt_kind(receipt) == "video"
+            else ""
+        ),
         reply_markup=control._keyboard(
             [
                 [(f"✅ Создать 1 {noun}", _receipt_callback("generate", token, receipt))],
@@ -542,7 +610,12 @@ async def _finish_visual(
                 return True
             try:
                 if str(getattr(job, "kind", "") or "") == "video":
-                    await target.answer_video(FSInputFile(path), caption="✅ Видео готово")
+                    caption = (
+                        "✅ Оживлённая AI-картинка готова"
+                        if str(getattr(job, "provider", "") or "") == "yandexart_motion"
+                        else "✅ AI-видео готово"
+                    )
+                    await target.answer_video(FSInputFile(path), caption=caption)
                 else:
                     await target.answer_photo(FSInputFile(path), caption="✅ Картинка готова")
             except TelegramAPIError:

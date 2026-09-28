@@ -8,6 +8,7 @@ from services.visual_creative_gateway import (
     VisualCreativeGatewayError,
     VisualCreativeJob,
     configured_visual_providers,
+    configured_visual_video_mode,
     download_visual,
     poll_visual,
     submit_visual,
@@ -65,6 +66,15 @@ def visual_generation_ready(
                 country_code=country_code,
             )
         )
+    except VisualCreativeGatewayError as exc:
+        raise VisualCreativeError("visual_creative_provider_preflight_failed") from exc
+
+
+def visual_video_generation_mode(*, country_code: str = "") -> str:
+    """Return native/motion/unavailable for owner-facing video UX."""
+
+    try:
+        return configured_visual_video_mode(country_code=country_code)
     except VisualCreativeGatewayError as exc:
         raise VisualCreativeError("visual_creative_provider_preflight_failed") from exc
 
@@ -453,6 +463,7 @@ def poll_ad_visual(*, job_id: str, scope_id: str) -> VisualCreativeJob:
 __all__ = [
     "VisualCreativeError",
     "visual_generation_ready",
+    "visual_video_generation_mode",
     "build_business_visual_brief",
     "build_business_image_brief",
     "create_business_visual_from_frozen_payload",

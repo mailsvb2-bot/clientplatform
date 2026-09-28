@@ -39,6 +39,29 @@ class VisualCreativeApplicationTests(unittest.TestCase):
         self.assertEqual(brief.preferred_provider, "runway")
         self.assertIn("vertical advertising video", brief.prompt)
 
+    def test_video_generation_mode_is_exposed_without_provider_details(self) -> None:
+        with patch.object(
+            visual_creatives,
+            "configured_visual_video_mode",
+            return_value="motion",
+        ):
+            self.assertEqual(
+                visual_creatives.visual_video_generation_mode(country_code="RU"),
+                "motion",
+            )
+
+    def test_video_generation_mode_normalizes_gateway_failure(self) -> None:
+        with patch.object(
+            visual_creatives,
+            "configured_visual_video_mode",
+            side_effect=VisualCreativeGatewayError("secret transport detail"),
+        ):
+            with self.assertRaisesRegex(
+                visual_creatives.VisualCreativeError,
+                "visual_creative_provider_preflight_failed",
+            ):
+                visual_creatives.visual_video_generation_mode(country_code="RU")
+
     def test_business_image_brief_accepts_plain_owner_language_and_brand(self) -> None:
         brief = visual_creatives.build_business_image_brief(
             request="спокойная реалистичная фотография кабинета без текста",

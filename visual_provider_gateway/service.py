@@ -25,7 +25,9 @@ _SAFE_EXPLICIT_RETRY_ERRORS = frozenset(
         "visual_provider_submit_http_401",
         "visual_provider_submit_http_403",
         "visual_provider_submit_http_404",
+        "visual_provider_submit_http_410",
         "visual_provider_submit_http_422",
+        "visual_provider_submit_connect_unreachable",
     }
 )
 
@@ -352,7 +354,7 @@ class VisualGatewayService:
     def snapshot(self, country_code: str = "") -> dict[str, Any]:
         payload = dict(provider_snapshot(self._effective_country(country_code)))
         runtime_snapshot = getattr(self.engine, "runtime_snapshot", None)
-        payload["runtime"] = (
+        runtime = (
             runtime_snapshot()
             if callable(runtime_snapshot)
             else {
@@ -361,4 +363,32 @@ class VisualGatewayService:
                 "circuits_open_seconds": {},
             }
         )
+        payload["runtime"] = runtime
+
+        circuits = runtime.get("circuits_open_seconds") if isinstance(runtime, dict) else {}
+        open_providers = {
+            str(name)
+            for name, seconds in (circuits.items() if isinstance(circuits, dict) else ())
+            if int(seconds or 0) > 0
+        }
+        if "yandexart" in open_providers:
+            open_providers.add("yandexart_motion")
+        if open_providers:
+            for field in (
+                "configured_image",
+                "configured_video",
+                "configured_video_native",
+                "configured_video_motion",
+            ):
+                current = payload.get(field)
+                if isinstance(current, (list, tuple)):
+                    payload[field] = tuple(
+                        str(name) for name in current if str(name) not in open_providers
+                    )
+
+            native = tuple(payload.get("configured_video_native") or ())
+            motion = tuple(payload.get("configured_video_motion") or ())
+            payload["video_generation_mode"] = (
+                "native" if native else "motion" if motion else "unavailable"
+            )
         return payload
