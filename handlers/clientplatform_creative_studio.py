@@ -576,14 +576,19 @@ async def _finish_visual(
     token = control._uuid_token(actor.business_id)
     try:
         with tempfile.TemporaryDirectory(prefix="clientplatform-creative-") as directory:
-            materialize_kwargs = {"output_dir": directory}
             if _owner_requested_copy_space(receipt.request_text):
-                materialize_kwargs["repair_blank_bands"] = False
-            path = await asyncio.to_thread(
-                materialize_ad_visual,
-                job,
-                **materialize_kwargs,
-            )
+                path = await asyncio.to_thread(
+                    materialize_ad_visual,
+                    job,
+                    output_dir=directory,
+                    repair_blank_bands=False,
+                )
+            else:
+                path = await asyncio.to_thread(
+                    materialize_ad_visual,
+                    job,
+                    output_dir=directory,
+                )
             binding = frozen_business_visual_binding(receipt.provider_payload_json)
             if binding is not None and binding.get("type") == "event_content":
                 await asyncio.to_thread(
