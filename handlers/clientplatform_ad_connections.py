@@ -6,6 +6,7 @@ import os
 from io import BytesIO
 
 from aiogram import F
+from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -94,6 +95,7 @@ _JOB_LABELS = {
     AdPublicationStatus.CANCELLED: "отменено",
 }
 _CONFIRM_DRAFT_LABEL = "✅ Создать черновик в Яндекс Директе"
+_MAX_AD_IMAGE_BYTES = 20_000_000
 
 
 def _message(callback: CallbackQuery) -> Message:
@@ -962,6 +964,16 @@ async def receive_ad_image_upload(message: Message, state: FSMContext) -> None:
             ),
         )
         return
+    reported_size = int(getattr(media, "file_size", 0) or 0)
+    if reported_size > _MAX_AD_IMAGE_BYTES:
+        await message.answer(
+            "Картинка слишком большая. Пришлите изображение размером до 20 МБ; "
+            "файл не скачивался и не сохранялся.",
+            reply_markup=control._keyboard(
+                _owner_navigation_rows(str(data["business_token"]))
+            ),
+        )
+        return
     try:
         actor = await control._actor(
             control._user_id(message),
@@ -970,6 +982,8 @@ async def receive_ad_image_upload(message: Message, state: FSMContext) -> None:
         buffer = BytesIO()
         await message.bot.download(media, destination=buffer)
         payload = buffer.getvalue()
+        if not payload or len(payload) > _MAX_AD_IMAGE_BYTES:
+            raise AdPublicationAssetError("advertising image download is invalid")
         await asyncio.to_thread(
             attach_image_bytes,
             actor=actor,
@@ -982,6 +996,7 @@ async def receive_ad_image_upload(message: Message, state: FSMContext) -> None:
         KeyError,
         IndexError,
         OSError,
+        TelegramAPIError,
         AdPublicationAssetError,
         AdConnectionError,
         RuntimeError,
