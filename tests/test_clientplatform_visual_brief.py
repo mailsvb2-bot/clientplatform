@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
 from pathlib import Path
+
+from PIL import Image
 from unittest.mock import patch
 
 from clientplatform.application import visual_creatives
@@ -23,6 +26,7 @@ class VisualCreativeApplicationTests(unittest.TestCase):
         self.assertEqual(brief.aspect_ratio, "4:5")
         self.assertEqual(brief.country_code, "RU")
         self.assertIn("fake reviews", brief.prompt)
+        self.assertIn("fully inside the frame", brief.prompt)
         self.assertIn("invented statistics", brief.prompt)
         self.assertIn("typography", brief.prompt)
 
@@ -205,13 +209,97 @@ class VisualCreativeApplicationTests(unittest.TestCase):
             id="job-1",
             provider="fake",
             scope_id="business-id",
+            kind="video",
+            status="succeeded",
+            asset_ready=True,
+        )
+        expected = Path("/tmp/creative.mp4")
+        with patch.object(visual_creatives, "download_visual", return_value=expected):
+            self.assertEqual(visual_creatives.materialize_ad_visual(job), expected)
+
+    def test_materialization_repairs_large_uniform_bottom_band(self) -> None:
+        job = VisualCreativeJob(
+            id="job-image",
+            provider="yandexart",
+            scope_id="business-id",
             kind="image",
             status="succeeded",
             asset_ready=True,
         )
-        expected = Path("/tmp/creative.jpg")
-        with patch.object(visual_creatives, "download_visual", return_value=expected):
-            self.assertEqual(visual_creatives.materialize_ad_visual(job), expected)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "generated.png"
+            image = Image.new("RGB", (200, 300), (128, 128, 128))
+            for x in range(25, 175):
+                for y in range(20, 95):
+                    image.putpixel((x, y), (20, 25, 30))
+            image.save(path)
+            with patch.object(visual_creatives, "download_visual", return_value=path):
+                result = visual_creatives.materialize_ad_visual(job)
+            with Image.open(result) as repaired:
+                self.assertLess(repaired.height, 180)
+                self.assertLess(repaired.width, 200)
+
+    def test_materialization_keeps_moderate_intentional_copy_space(self) -> None:
+        job = VisualCreativeJob(
+            id="job-image",
+            provider="fake",
+            scope_id="business-id",
+            kind="image",
+            status="succeeded",
+            asset_ready=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "generated.png"
+            image = Image.new("RGB", (200, 300), (128, 128, 128))
+            for x in range(20, 180):
+                for y in range(20, 195):
+                    image.putpixel((x, y), (20, 25, 30))
+            image.save(path)
+            with patch.object(visual_creatives, "download_visual", return_value=path):
+                result = visual_creatives.materialize_ad_visual(job)
+            with Image.open(result) as repaired:
+                self.assertEqual(repaired.size, (200, 300))
+
+    def test_materialization_crops_large_transparent_padding(self) -> None:
+        job = VisualCreativeJob(
+            id="job-image",
+            provider="yandexart",
+            scope_id="business-id",
+            kind="image",
+            status="succeeded",
+            asset_ready=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "generated.png"
+            image = Image.new("RGBA", (200, 300), (0, 0, 0, 0))
+            for x in range(20, 180):
+                for y in range(20, 100):
+                    image.putpixel((x, y), (40, 50, 60, 255))
+            image.save(path)
+            with patch.object(visual_creatives, "download_visual", return_value=path):
+                result = visual_creatives.materialize_ad_visual(job)
+            with Image.open(result) as repaired:
+                self.assertEqual(repaired.mode, "RGB")
+                self.assertEqual(repaired.size, (160, 80))
+
+    def test_materialization_rejects_non_image_payload(self) -> None:
+        job = VisualCreativeJob(
+            id="job-image",
+            provider="fake",
+            scope_id="business-id",
+            kind="image",
+            status="succeeded",
+            asset_ready=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "generated.png"
+            path.write_bytes(b"not-an-image")
+            with patch.object(visual_creatives, "download_visual", return_value=path):
+                with self.assertRaisesRegex(
+                    visual_creatives.VisualCreativeError,
+                    "visual_creative_invalid_image_asset",
+                ):
+                    visual_creatives.materialize_ad_visual(job)
 
 
 if __name__ == "__main__":
