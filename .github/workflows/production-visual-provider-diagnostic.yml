@@ -135,8 +135,6 @@ jobs:
                   "YANDEX_API_KEY": bool(os.environ.get("YANDEX_API_KEY")),
                   "YANDEX_ART_IAM_TOKEN": bool(os.environ.get("YANDEX_ART_IAM_TOKEN")),
                   "YANDEX_ART_FOLDER_ID": bool(os.environ.get("YANDEX_ART_FOLDER_ID")),
-                  "YANDEX_MODEL_CATALOG_API_KEY": bool(os.environ.get("YANDEX_MODEL_CATALOG_API_KEY")),
-                  "YANDEX_MODEL_CATALOG_AUTH_SCHEME": bool(os.environ.get("YANDEX_MODEL_CATALOG_AUTH_SCHEME")),
                   "VISUAL_SELFHOST_BASE_URL": bool(os.environ.get("VISUAL_SELFHOST_BASE_URL")),
                   "VISUAL_SELFHOST_VIDEO_MODEL": bool(os.environ.get("VISUAL_SELFHOST_VIDEO_MODEL")),
                   "VISUAL_SELFHOST_BACKUP_BASE_URL": bool(os.environ.get("VISUAL_SELFHOST_BACKUP_BASE_URL")),
@@ -161,6 +159,15 @@ jobs:
           import re
           import sqlite3
           import time
+
+          credential_presence = {
+              "YANDEX_MODEL_CATALOG_API_KEY": bool(os.environ.get("YANDEX_MODEL_CATALOG_API_KEY")),
+              "YANDEX_MODEL_CATALOG_AUTH_SCHEME": bool(os.environ.get("YANDEX_MODEL_CATALOG_AUTH_SCHEME")),
+          }
+          print(
+              "CLIENTPLATFORM_PRODUCTION_VISUAL_PROVIDER_CREDENTIAL_PRESENCE "
+              + json.dumps(credential_presence, ensure_ascii=False, sort_keys=True)
+          )
 
           db_path = str(os.environ.get("VISUAL_GATEWAY_DB") or "/data/visual_gateway.sqlite3")
           now = int(time.time())
