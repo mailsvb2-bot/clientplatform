@@ -227,3 +227,70 @@ def _refresh_catalog(key: str, config: ProviderConfig, ttl: int) -> None:
     finally:
         with _cache_lock:
             _refreshing.discard(key)
+
+
+def _ensure_refresh(key: str, config: ProviderConfig, ttl: int) -> None:
+    with _cache_lock:
+        if key in _refreshing:
+            return
+        _refreshing.add(key)
+    thread = threading.Thread(
+        target=_refresh_catalog,
+        args=(key, config, ttl),
+        name="yandex-model-catalog-refresh",
+        daemon=True,
+    )
+    thread.start()
+
+
+def get_yandex_model_catalog(config: ProviderConfig) -> YandexModelCatalogSnapshot:
+    if not _catalog_api_key(config) or not config.folder_id:
+        return YandexModelCatalogSnapshot(configured=False, available=False)
+
+    ttl = _limit("YANDEX_MODEL_CATALOG_TTL_SECONDS", 900, minimum=30, maximum=86400)
+    key = _cache_key(config)
+    now = time.monotonic()
+    with _cache_lock:
+        cached = _cache.get(key)
+        if cached is not None and cached.expires_at > now:
+            return cached.snapshot
+        stale = cached.snapshot if cached is not None else None
+
+    # Advisory discovery must never delay /v1/providers or container readiness.
+    # Refresh in the background and serve stale data while revalidating.
+    _ensure_refresh(key, config, ttl)
+    if stale is not None:
+        return stale
+    return YandexModelCatalogSnapshot(
+        configured=True,
+        available=False,
+    )
+
+
+def refresh_yandex_model_catalog(config: ProviderConfig) -> YandexModelCatalogSnapshot:
+    """Synchronously refresh advisory catalog data outside health/readiness paths."""
+    if not _catalog_api_key(config) or not config.folder_id:
+        return YandexModelCatalogSnapshot(configured=False, available=False)
+    ttl = _limit("YANDEX_MODEL_CATALOG_TTL_SECONDS", 900, minimum=30, maximum=86400)
+    key = _cache_key(config)
+    snapshot = _fetch(config)
+    with _cache_lock:
+        _cache[key] = _CacheEntry(
+            expires_at=time.monotonic() + ttl,
+            snapshot=snapshot,
+        )
+    return snapshot
+
+
+def clear_yandex_model_catalog_cache() -> None:
+    with _cache_lock:
+        _cache.clear()
+        _refreshing.clear()
+
+
+__all__ = [
+    "YandexModelCatalogSnapshot",
+    "clear_yandex_model_catalog_cache",
+    "get_yandex_model_catalog",
+    "refresh_yandex_model_catalog",
+]
