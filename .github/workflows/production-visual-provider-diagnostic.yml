@@ -156,6 +156,7 @@ jobs:
 
           import json
           import os
+          import re
           import sqlite3
           import time
 
@@ -163,6 +164,24 @@ jobs:
           now = int(time.time())
           safe_rows = []
           counts = {}
+
+          def safe_error_code(value: object) -> str:
+              raw = str(value or "").strip()
+              if not raw:
+                  return ""
+              if not re.fullmatch(r"[a-z0-9_]{1,96}", raw):
+                  return "redacted_untrusted_error"
+              trusted_prefixes = (
+                  "visual_",
+                  "yandex_",
+                  "runway_",
+                  "openai_",
+                  "selfhosted_",
+                  "provider_",
+                  "creative_",
+                  "no_visual_",
+              )
+              return raw if raw.startswith(trusted_prefixes) else "redacted_untrusted_error"
           with sqlite3.connect(db_path) as conn:
               conn.row_factory = sqlite3.Row
               rows = conn.execute(
@@ -178,7 +197,7 @@ jobs:
                   kind = str(row["kind"] or "")
                   status = str(row["status"] or "")
                   provider = str(row["provider"] or "")
-                  error_code = str(row["error_code"] or "")[:160]
+                  error_code = safe_error_code(row["error_code"])
                   key = f"{kind}:{status}:{provider or 'none'}:{error_code or 'none'}"
                   counts[key] = counts.get(key, 0) + 1
                   asset_path = str(row["asset_path"] or "")
@@ -193,7 +212,7 @@ jobs:
                           "kind": kind,
                           "status": status,
                           "provider": provider,
-                          "model": str(row["model"] or "")[:160],
+                          "model_recorded": bool(str(row["model"] or "").strip()),
                           "error_code": error_code,
                           "age_seconds": max(0, now - int(row["updated_at"] or row["created_at"] or now)),
                           "asset_exists": asset_exists,
