@@ -186,7 +186,6 @@ def _provider_failure(
     publication_job_id: str,
     reservation: AdMediaUploadReservation,
     code: str,
-    cause: BaseException,
 ) -> AdPublicationAssetError:
     _mark_upload_ambiguous(
         actor=actor,
@@ -213,12 +212,12 @@ def attach_image_bytes(
 
     normalized = _normalized_image(payload)
     digest = hashlib.sha256(normalized).hexdigest()
-    selected_provider = provider or yandex_provider()
-    selected_vault = vault or ad_vault()
-    job = _publication_job(actor=actor, publication_job_id=publication_job_id)
     try:
+        selected_provider = provider or yandex_provider()
+        selected_vault = vault or ad_vault()
+        job = _publication_job(actor=actor, publication_job_id=publication_job_id)
         connection, bundle = load_bundle(job=job, vault=selected_vault)
-    except (sqlite3.Error, RuntimeError, ValueError, YandexDirectError) as exc:
+    except (OSError, sqlite3.Error, RuntimeError, ValueError, YandexDirectError) as exc:
         raise AdPublicationAssetError(
             "advertising provider authorization is unavailable"
         ) from exc
@@ -249,13 +248,12 @@ def attach_image_bytes(
                 name=original_name or "image.jpg",
             ),
         )
-    except (sqlite3.Error, RuntimeError, ValueError, YandexDirectError) as exc:
+    except (OSError, sqlite3.Error, RuntimeError, ValueError, YandexDirectError) as exc:
         error = _provider_failure(
             actor=actor,
             publication_job_id=publication_job_id,
             reservation=reservation,
             code="ad_image_upload_ambiguous",
-            cause=exc,
         )
         raise error from exc
     return _complete_upload(
@@ -327,12 +325,12 @@ def attach_video_bytes(
             raise AdPublicationAssetError("video file extension is unsupported")
 
     digest = hashlib.sha256(payload).hexdigest()
-    selected_provider = provider or yandex_provider()
-    selected_vault = vault or ad_vault()
-    job = _publication_job(actor=actor, publication_job_id=publication_job_id)
     try:
+        selected_provider = provider or yandex_provider()
+        selected_vault = vault or ad_vault()
+        job = _publication_job(actor=actor, publication_job_id=publication_job_id)
         connection, bundle = load_bundle(job=job, vault=selected_vault)
-    except (sqlite3.Error, RuntimeError, ValueError, YandexDirectError) as exc:
+    except (OSError, sqlite3.Error, RuntimeError, ValueError, YandexDirectError) as exc:
         raise AdPublicationAssetError(
             "advertising provider authorization is unavailable"
         ) from exc
@@ -363,13 +361,12 @@ def attach_video_bytes(
                 name=original_name or f"video.{suffix}",
             ),
         )
-    except (sqlite3.Error, RuntimeError, ValueError, YandexDirectError) as exc:
+    except (OSError, sqlite3.Error, RuntimeError, ValueError, YandexDirectError) as exc:
         error = _provider_failure(
             actor=actor,
             publication_job_id=publication_job_id,
             reservation=reservation,
             code="ad_video_upload_ambiguous",
-            cause=exc,
         )
         raise error from exc
     return _complete_upload(
