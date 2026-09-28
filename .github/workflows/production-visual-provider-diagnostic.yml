@@ -1,0 +1,190 @@
+name: ClientPlatform Production Visual Provider Diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: clientplatform-production-visual-provider-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[probe-production-visual]')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    env:
+      SSH_HOST: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_HOST }}
+      SSH_USER: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_KNOWN_HOSTS }}
+      SSH_PORT_SECRET: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_PORT }}
+
+    steps:
+      - name: Require dedicated ClientPlatform SSH credentials
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${SSH_HOST:?CLIENTPLATFORM_PRODUCTION_SSH_HOST is required}"
+          : "${SSH_USER:?CLIENTPLATFORM_PRODUCTION_SSH_USER is required}"
+          : "${SSH_PRIVATE_KEY:?CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY is required}"
+          : "${SSH_KNOWN_HOSTS:?CLIENTPLATFORM_PRODUCTION_SSH_KNOWN_HOSTS is required}"
+          SSH_PORT="${SSH_PORT_SECRET:-22}"
+          case "$SSH_PORT" in ''|*[!0-9]*) exit 2 ;; esac
+          if [ "$SSH_PORT" -lt 1 ] || [ "$SSH_PORT" -gt 65535 ]; then exit 2; fi
+          echo "SSH_PORT=$SSH_PORT" >> "$GITHUB_ENV"
+
+      - name: Configure pinned production SSH identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/clientplatform-production-ssh-key"
+          known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$known_hosts"
+          chmod 600 "$key" "$known_hosts"
+          ssh-keygen -y -f "$key" >/dev/null
+
+      - name: Probe live production visual provider state
+        id: probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/clientplatform-production-ssh-key"
+          known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
+          output="$RUNNER_TEMP/clientplatform-production-visual-provider-diagnostic.log"
+
+          set +e
+          ssh \
+            -p "$SSH_PORT" \
+            -i "$key" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$known_hosts" \
+            -o ConnectTimeout=10 \
+            "$SSH_USER@$SSH_HOST" 'bash -s' 2>&1 <<'REMOTE' | tee "$output"
+          set -Eeuo pipefail
+          repo=/opt/clientplatform
+          cd "$repo"
+
+          privileged() {
+            if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi
+          }
+
+          provider_id="$(privileged docker ps --filter name=clientplatform-production-visual-provider-gateway-1 --format '{{.ID}}' | head -n1)"
+          gateway_id="$(privileged docker ps --filter name=clientplatform-production-visual-gateway-1 --format '{{.ID}}' | head -n1)"
+          app_id="$(privileged docker ps --filter name=clientplatform-production-app-1 --format '{{.ID}}' | head -n1)"
+          if [ -z "$provider_id" ] || [ -z "$gateway_id" ] || [ -z "$app_id" ]; then
+            echo "CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:container_missing"
+            exit 20
+          fi
+
+          provider_health="$(privileged docker inspect --format '{{.State.Health.Status}}' "$provider_id" 2>/dev/null || true)"
+          gateway_health="$(privileged docker inspect --format '{{.State.Health.Status}}' "$gateway_id" 2>/dev/null || true)"
+          app_health="$(privileged docker inspect --format '{{.State.Health.Status}}' "$app_id" 2>/dev/null || true)"
+          echo "CLIENTPLATFORM_PRODUCTION_VISUAL_CONTAINERS provider_health=$provider_health gateway_health=$gateway_health app_health=$app_health head_sha=$(git rev-parse HEAD)"
+
+          privileged docker exec -i "$app_id" python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+
+          from services import visual_creative_gateway as gateway
+
+          payload = gateway._json("GET", "/v1/providers?country_code=RU")
+
+          models = payload.get("models") if isinstance(payload.get("models"), dict) else {}
+          yandex = models.get("yandexart") if isinstance(models.get("yandexart"), dict) else {}
+          runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
+          image_runtime = runtime.get("image") if isinstance(runtime.get("image"), dict) else {}
+          video_runtime = runtime.get("video") if isinstance(runtime.get("video"), dict) else {}
+          circuits = runtime.get("circuits_open_seconds") if isinstance(runtime.get("circuits_open_seconds"), dict) else {}
+
+          safe = {
+              "enabled": bool(payload.get("enabled")),
+              "country_code": str(payload.get("country_code") or ""),
+              "image_order": list(payload.get("image_order") or ()),
+              "video_order": list(payload.get("video_order") or ()),
+              "configured_image": list(payload.get("configured_image") or ()),
+              "configured_video": list(payload.get("configured_video") or ()),
+              "configured_video_native": list(payload.get("configured_video_native") or ()),
+              "configured_video_motion": list(payload.get("configured_video_motion") or ()),
+              "video_generation_mode": str(payload.get("video_generation_mode") or ""),
+              "yandex_model": str(yandex.get("model") or ""),
+              "yandex_model_status": str(yandex.get("status") or ""),
+              "yandex_catalog_configured": bool(yandex.get("catalog_configured")),
+              "yandex_catalog_available": bool(yandex.get("catalog_available")),
+              "yandex_catalog_error": str(yandex.get("catalog_error") or ""),
+              "yandex_configured_model_present": bool(yandex.get("configured_model_present")),
+              "yandex_available_art_models": list(yandex.get("available_art_models") or ()),
+              "runtime_image_provider": str(image_runtime.get("provider") or ""),
+              "runtime_image_error": str(image_runtime.get("error_code") or ""),
+              "runtime_video_provider": str(video_runtime.get("provider") or ""),
+              "runtime_video_error": str(video_runtime.get("error_code") or ""),
+              "circuits_open_seconds": {str(k): int(v or 0) for k, v in circuits.items()},
+              "credential_presence": {
+                  "YANDEX_API_KEY": bool(os.environ.get("YANDEX_API_KEY")),
+                  "YANDEX_ART_IAM_TOKEN": bool(os.environ.get("YANDEX_ART_IAM_TOKEN")),
+                  "YANDEX_ART_FOLDER_ID": bool(os.environ.get("YANDEX_ART_FOLDER_ID")),
+                  "VISUAL_SELFHOST_BASE_URL": bool(os.environ.get("VISUAL_SELFHOST_BASE_URL")),
+                  "VISUAL_SELFHOST_VIDEO_MODEL": bool(os.environ.get("VISUAL_SELFHOST_VIDEO_MODEL")),
+                  "VISUAL_SELFHOST_BACKUP_BASE_URL": bool(os.environ.get("VISUAL_SELFHOST_BACKUP_BASE_URL")),
+                  "RUNWAYML_API_SECRET": bool(os.environ.get("RUNWAYML_API_SECRET")),
+                  "VISUAL_OPENAI_API_KEY": bool(os.environ.get("VISUAL_OPENAI_API_KEY")),
+              },
+          }
+          print("CLIENTPLATFORM_PRODUCTION_VISUAL_SNAPSHOT " + json.dumps(safe, ensure_ascii=False, sort_keys=True))
+          readiness = (
+              "ready"
+              if safe["enabled"] and safe["configured_image"]
+              else "provider_unavailable"
+          )
+          print("CLIENTPLATFORM_PRODUCTION_VISUAL_READINESS state=" + readiness)
+          PY
+          REMOTE
+          status=${PIPESTATUS[0]}
+          set -e
+
+          if [ "$status" -ne 0 ]; then
+            marker="$(grep -E '^CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:' "$output" | tail -n1 || true)"
+            [ -n "$marker" ] || marker="CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:probe_failed_without_safe_marker"
+            echo "failure_marker=$marker" >> "$GITHUB_OUTPUT"
+            exit "$status"
+          fi
+
+      - name: Upload safe diagnostic log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: production-visual-provider-diagnostic
+          path: ${{ runner.temp }}/clientplatform-production-visual-provider-diagnostic.log
+          if-no-files-found: warn
+
+      - name: Publish production visual diagnostic status
+        if: always()
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
+        env:
+          PROBE_OUTCOME: ${{ steps.probe.outcome }}
+          FAILURE_MARKER: ${{ steps.probe.outputs.failure_marker }}
+        with:
+          script: |
+            const ok = process.env.PROBE_OUTCOME === 'success';
+            const marker = process.env.FAILURE_MARKER || 'production visual provider diagnostic failed';
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: ok ? 'success' : 'failure',
+              context: 'ops/clientplatform-production-visual-provider',
+              description: (ok ? 'Production visual app-facing diagnostic completed' : marker).slice(0, 140),
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });
