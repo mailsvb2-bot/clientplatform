@@ -46,7 +46,7 @@ class GatewayConfig:
     upstream_url: str
     upstream_token: str
     state_dir: Path
-    asset_dir: Path
+    asset_dir: Path = Path("/tmp/visual-gateway-assets")
     transient_asset_ttl_seconds: int = 21_600
     transient_asset_cleanup_limit: int = 200
     daily_generation_limit: int = 100
@@ -126,6 +126,50 @@ class Store:
         self.root.mkdir(parents=True, exist_ok=True)
         self.assets.mkdir(parents=True, exist_ok=True)
         self._init_schema()
+        self._purge_legacy_persistent_assets()
+
+    def _purge_legacy_persistent_assets(self) -> int:
+        legacy_assets = (self.root / "assets").resolve()
+        if legacy_assets == self.assets:
+            return 0
+        removed = 0
+        try:
+            candidates = sorted(
+                (item for item in legacy_assets.rglob("*") if item.is_file()),
+                key=lambda item: len(item.parts),
+                reverse=True,
+            ) if legacy_assets.is_dir() else []
+        except OSError:
+            candidates = []
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+                resolved.relative_to(legacy_assets)
+                resolved.unlink(missing_ok=True)
+                removed += 1
+            except (OSError, ValueError):
+                continue
+        if legacy_assets.is_dir():
+            try:
+                directories = sorted(
+                    (item for item in legacy_assets.rglob("*") if item.is_dir()),
+                    key=lambda item: len(item.parts),
+                    reverse=True,
+                )
+            except OSError:
+                directories = []
+            for directory in directories:
+                try:
+                    directory.rmdir()
+                except OSError:
+                    continue
+            try:
+                legacy_assets.rmdir()
+            except OSError:
+                pass
+        with self._connect() as conn:
+            conn.execute("UPDATE render_assets SET asset_ready=0 WHERE asset_ready<>0")
+        return removed
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
