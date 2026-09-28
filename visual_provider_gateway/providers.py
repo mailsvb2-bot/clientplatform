@@ -147,11 +147,30 @@ def _suffix_for_mime(mime_type: str, kind: str) -> str:
     return ".mp4" if kind == "video" else ".jpg"
 
 
+def _sniff_media_type(data: bytes, kind: str) -> str:
+    if str(kind or "").strip().lower() == "image":
+        if data.startswith(b"\xff\xd8\xff"):
+            return "image/jpeg"
+        if data.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png"
+        if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            return "image/webp"
+    if str(kind or "").strip().lower() == "video":
+        if len(data) >= 12 and data[4:8] == b"ftyp":
+            return "video/mp4"
+        if data.startswith(b"\x1aE\xdf\xa3"):
+            return "video/webm"
+    return ""
+
+
 def _store_asset(config: ProviderConfig, job: CreativeJob, data: bytes) -> CreativeJob:
     if not data:
         return job
     if len(data) > config.max_media_bytes:
         raise ProviderTransportError("media_too_large")
+    detected_mime = _sniff_media_type(data, job.kind)
+    if detected_mime:
+        job.mime_type = detected_mime
     root = ensure_output_dir(config.output_dir)
     suffix = _suffix_for_mime(job.mime_type, job.kind)
     token = re.sub(r"[^a-zA-Z0-9_.-]+", "-", job.external_id or uuid.uuid4().hex)[:80]
