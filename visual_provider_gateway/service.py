@@ -215,6 +215,7 @@ class VisualGatewayService:
         return raw
 
     def submit(self, payload: dict[str, Any], *, client_id: str) -> dict[str, Any]:
+        self._cleanup_transient_assets()
         scope_id = str(payload.get("scope_id") or "global").strip() or "global"
         idempotency_key = str(payload.get("idempotency_key") or "").strip()
         kind = str(payload.get("kind") or "image").strip().lower()
@@ -314,6 +315,7 @@ class VisualGatewayService:
         return self._response(stored)
 
     def poll(self, gateway_id: str, *, client_id: str, scope_id: str) -> dict[str, Any]:
+        self._cleanup_transient_assets()
         scope = str(scope_id or "").strip()
         stored = self.store.get(gateway_id, client_id=client_id, scope_id=scope)
         if stored.status in {"succeeded", "failed"}:
