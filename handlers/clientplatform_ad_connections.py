@@ -940,17 +940,35 @@ async def cancel_ad_image_upload(callback: CallbackQuery, state: FSMContext) -> 
     )
 
 
-@simple.router.message(AdConnectionState.waiting_image_upload, F.photo)
+@simple.router.message(AdConnectionState.waiting_image_upload)
 async def receive_ad_image_upload(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
+    media = None
+    original_name = "telegram-image.jpg"
+    if message.photo:
+        media = message.photo[-1]
+    elif (
+        message.document is not None
+        and str(message.document.mime_type or "").strip().lower().startswith("image/")
+    ):
+        media = message.document
+        original_name = str(message.document.file_name or "telegram-image.jpg")
+    if media is None:
+        await message.answer(
+            "Пришлите именно изображение — как фото или графический файл. "
+            "Другой файл не был сохранён.",
+            reply_markup=control._keyboard(
+                _owner_navigation_rows(str(data["business_token"]))
+            ),
+        )
+        return
     try:
         actor = await control._actor(
             control._user_id(message),
             str(data["business_id"]),
         )
-        photo = message.photo[-1]
         buffer = BytesIO()
-        await message.bot.download(photo, destination=buffer)
+        await message.bot.download(media, destination=buffer)
         payload = buffer.getvalue()
         await asyncio.to_thread(
             attach_image_bytes,
@@ -958,9 +976,17 @@ async def receive_ad_image_upload(message: Message, state: FSMContext) -> None:
             publication_job_id=str(data["job_id"]),
             payload=payload,
             source=AdPublicationAssetSource.UPLOAD,
-            original_name="telegram-image.jpg",
+            original_name=original_name,
         )
-    except (KeyError, IndexError, AdPublicationAssetError, AdConnectionError, RuntimeError, YandexDirectError):
+    except (
+        KeyError,
+        IndexError,
+        OSError,
+        AdPublicationAssetError,
+        AdConnectionError,
+        RuntimeError,
+        YandexDirectError,
+    ):
         await message.answer(
             "Не удалось безопасно загрузить эту картинку в Яндекс Директ. "
             "Файл на сервере ClientPlatform не сохранялся; попробуйте ещё раз.",
@@ -979,17 +1005,6 @@ async def receive_ad_image_upload(message: Message, state: FSMContext) -> None:
                 [("🔄 Заменить картинку", "cpa:media:upload")],
                 *_owner_navigation_rows(str(data["business_token"])),
             ]
-        ),
-    )
-
-
-@simple.router.message(AdConnectionState.waiting_image_upload)
-async def reject_non_image_ad_upload(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    await message.answer(
-        "Пришлите именно изображение как фото. Другой файл не был сохранён.",
-        reply_markup=control._keyboard(
-            _owner_navigation_rows(str(data["business_token"]))
         ),
     )
 
