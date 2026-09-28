@@ -74,6 +74,11 @@ async def direct(function, *args, **kwargs):
 
 
 class CreativeRecoveryEdgeTests(unittest.IsolatedAsyncioTestCase):
+    def test_copy_space_intent_is_explicit_and_bounded(self) -> None:
+        self.assertTrue(creative._owner_requested_copy_space("Портрет, оставь место для текста справа"))
+        self.assertTrue(creative._owner_requested_copy_space("portrait with copy space"))
+        self.assertFalse(creative._owner_requested_copy_space("спокойный портрет врача без текста"))
+
     async def test_callback_helpers_authorize_exact_business_and_reject_oversize(self) -> None:
         cb = callback(f"cpc:open:{_TOKEN}")
         expected = actor()
@@ -108,7 +113,7 @@ class CreativeRecoveryEdgeTests(unittest.IsolatedAsyncioTestCase):
         target = outbound()
         current = receipt()
 
-        def materialize(_job, *, output_dir=None):
+        def materialize(_job, *, output_dir=None, repair_blank_bands=True):
             path = Path(output_dir) / "creative.jpg"
             path.write_bytes(b"image")
             return path
