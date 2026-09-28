@@ -13,6 +13,7 @@ DISK_MAINTENANCE = ROOT / ".github" / "workflows" / "production-disk-maintenance
 BRANCH_CLEANUP = ROOT / ".github" / "workflows" / "single-main-topology.yml"
 REPAIR = ROOT / "scripts" / "repair_production_deploy_channel.sh"
 OPERATIONS = ROOT / "deploy" / "clientplatform" / "GITHUB_OPERATIONS.md"
+VISUAL_DIAGNOSTIC = ROOT / ".github" / "workflows" / "production-visual-provider-diagnostic.yml"
 
 
 class ProductionWorkflowIsolationTests(unittest.TestCase):
@@ -138,6 +139,20 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertIn(required, text)
         self.assertNotIn("ssh-keyscan", text)
+
+    def test_visual_diagnostic_redacts_provider_controlled_job_fields(self) -> None:
+        text = self._text(VISUAL_DIAGNOSTIC)
+        for required in (
+            "def safe_error_code(value: object) -> str:",
+            "redacted_untrusted_error",
+            '"model_recorded": bool(str(row["model"] or "").strip())',
+            "CLIENTPLATFORM_PRODUCTION_VISUAL_RECENT_JOB_COUNTS",
+            "CLIENTPLATFORM_PRODUCTION_VISUAL_RECENT_JOBS",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, text)
+        self.assertNotIn('"model": str(row["model"] or "")[:160]', text)
+        self.assertNotIn('error_code = str(row["error_code"] or "")[:160]', text)
 
     def test_operations_doc_preserves_private_health_contract(self) -> None:
         text = self._text(OPERATIONS)
