@@ -658,6 +658,25 @@ def test_yandexart_uses_current_alice_images_api(monkeypatch, tmp_path):
     assert Path(job.asset_path).read_bytes() == b"png-bytes"
 
 
+def test_stored_visual_uses_actual_image_signature_for_mime_and_suffix(tmp_path):
+    job = CreativeJob(
+        provider="yandexart",
+        kind="image",
+        status="succeeded",
+        external_id="image-signature-1",
+        mime_type="image/png",
+    )
+    stored = providers._store_asset(
+        ProviderConfig(name="yandexart", output_dir=str(tmp_path)),
+        job,
+        b"\xff\xd8\xff\xe0jpeg-payload",
+    )
+
+    assert stored.mime_type == "image/jpeg"
+    assert Path(stored.asset_path).suffix == ".jpg"
+    assert Path(stored.asset_path).read_bytes().startswith(b"\xff\xd8\xff")
+
+
 def test_yandexart_motion_video_renders_current_alice_keyframe(monkeypatch, tmp_path):
     from visual_provider_gateway.providers import YandexArtMotionVideoProvider, YandexArtProvider
 
