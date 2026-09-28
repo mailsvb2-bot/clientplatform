@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Callable, TypeVar
 
-from clientplatform.domain.ad_connections import AdPublicationJob
+from clientplatform.domain.ad_connections import AdConnection, AdPublicationJob
 from clientplatform.infrastructure.ad_credential_vault import (
     AdCredentialVault,
     AgeAdCredentialVault,
@@ -61,7 +61,7 @@ def load_bundle(
     *,
     job: AdPublicationJob,
     vault: AdCredentialVault,
-) -> tuple[object, YandexTokenBundle]:
+) -> tuple[AdConnection, YandexTokenBundle]:
     with get_db_ro() as conn:
         connection, token_json = AdWorkerStore(conn, vault=vault).load_active(
             business_id=job.business_id,
@@ -72,7 +72,7 @@ def load_bundle(
 
 def refresh_bundle(
     *,
-    connection: object,
+    connection: AdConnection,
     bundle: YandexTokenBundle,
     provider: MediaAwareYandexDirectProvider,
     vault: AdCredentialVault,
