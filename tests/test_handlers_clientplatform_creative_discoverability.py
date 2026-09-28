@@ -575,6 +575,12 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
             await creative.receive_creative_prompt(target, state)
         self.assertIn("уже есть незавершённая генерация", target.answer.await_args.args[0])
 
+    def test_owner_copy_space_detection_is_explicit_and_narrow(self) -> None:
+        self.assertTrue(creative._owner_requested_copy_space("Портрет, место для текста справа"))
+        self.assertTrue(creative._owner_requested_copy_space("Portrait with copy space on the left"))
+        self.assertFalse(creative._owner_requested_copy_space("Портрет психолога в кабинете"))
+        self.assertFalse(creative._owner_requested_copy_space("Свободная консультация вечером"))
+
     async def test_finish_image_requires_ready_asset_and_cleans_temporary_materialization(
         self,
     ) -> None:
@@ -595,7 +601,7 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
 
         materialized_dirs: list[str] = []
 
-        def materialize(_job, *, output_dir=None):
+        def materialize(_job, *, output_dir=None, repair_blank_bands=True):
             assert output_dir is not None
             materialized_dirs.append(output_dir)
             path = Path(output_dir) / "creative.jpg"
@@ -673,7 +679,7 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
             source_job_id="provider-job-1",
         )
 
-        def materialize(_job, *, output_dir=None):
+        def materialize(_job, *, output_dir=None, repair_blank_bands=True):
             assert output_dir is not None
             path = Path(output_dir) / "creative.jpg"
             path.write_bytes(b"image")
