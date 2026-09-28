@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import hashlib
-import os
-import tempfile
-import time
 from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from clientplatform.application.ad_provider_session import (
+    ad_vault,
+    with_access_token,
+    yandex_provider,
+)
 from clientplatform.domain.ad_publication_assets import (
     AdPublicationAsset,
     AdPublicationAssetError,
@@ -15,9 +17,14 @@ from clientplatform.domain.ad_publication_assets import (
     AdPublicationAssetSource,
 )
 from clientplatform.domain.tenancy import TenantContext
+from clientplatform.infrastructure.ad_goal_publication_repository import (
+    AdGoalPublicationRepository,
+)
 from clientplatform.infrastructure.ad_publication_asset_repository import (
     AdPublicationAssetRepository,
 )
+from clientplatform.infrastructure.ad_credential_vault import AdCredentialVault
+from clientplatform.integrations.yandex_direct_media import MediaAwareYandexDirectProvider
 from services.db import get_db, get_db_ro
 
 
@@ -35,63 +42,6 @@ _VIDEO_CONTENT_TYPES = frozenset(
         "application/octet-stream",
     }
 )
-
-
-def _asset_root() -> Path:
-    configured = str(
-        os.getenv("CLIENTPLATFORM_AD_ASSET_DIR") or "/var/lib/clientplatform/ad-assets"
-    ).strip()
-    root = Path(configured).expanduser()
-    root.mkdir(parents=True, exist_ok=True)
-    resolved = root.resolve(strict=True)
-    if not resolved.is_dir() or resolved.is_symlink():
-        raise AdPublicationAssetError("advertising asset storage is unavailable")
-    return resolved
-
-
-def _safe_unlink(path: str | None) -> None:
-    if not path:
-        return
-    try:
-        candidate = Path(path).resolve(strict=False)
-        root = _asset_root()
-        if candidate != root and root in candidate.parents and candidate.is_file():
-            candidate.unlink(missing_ok=True)
-    except OSError:
-        return
-
-
-def _write_asset(
-    payload: bytes,
-    *,
-    business_id: str,
-    publication_job_id: str,
-    extension: str,
-) -> tuple[str, str, int]:
-    if not payload:
-        raise AdPublicationAssetError("advertising asset is empty")
-    digest = hashlib.sha256(payload).hexdigest()
-    root = _asset_root()
-    scope = hashlib.sha256(str(business_id).encode("ascii")).hexdigest()[:20]
-    directory = root / scope / str(publication_job_id)
-    directory.mkdir(parents=True, exist_ok=True)
-    directory = directory.resolve(strict=True)
-    if root not in directory.parents:
-        raise AdPublicationAssetError("advertising asset path escaped storage root")
-    suffix = "".join(ch for ch in extension.lower().lstrip(".") if ch.isalnum())[:8] or "bin"
-    final = directory / f"{digest}.{suffix}"
-    descriptor, temporary = tempfile.mkstemp(prefix=".incoming-", dir=directory)
-    try:
-        with os.fdopen(descriptor, "wb") as target:
-            target.write(payload)
-            target.flush()
-            os.fsync(target.fileno())
-        Path(temporary).chmod(0o600)
-        os.replace(temporary, final)
-        final.chmod(0o600)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
-    return str(final), digest, len(payload)
 
 
 def _normalized_image(payload: bytes) -> bytes:
@@ -119,6 +69,14 @@ def _normalized_image(payload: bytes) -> bytes:
     return normalized
 
 
+def _publication_job(*, actor: TenantContext, publication_job_id: str):
+    with get_db_ro() as conn:
+        return AdGoalPublicationRepository(conn).get(
+            actor=actor,
+            job_id=publication_job_id,
+        )
+
+
 def attach_image_bytes(
     *,
     actor: TenantContext,
@@ -126,33 +84,40 @@ def attach_image_bytes(
     payload: bytes,
     source: AdPublicationAssetSource = AdPublicationAssetSource.UPLOAD,
     original_name: str = "image.jpg",
+    provider: MediaAwareYandexDirectProvider | None = None,
+    vault: AdCredentialVault | None = None,
 ) -> AdPublicationAsset:
+    """Normalize in memory, upload immediately, then persist only provider metadata."""
+
     normalized = _normalized_image(payload)
-    storage_path, digest, size = _write_asset(
-        normalized,
-        business_id=actor.business_id,
-        publication_job_id=publication_job_id,
-        extension="jpg",
+    digest = hashlib.sha256(normalized).hexdigest()
+    selected_provider = provider or yandex_provider()
+    selected_vault = vault or ad_vault()
+    job = _publication_job(actor=actor, publication_job_id=publication_job_id)
+    image_hash = with_access_token(
+        job=job,
+        provider=selected_provider,
+        vault=selected_vault,
+        operation=lambda access_token: selected_provider.upload_image(
+            access_token=access_token,
+            payload=normalized,
+            name=original_name or "image.jpg",
+        ),
     )
-    try:
-        with get_db() as conn:
-            asset, previous = AdPublicationAssetRepository(conn).replace(
-                actor=actor,
-                publication_job_id=publication_job_id,
-                kind=AdPublicationAssetKind.IMAGE,
-                source=source,
-                storage_path=storage_path,
-                content_type="image/jpeg",
-                original_name=original_name,
-                sha256=digest,
-                size_bytes=size,
-                duration_seconds=None,
-            )
-    except Exception:  # validator: allow-wide-except - rollback local file on any DB boundary failure
-        _safe_unlink(storage_path)
-        raise
-    if previous != storage_path:
-        _safe_unlink(previous)
+    with get_db() as conn:
+        asset, _previous = AdPublicationAssetRepository(conn).replace(
+            actor=actor,
+            publication_job_id=publication_job_id,
+            kind=AdPublicationAssetKind.IMAGE,
+            source=source,
+            storage_path="",
+            content_type="image/jpeg",
+            original_name=original_name or "image.jpg",
+            sha256=digest,
+            size_bytes=len(normalized),
+            duration_seconds=None,
+            provider_image_hash=image_hash,
+        )
     return asset
 
 
@@ -162,7 +127,11 @@ def attach_image_file(
     publication_job_id: str,
     path: Path,
     source: AdPublicationAssetSource = AdPublicationAssetSource.GENERATED,
+    provider: MediaAwareYandexDirectProvider | None = None,
+    vault: AdCredentialVault | None = None,
 ) -> AdPublicationAsset:
+    """Consume one transient file without promoting it to durable ClientPlatform storage."""
+
     candidate = path.expanduser().resolve(strict=True)
     if not candidate.is_file() or candidate.is_symlink():
         raise AdPublicationAssetError("generated image is unavailable")
@@ -174,6 +143,8 @@ def attach_image_file(
         payload=candidate.read_bytes(),
         source=source,
         original_name=candidate.name,
+        provider=provider,
+        vault=vault,
     )
 
 
@@ -186,7 +157,11 @@ def attach_video_bytes(
     original_name: str,
     duration_seconds: int,
     source: AdPublicationAssetSource = AdPublicationAssetSource.UPLOAD,
+    provider: MediaAwareYandexDirectProvider | None = None,
+    vault: AdCredentialVault | None = None,
 ) -> AdPublicationAsset:
+    """Upload video bytes immediately; retain only Yandex video identifiers."""
+
     if not payload or len(payload) > _VIDEO_LIMIT:
         raise AdPublicationAssetError("video must be no larger than 100 MB")
     duration = int(duration_seconds)
@@ -205,42 +180,45 @@ def attach_video_bytes(
             suffix = "mov"
         else:
             raise AdPublicationAssetError("video file extension is unsupported")
-    storage_path, digest, size = _write_asset(
-        payload,
-        business_id=actor.business_id,
-        publication_job_id=publication_job_id,
-        extension=suffix,
+
+    digest = hashlib.sha256(payload).hexdigest()
+    selected_provider = provider or yandex_provider()
+    selected_vault = vault or ad_vault()
+    job = _publication_job(actor=actor, publication_job_id=publication_job_id)
+    video_id = with_access_token(
+        job=job,
+        provider=selected_provider,
+        vault=selected_vault,
+        operation=lambda access_token: selected_provider.upload_video(
+            access_token=access_token,
+            payload=payload,
+            name=original_name or f"video.{suffix}",
+        ),
     )
-    try:
-        with get_db() as conn:
-            asset, previous = AdPublicationAssetRepository(conn).replace(
-                actor=actor,
-                publication_job_id=publication_job_id,
-                kind=AdPublicationAssetKind.VIDEO,
-                source=source,
-                storage_path=storage_path,
-                content_type=normalized_type,
-                original_name=original_name or f"video.{suffix}",
-                sha256=digest,
-                size_bytes=size,
-                duration_seconds=duration,
-            )
-    except Exception:  # validator: allow-wide-except - rollback local file on any DB boundary failure
-        _safe_unlink(storage_path)
-        raise
-    if previous != storage_path:
-        _safe_unlink(previous)
+    with get_db() as conn:
+        asset, _previous = AdPublicationAssetRepository(conn).replace(
+            actor=actor,
+            publication_job_id=publication_job_id,
+            kind=AdPublicationAssetKind.VIDEO,
+            source=source,
+            storage_path="",
+            content_type=normalized_type,
+            original_name=original_name or f"video.{suffix}",
+            sha256=digest,
+            size_bytes=len(payload),
+            duration_seconds=duration,
+            provider_video_id=video_id,
+        )
     return asset
 
 
 def remove_asset(*, actor: TenantContext, publication_job_id: str) -> bool:
     with get_db() as conn:
-        path = AdPublicationAssetRepository(conn).remove(
+        removed = AdPublicationAssetRepository(conn).remove(
             actor=actor,
             publication_job_id=publication_job_id,
         )
-    _safe_unlink(path)
-    return path is not None
+    return removed is not None
 
 
 def get_asset_for_worker(
@@ -256,16 +234,10 @@ def get_asset_for_worker(
 
 
 def read_asset_bytes(asset: AdPublicationAsset) -> bytes:
-    root = _asset_root()
-    path = Path(asset.storage_path).resolve(strict=True)
-    if root not in path.parents or not path.is_file() or path.is_symlink():
-        raise AdPublicationAssetError("advertising asset storage reference is invalid")
-    payload = path.read_bytes()
-    if len(payload) != asset.size_bytes:
-        raise AdPublicationAssetError("advertising asset size changed")
-    if hashlib.sha256(payload).hexdigest() != asset.sha256:
-        raise AdPublicationAssetError("advertising asset checksum changed")
-    return payload
+    del asset
+    raise AdPublicationAssetError(
+        "persistent advertising media bytes are forbidden; use provider references"
+    )
 
 
 def remember_provider_ids(
@@ -291,57 +263,10 @@ def cleanup_orphaned_assets(
     grace_seconds: int = 300,
     max_files: int = 200,
 ) -> int:
-    """Remove persisted files whose tenant DB row was erased or cascaded away.
+    """Compatibility no-op: advertising media no longer has local files."""
 
-    A grace window protects the tiny file-write/DB-commit interval. This makes
-    tenant/privacy erasure clean the filesystem too instead of leaving media
-    behind after the relational row disappears.
-    """
-
-    root = _asset_root()
-    grace = max(60, min(int(grace_seconds), 86_400))
-    limit = max(1, min(int(max_files), 5_000))
-    with get_db_ro() as conn:
-        rows = conn.execute("SELECT storage_path FROM ad_publication_assets").fetchall()
-    referenced = {
-        str(row["storage_path"] if hasattr(row, "keys") else row[0])
-        for row in rows
-        if str(row["storage_path"] if hasattr(row, "keys") else row[0]).strip()
-    }
-    now = time.time()
-    removed = 0
-    for candidate in root.rglob("*"):
-        if removed >= limit:
-            break
-        try:
-            if candidate.is_symlink():
-                if now - candidate.lstat().st_mtime >= grace:
-                    candidate.unlink(missing_ok=True)
-                    removed += 1
-                continue
-            if not candidate.is_file():
-                continue
-            resolved = candidate.resolve(strict=True)
-            if root not in resolved.parents or str(resolved) in referenced:
-                continue
-            if now - resolved.stat().st_mtime < grace:
-                continue
-            resolved.unlink(missing_ok=True)
-            removed += 1
-        except OSError:
-            continue
-    # Best-effort empty-directory pruning is deliberately separate from file
-    # deletion and never affects referenced assets.
-    for directory in sorted(
-        (item for item in root.rglob("*") if item.is_dir()),
-        key=lambda item: len(item.parts),
-        reverse=True,
-    ):
-        try:
-            directory.rmdir()
-        except OSError:
-            continue
-    return removed
+    del grace_seconds, max_files
+    return 0
 
 
 __all__ = [
