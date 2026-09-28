@@ -465,14 +465,16 @@ jobs:
           from __future__ import annotations
           import sys
           from pathlib import Path
-          from PIL import Image
 
           path = Path(sys.argv[1])
-          with Image.open(path) as opened:
-              fmt = str(opened.format or "").upper()
-              opened.verify()
-          suffix = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}.get(fmt)
-          if suffix is None:
+          raw = path.read_bytes()
+          if raw.startswith(b"\xff\xd8\xff"):
+              fmt, suffix = "JPEG", ".jpg"
+          elif raw.startswith(b"\x89PNG\r\n\x1a\n"):
+              fmt, suffix = "PNG", ".png"
+          elif len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+              fmt, suffix = "WEBP", ".webp"
+          else:
               raise SystemExit(45)
           target = path.with_suffix(suffix)
           path.replace(target)
