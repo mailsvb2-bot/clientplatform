@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 import os
 
-from PIL import Image, ImageChops, ImageOps, ImageStat, UnidentifiedImageError
 
 from services.visual_creative_gateway import (
     VisualCreativeBrief,
@@ -454,7 +453,7 @@ def create_ad_visual(
         raise VisualCreativeError("visual_creative_generation_failed") from exc
 
 
-def _image_background_repair_box(image: Image.Image) -> tuple[int, int, int, int] | None:
+def _image_background_repair_box(image) -> tuple[int, int, int, int] | None:
     """Return a conservative crop box for pathological one-sided blank padding.
 
     Generative providers occasionally return a valid bitmap where most of one side
@@ -462,6 +461,11 @@ def _image_background_repair_box(image: Image.Image) -> tuple[int, int, int, int
     the broken composition. We only repair extreme cases so intentional copy space
     is preserved.
     """
+
+    try:
+        from PIL import Image, ImageChops, ImageStat
+    except ImportError as exc:
+        raise VisualCreativeError("visual_creative_image_runtime_unavailable") from exc
 
     width, height = image.size
     if width < 64 or height < 64:
@@ -522,6 +526,11 @@ def _image_background_repair_box(image: Image.Image) -> tuple[int, int, int, int
 
 
 def _normalize_materialized_image(path: Path, *, repair_blank_bands: bool = True) -> Path:
+    try:
+        from PIL import Image, ImageOps, UnidentifiedImageError
+    except ImportError as exc:
+        raise VisualCreativeError("visual_creative_image_runtime_unavailable") from exc
+
     temporary = path.with_suffix(path.suffix + ".normalized.tmp")
     try:
         with Image.open(path) as opened:
@@ -559,6 +568,8 @@ def _normalize_materialized_image(path: Path, *, repair_blank_bands: bool = True
             suffix = path.suffix.lower()
             if suffix in {".jpg", ".jpeg"} or source_format in {"JPG", "JPEG"}:
                 image.save(temporary, format="JPEG", quality=94, optimize=True)
+            elif suffix == ".webp" or source_format == "WEBP":
+                image.save(temporary, format="WEBP", quality=94, method=6)
             else:
                 image.save(temporary, format="PNG", optimize=True)
         os.replace(temporary, path)
