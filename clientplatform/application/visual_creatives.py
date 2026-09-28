@@ -453,6 +453,22 @@ def create_ad_visual(
         raise VisualCreativeError("visual_creative_generation_failed") from exc
 
 
+_MAX_MATERIALIZED_IMAGE_SIDE = 8192
+_MAX_MATERIALIZED_IMAGE_PIXELS = 25_000_000
+
+
+def _validate_materialized_image_dimensions(image) -> None:
+    width, height = image.size
+    if (
+        width < 64
+        or height < 64
+        or width > _MAX_MATERIALIZED_IMAGE_SIDE
+        or height > _MAX_MATERIALIZED_IMAGE_SIDE
+        or width * height > _MAX_MATERIALIZED_IMAGE_PIXELS
+    ):
+        raise VisualCreativeError("visual_creative_invalid_image_dimensions")
+
+
 def _image_background_repair_box(image) -> tuple[int, int, int, int] | None:
     """Return a conservative crop box for pathological one-sided blank padding.
 
@@ -467,9 +483,8 @@ def _image_background_repair_box(image) -> tuple[int, int, int, int] | None:
     except ImportError as exc:
         raise VisualCreativeError("visual_creative_image_runtime_unavailable") from exc
 
+    _validate_materialized_image_dimensions(image)
     width, height = image.size
-    if width < 64 or height < 64:
-        raise VisualCreativeError("visual_creative_invalid_image_dimensions")
 
     probe = image.convert("RGB")
     probe.thumbnail((256, 256), Image.Resampling.LANCZOS)
@@ -534,10 +549,13 @@ def _normalize_materialized_image(path: Path, *, repair_blank_bands: bool = True
     temporary = path.with_suffix(path.suffix + ".normalized.tmp")
     try:
         with Image.open(path) as opened:
+            _validate_materialized_image_dimensions(opened)
             opened.verify()
         with Image.open(path) as opened:
+            _validate_materialized_image_dimensions(opened)
             source_format = str(opened.format or "").upper()
             image = ImageOps.exif_transpose(opened)
+            _validate_materialized_image_dimensions(image)
             image.load()
             if "A" not in image.getbands() and "transparency" in image.info:
                 image = image.convert("RGBA")
@@ -574,7 +592,7 @@ def _normalize_materialized_image(path: Path, *, repair_blank_bands: bool = True
                 image.save(temporary, format="PNG", optimize=True)
         os.replace(temporary, path)
         return path
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
+    except (Image.DecompressionBombError, UnidentifiedImageError, OSError, ValueError) as exc:
         temporary.unlink(missing_ok=True)
         raise VisualCreativeError("visual_creative_invalid_image_asset") from exc
 
