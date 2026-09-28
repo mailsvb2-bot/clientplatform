@@ -424,10 +424,9 @@ jobs:
           app_id="$(privileged docker ps --filter name=clientplatform-production-app-1 --format '{{.ID}}' | head -n1)"
           [ -n "$provider_id" ] && [ -n "$app_id" ]
           host_asset="$(mktemp /tmp/clientplatform-production-image.XXXXXX)"
-          app_asset="/tmp/clientplatform-production-image-export"
+          validated_asset="$(mktemp /tmp/clientplatform-production-image-validated.XXXXXX)"
           cleanup() {
-            rm -f -- "$host_asset"
-            privileged docker exec "$app_id" rm -f -- "$app_asset" >/dev/null 2>&1 || true
+            rm -f -- "$host_asset" "$validated_asset"
           }
           trap cleanup EXIT
 
@@ -469,26 +468,31 @@ jobs:
           sys.stdout.buffer.write(raw)
           PY
           test -s "$host_asset"
-          privileged docker cp "$host_asset" "$app_id:$app_asset"
-          privileged docker exec -e CLIENTPLATFORM_EXPORTED_ASSET="$app_asset" -i "$app_id" python - <<'PY'
-          from __future__ import annotations
-          import os
-          from pathlib import Path
+          validator_code="$(cat <<'PY'
+          import io
+          import sys
           from PIL import Image, UnidentifiedImageError
 
-          path = Path(os.environ["CLIENTPLATFORM_EXPORTED_ASSET"])
+          raw = sys.stdin.buffer.read(32 * 1024 * 1024 + 1)
+          if not raw or len(raw) > 32 * 1024 * 1024:
+              raise SystemExit(45)
           try:
-              with Image.open(path) as opened:
+              with Image.open(io.BytesIO(raw)) as opened:
                   if str(opened.format or "").upper() not in {"JPEG", "PNG", "WEBP"}:
-                      raise SystemExit(45)
+                      raise SystemExit(46)
                   width, height = map(int, opened.size)
                   if width < 64 or height < 64:
-                      raise SystemExit(46)
+                      raise SystemExit(47)
                   opened.verify()
           except (OSError, UnidentifiedImageError):
-              raise SystemExit(47)
+              raise SystemExit(48)
+          sys.stdout.buffer.write(raw)
           PY
-          cat "$host_asset"
+          )"
+          privileged docker exec -i "$app_id" python -c "$validator_code" < "$host_asset" > "$validated_asset"
+          test -s "$validated_asset"
+          cmp -s "$host_asset" "$validated_asset"
+          cat "$validated_asset"
           REMOTE
           test -s "$asset"
           python - "$asset" <<'PY'
