@@ -333,9 +333,7 @@ class VisualCreativeApplicationTests(unittest.TestCase):
                 self.assertEqual(repaired.size, (160, 80))
 
     def test_materialization_rejects_excessive_decoded_dimensions(self) -> None:
-        Image = self._pillow_image()
-        oversized = Image.new("RGB", (64, 64), (10, 20, 30))
-        oversized.size = (_MAX_SIDE := 8193, 64) if False else oversized.size
+        self._pillow_image()
         fake = type("FakeImage", (), {"size": (8193, 64)})()
         with self.assertRaisesRegex(
             visual_creatives.VisualCreativeError,
