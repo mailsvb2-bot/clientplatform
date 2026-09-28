@@ -105,12 +105,11 @@ def attach_image_bytes(
         ),
     )
     with get_db() as conn:
-        asset, _previous = AdPublicationAssetRepository(conn).replace(
+        asset = AdPublicationAssetRepository(conn).replace(
             actor=actor,
             publication_job_id=publication_job_id,
             kind=AdPublicationAssetKind.IMAGE,
             source=source,
-            storage_path="",
             content_type="image/jpeg",
             original_name=original_name or "image.jpg",
             sha256=digest,
@@ -201,7 +200,6 @@ def attach_video_bytes(
             publication_job_id=publication_job_id,
             kind=AdPublicationAssetKind.VIDEO,
             source=source,
-            storage_path="",
             content_type=normalized_type,
             original_name=original_name or f"video.{suffix}",
             sha256=digest,
@@ -214,11 +212,10 @@ def attach_video_bytes(
 
 def remove_asset(*, actor: TenantContext, publication_job_id: str) -> bool:
     with get_db() as conn:
-        removed = AdPublicationAssetRepository(conn).remove(
+        return AdPublicationAssetRepository(conn).remove(
             actor=actor,
             publication_job_id=publication_job_id,
         )
-    return removed is not None
 
 
 def get_asset_for_worker(
