@@ -29,7 +29,7 @@ def _optional(row: Any, key: str, position: int) -> str | None:
 
 
 _SELECT = """
-    SELECT publication_job_id, business_id, kind, source, storage_path,
+    SELECT publication_job_id, business_id, kind, source,
            content_type, original_name, sha256, size_bytes, duration_seconds,
            provider_image_hash, provider_video_id, provider_creative_id,
            provider_error_code, created_by_member_id, created_at, updated_at
@@ -38,25 +38,24 @@ _SELECT = """
 
 
 def _asset(row: Any) -> AdPublicationAsset:
-    duration_raw = _value(row, "duration_seconds", 9)
+    duration_raw = _value(row, "duration_seconds", 8)
     return AdPublicationAsset(
         publication_job_id=str(_value(row, "publication_job_id", 0)),
         business_id=str(_value(row, "business_id", 1)),
         kind=AdPublicationAssetKind(str(_value(row, "kind", 2))),
         source=AdPublicationAssetSource(str(_value(row, "source", 3))),
-        storage_path=str(_value(row, "storage_path", 4)),
-        content_type=str(_value(row, "content_type", 5)),
-        original_name=str(_value(row, "original_name", 6)),
-        sha256=str(_value(row, "sha256", 7)),
-        size_bytes=int(_value(row, "size_bytes", 8)),
+        content_type=str(_value(row, "content_type", 4)),
+        original_name=str(_value(row, "original_name", 5)),
+        sha256=str(_value(row, "sha256", 6)),
+        size_bytes=int(_value(row, "size_bytes", 7)),
         duration_seconds=None if duration_raw is None else int(duration_raw),
-        provider_image_hash=_optional(row, "provider_image_hash", 10),
-        provider_video_id=_optional(row, "provider_video_id", 11),
-        provider_creative_id=_optional(row, "provider_creative_id", 12),
-        provider_error_code=_optional(row, "provider_error_code", 13),
-        created_by_member_id=str(_value(row, "created_by_member_id", 14)),
-        created_at=str(_value(row, "created_at", 15)),
-        updated_at=str(_value(row, "updated_at", 16)),
+        provider_image_hash=_optional(row, "provider_image_hash", 9),
+        provider_video_id=_optional(row, "provider_video_id", 10),
+        provider_creative_id=_optional(row, "provider_creative_id", 11),
+        provider_error_code=_optional(row, "provider_error_code", 12),
+        created_by_member_id=str(_value(row, "created_by_member_id", 13)),
+        created_at=str(_value(row, "created_at", 14)),
+        updated_at=str(_value(row, "updated_at", 15)),
     )
 
 
@@ -99,7 +98,6 @@ class AdPublicationAssetRepository:
         publication_job_id: str,
         kind: AdPublicationAssetKind,
         source: AdPublicationAssetSource,
-        storage_path: str,
         content_type: str,
         original_name: str,
         sha256: str,
@@ -108,29 +106,28 @@ class AdPublicationAssetRepository:
         provider_image_hash: str | None = None,
         provider_video_id: str | None = None,
         provider_creative_id: str | None = None,
-    ) -> tuple[AdPublicationAsset, str | None]:
+    ) -> AdPublicationAsset:
         current = self._actor(actor)
         job_id = normalize_uuid(publication_job_id, field_name="publication_job_id")
         self._assert_editable_job(business_id=current.business_id, job_id=job_id)
         previous = self._conn.execute(
-            _SELECT + " WHERE publication_job_id=? AND business_id=? LIMIT 1",
+            "SELECT created_at FROM ad_publication_assets "
+            "WHERE publication_job_id=? AND business_id=? LIMIT 1",
             (job_id, current.business_id),
         ).fetchone()
-        previous_path = None if previous is None else str(_value(previous, "storage_path", 4))
         now = _iso_now()
-        created_at = now if previous is None else str(_value(previous, "created_at", 15))
+        created_at = now if previous is None else str(_value(previous, "created_at", 0))
         self._conn.execute(
             """
             INSERT INTO ad_publication_assets(
-                publication_job_id, business_id, kind, source, storage_path,
+                publication_job_id, business_id, kind, source,
                 content_type, original_name, sha256, size_bytes, duration_seconds,
                 provider_image_hash, provider_video_id, provider_creative_id,
                 provider_error_code, created_by_member_id, created_at, updated_at
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
             ON CONFLICT(publication_job_id, business_id) DO UPDATE SET
                 kind=excluded.kind,
                 source=excluded.source,
-                storage_path=excluded.storage_path,
                 content_type=excluded.content_type,
                 original_name=excluded.original_name,
                 sha256=excluded.sha256,
@@ -148,7 +145,6 @@ class AdPublicationAssetRepository:
                 current.business_id,
                 AdPublicationAssetKind(kind).value,
                 AdPublicationAssetSource(source).value,
-                storage_path,
                 content_type,
                 original_name,
                 sha256,
@@ -162,7 +158,7 @@ class AdPublicationAssetRepository:
                 now,
             ),
         )
-        return self.get(actor=current, publication_job_id=job_id), previous_path
+        return self.get(actor=current, publication_job_id=job_id)
 
     def get(
         self,
@@ -199,25 +195,15 @@ class AdPublicationAssetRepository:
         *,
         actor: TenantContext,
         publication_job_id: str,
-    ) -> str | None:
+    ) -> bool:
         current = self._actor(actor)
         job_id = normalize_uuid(publication_job_id, field_name="publication_job_id")
         self._assert_editable_job(business_id=current.business_id, job_id=job_id)
-        row = self._conn.execute(
-            """
-            SELECT storage_path FROM ad_publication_assets
-            WHERE publication_job_id=? AND business_id=? LIMIT 1
-            """,
-            (job_id, current.business_id),
-        ).fetchone()
-        if row is None:
-            return None
-        path = str(_value(row, "storage_path", 0))
-        self._conn.execute(
+        cursor = self._conn.execute(
             "DELETE FROM ad_publication_assets WHERE publication_job_id=? AND business_id=?",
             (job_id, current.business_id),
         )
-        return path
+        return int(getattr(cursor, "rowcount", 0) or 0) == 1
 
     def remember_provider_ids(
         self,
