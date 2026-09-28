@@ -77,6 +77,96 @@ def test_catalog_reads_available_art_models_and_current_presence(monkeypatch):
     assert observed["project"] == "folder"
 
 
+def test_catalog_prefers_dedicated_api_key_over_generation_key(monkeypatch):
+    catalog.clear_yandex_model_catalog_cache()
+    observed = {}
+
+    def fake_urlopen(request, timeout):
+        observed["authorization"] = request.headers.get("Authorization")
+        return _Response(
+            b'{"data":[{"id":"art://folder/aliceai-image-art-3.0"}]}'
+        )
+
+    monkeypatch.setenv("YANDEX_API_KEY", "generation-key")
+    monkeypatch.setenv("YANDEX_MODEL_CATALOG_API_KEY", "catalog-key")
+    monkeypatch.delenv("YANDEX_MODEL_CATALOG_AUTH_SCHEME", raising=False)
+    monkeypatch.delenv("YANDEX_ART_AUTH_SCHEME", raising=False)
+    monkeypatch.setattr(catalog.urllib.request, "urlopen", fake_urlopen)
+
+    snapshot = catalog.refresh_yandex_model_catalog(_config())
+
+    assert snapshot.available is True
+    assert observed["authorization"] == "Api-Key catalog-key"
+
+
+def test_catalog_allows_dedicated_key_even_when_generation_key_is_absent(monkeypatch):
+    catalog.clear_yandex_model_catalog_cache()
+    config = ProviderConfig(
+        name="yandexart",
+        base_url="https://ai.api.cloud.yandex.net",
+        api_key="",
+        folder_id="folder",
+        model_image="art://folder/aliceai-image-art-3.0",
+        timeout_seconds=5,
+    )
+    monkeypatch.setenv("YANDEX_MODEL_CATALOG_API_KEY", "catalog-key")
+    monkeypatch.setattr(
+        catalog.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _Response(
+            b'{"data":[{"id":"art://folder/aliceai-image-art-3.0"}]}'
+        ),
+    )
+
+    snapshot = catalog.refresh_yandex_model_catalog(config)
+
+    assert snapshot.configured is True
+    assert snapshot.available is True
+
+
+def test_dedicated_catalog_key_does_not_inherit_generation_bearer_scheme(monkeypatch):
+    catalog.clear_yandex_model_catalog_cache()
+    observed = {}
+
+    def fake_urlopen(request, timeout):
+        observed["authorization"] = request.headers.get("Authorization")
+        return _Response(
+            b'{"data":[{"id":"art://folder/aliceai-image-art-3.0"}]}'
+        )
+
+    monkeypatch.setenv("YANDEX_MODEL_CATALOG_API_KEY", "catalog-key")
+    monkeypatch.delenv("YANDEX_MODEL_CATALOG_AUTH_SCHEME", raising=False)
+    monkeypatch.setenv("YANDEX_ART_AUTH_SCHEME", "Bearer")
+    monkeypatch.setenv("YANDEX_ART_IAM_TOKEN", "generation-iam-token")
+    monkeypatch.delenv("YANDEX_API_KEY", raising=False)
+    monkeypatch.setattr(catalog.urllib.request, "urlopen", fake_urlopen)
+
+    snapshot = catalog.refresh_yandex_model_catalog(_config())
+
+    assert snapshot.available is True
+    assert observed["authorization"] == "Api-Key catalog-key"
+
+
+def test_catalog_auth_scheme_can_be_separate_from_generation_auth(monkeypatch):
+    catalog.clear_yandex_model_catalog_cache()
+    observed = {}
+
+    def fake_urlopen(request, timeout):
+        observed["authorization"] = request.headers.get("Authorization")
+        return _Response(
+            b'{"data":[{"id":"art://folder/aliceai-image-art-3.0"}]}'
+        )
+
+    monkeypatch.setenv("YANDEX_MODEL_CATALOG_API_KEY", "catalog-token")
+    monkeypatch.setenv("YANDEX_MODEL_CATALOG_AUTH_SCHEME", "Bearer")
+    monkeypatch.setenv("YANDEX_ART_AUTH_SCHEME", "Api-Key")
+    monkeypatch.setattr(catalog.urllib.request, "urlopen", fake_urlopen)
+
+    catalog.refresh_yandex_model_catalog(_config())
+
+    assert observed["authorization"] == "Bearer catalog-token"
+
+
 def test_catalog_cache_avoids_repeated_provider_calls(monkeypatch):
     catalog.clear_yandex_model_catalog_cache()
     calls = 0

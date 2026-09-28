@@ -48,21 +48,38 @@ def _canonical_model_uri(value: object) -> str:
     return raw.split("@", 1)[0]
 
 
+def _catalog_api_key(config: ProviderConfig) -> str:
+    dedicated = str(os.getenv("YANDEX_MODEL_CATALOG_API_KEY", "") or "").strip()
+    return dedicated or str(config.api_key or "").strip()
+
+
 def _authorization(config: ProviderConfig) -> str:
-    scheme = str(os.getenv("YANDEX_ART_AUTH_SCHEME", "") or "").strip()
-    if not scheme:
-        scheme = (
-            "Api-Key"
-            if str(os.getenv("YANDEX_API_KEY", "") or "").strip()
-            else "Bearer"
-            if str(os.getenv("YANDEX_ART_IAM_TOKEN", "") or "").strip()
-            else "Api-Key"
-        )
-    return f"{scheme} {config.api_key}"
+    dedicated = str(os.getenv("YANDEX_MODEL_CATALOG_API_KEY", "") or "").strip()
+    explicit_catalog_scheme = str(
+        os.getenv("YANDEX_MODEL_CATALOG_AUTH_SCHEME", "") or ""
+    ).strip()
+    if dedicated:
+        # A dedicated catalog credential is independent from the generation
+        # credential. API keys are the default catalog credential, so never
+        # inherit a generation-only Bearer scheme implicitly.
+        scheme = explicit_catalog_scheme or "Api-Key"
+    else:
+        scheme = explicit_catalog_scheme or str(
+            os.getenv("YANDEX_ART_AUTH_SCHEME", "") or ""
+        ).strip()
+        if not scheme:
+            scheme = (
+                "Api-Key"
+                if str(os.getenv("YANDEX_API_KEY", "") or "").strip()
+                else "Bearer"
+                if str(os.getenv("YANDEX_ART_IAM_TOKEN", "") or "").strip()
+                else "Api-Key"
+            )
+    return f"{scheme} {_catalog_api_key(config)}"
 
 
 def _cache_key(config: ProviderConfig) -> str:
-    token_digest = hashlib.sha256(str(config.api_key or "").encode("utf-8")).hexdigest()
+    token_digest = hashlib.sha256(_catalog_api_key(config).encode("utf-8")).hexdigest()
     return "|".join(
         (
             str(config.base_url or "").rstrip("/"),
@@ -86,7 +103,7 @@ def _safe_error(exc: BaseException) -> str:
 
 
 def _fetch(config: ProviderConfig) -> YandexModelCatalogSnapshot:
-    if not config.api_key or not config.folder_id:
+    if not _catalog_api_key(config) or not config.folder_id:
         return YandexModelCatalogSnapshot(configured=False, available=False)
 
     request = urllib.request.Request(
@@ -227,7 +244,7 @@ def _ensure_refresh(key: str, config: ProviderConfig, ttl: int) -> None:
 
 
 def get_yandex_model_catalog(config: ProviderConfig) -> YandexModelCatalogSnapshot:
-    if not config.api_key or not config.folder_id:
+    if not _catalog_api_key(config) or not config.folder_id:
         return YandexModelCatalogSnapshot(configured=False, available=False)
 
     ttl = _limit("YANDEX_MODEL_CATALOG_TTL_SECONDS", 900, minimum=30, maximum=86400)
@@ -252,7 +269,7 @@ def get_yandex_model_catalog(config: ProviderConfig) -> YandexModelCatalogSnapsh
 
 def refresh_yandex_model_catalog(config: ProviderConfig) -> YandexModelCatalogSnapshot:
     """Synchronously refresh advisory catalog data outside health/readiness paths."""
-    if not config.api_key or not config.folder_id:
+    if not _catalog_api_key(config) or not config.folder_id:
         return YandexModelCatalogSnapshot(configured=False, available=False)
     ttl = _limit("YANDEX_MODEL_CATALOG_TTL_SECONDS", 900, minimum=30, maximum=86400)
     key = _cache_key(config)
