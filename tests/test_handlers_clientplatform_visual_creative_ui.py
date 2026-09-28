@@ -70,9 +70,16 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
             "visual_generation_ready",
             return_value=True,
         )
+        self.video_mode = patch.object(
+            ui,
+            "visual_video_generation_mode",
+            return_value="native",
+        )
         self.visual_ready.start()
+        self.video_mode.start()
 
     def tearDown(self) -> None:
+        self.video_mode.stop()
         self.visual_ready.stop()
 
     def test_visual_wait_seconds_is_bounded(self) -> None:
