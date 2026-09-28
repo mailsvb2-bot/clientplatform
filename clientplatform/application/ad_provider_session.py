@@ -92,10 +92,13 @@ def with_access_token(
     operation: Callable[[str], _T],
     provider: MediaAwareYandexDirectProvider | None = None,
     vault: AdCredentialVault | None = None,
+    connection: AdConnection | None = None,
+    bundle: YandexTokenBundle | None = None,
 ) -> _T:
     selected_provider = provider or yandex_provider()
     selected_vault = vault or ad_vault()
-    connection, bundle = load_bundle(job=job, vault=selected_vault)
+    if connection is None or bundle is None:
+        connection, bundle = load_bundle(job=job, vault=selected_vault)
     try:
         return operation(bundle.access_token)
     except YandexDirectError as exc:
