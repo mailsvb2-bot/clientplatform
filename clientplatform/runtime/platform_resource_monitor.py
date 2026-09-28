@@ -360,6 +360,26 @@ def _provider_state_and_alerts(
     }
 
     if not snapshot.available:
+        # A wrapper/network outage means "unknown right now", not that the
+        # previously observed provider/model topology disappeared. Preserve the
+        # last known topology so recovery does not emit a cascade of false
+        # "provider restored" and repeated catalog alerts.
+        for field in (
+            "configured_image",
+            "configured_video",
+            "configured_video_native",
+            "configured_video_motion",
+        ):
+            previous_value = prev.get(field)
+            if isinstance(previous_value, list):
+                current[field] = list(previous_value)
+        previous_mode = str(prev.get("video_generation_mode") or "")
+        if previous_mode:
+            current["video_generation_mode"] = previous_mode
+        for field in ("models", "runtime", "circuits"):
+            previous_value = prev.get(field)
+            if isinstance(previous_value, dict):
+                current[field] = dict(previous_value)
         current["error_code"] = snapshot.error_code
         if bool(prev.get("available", True)):
             alerts.append(
@@ -500,10 +520,19 @@ def _provider_state_and_alerts(
                 else ""
             )
             if previous_error != catalog_error:
+                detail = (
+                    "Каталог и генерация используют разные операции доступа. "
+                    "Ошибка каталога сама по себе не означает, что генерация изображений сломана."
+                )
+                if catalog_error == "yandex_models_http_403":
+                    detail += (
+                        "\nДля 403 проверьте права сервисного аккаунта и scope API-ключа "
+                        "именно для чтения AI Studio model catalog."
+                    )
                 alerts.append(
                     "🟠 Каталог моделей Yandex AI Studio недоступен\n"
                     f"Причина: {catalog_error}\n"
-                    "Проверка появления/исчезновения моделей временно невозможна."
+                    + detail
                 )
 
         if isinstance(previous_model, dict):

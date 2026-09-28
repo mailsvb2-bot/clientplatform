@@ -140,3 +140,137 @@ def test_provider_monitor_alerts_when_native_video_recovers():
 
     assert current["video_generation_mode"] == "native"
     assert any("AI-генерация видео восстановлена" in item for item in alerts)
+
+def test_provider_monitor_preserves_last_known_topology_during_gateway_outage():
+    previous = {
+        "available": True,
+        "configured_image": ["yandexart"],
+        "configured_video": ["yandexart_motion"],
+        "configured_video_native": [],
+        "configured_video_motion": ["yandexart_motion"],
+        "video_generation_mode": "motion",
+        "models": {
+            "yandexart": {
+                "model": "art://folder/aliceai-image-art-3.0",
+                "catalog_available": False,
+                "catalog_error": "yandex_models_http_403",
+                "configured_model_present": False,
+                "available_art_models": [],
+                "lifecycle_level": 0,
+                "deprecated_at": "",
+                "model_id": "aliceai-image-art-3.0",
+            }
+        },
+        "runtime": {"image": {"provider": "yandexart", "error_code": ""}},
+        "circuits": {"yandexart": 60},
+    }
+    snapshot = provider_health.VisualProviderHealthSnapshot(
+        available=False,
+        error_code="visual_gateway_transport_URLError",
+    )
+
+    current, alerts = monitor._provider_state_and_alerts(snapshot, previous)
+
+    assert current["available"] is False
+    assert current["configured_image"] == ["yandexart"]
+    assert current["configured_video"] == ["yandexart_motion"]
+    assert current["video_generation_mode"] == "motion"
+    assert current["models"] == previous["models"]
+    assert current["runtime"] == previous["runtime"]
+    assert current["circuits"] == previous["circuits"]
+    assert len(alerts) == 1
+    assert "Visual Provider Gateway недоступен" in alerts[0]
+
+
+def test_provider_monitor_recovery_does_not_repeat_catalog_or_provider_restored_noise():
+    previous = {
+        "available": False,
+        "error_code": "visual_gateway_transport_URLError",
+        "configured_image": ["yandexart"],
+        "configured_video": ["yandexart_motion"],
+        "configured_video_native": [],
+        "configured_video_motion": ["yandexart_motion"],
+        "video_generation_mode": "motion",
+        "models": {
+            "yandexart": {
+                "model": "art://folder/aliceai-image-art-3.0",
+                "model_id": "aliceai-image-art-3.0",
+                "lifecycle_level": 0,
+                "deprecated_at": "",
+                "catalog_available": False,
+                "configured_model_present": False,
+                "catalog_error": "yandex_models_http_403",
+                "available_art_models": [],
+            }
+        },
+        "runtime": {},
+        "circuits": {},
+    }
+    snapshot = provider_health.VisualProviderHealthSnapshot(
+        available=True,
+        configured_image=("yandexart",),
+        configured_video=("yandexart_motion",),
+        configured_video_native=(),
+        configured_video_motion=("yandexart_motion",),
+        video_generation_mode="motion",
+        models={
+            "yandexart": {
+                "model": "art://folder/aliceai-image-art-3.0",
+                "model_id": "aliceai-image-art-3.0",
+                "days_remaining": None,
+                "status": "active",
+                "deprecated_at": "",
+                "replacement": "",
+                "catalog_available": False,
+                "configured_model_present": False,
+                "catalog_error": "yandex_models_http_403",
+                "available_art_models": (),
+            }
+        },
+    )
+
+    current, alerts = monitor._provider_state_and_alerts(snapshot, previous)
+
+    assert current["available"] is True
+    assert alerts == ["🟢 Visual Provider Gateway восстановился."]
+
+
+def test_provider_monitor_catalog_403_explains_catalog_scope_without_declaring_generation_dead():
+    previous = {
+        "available": True,
+        "configured_image": ["yandexart"],
+        "configured_video": ["yandexart_motion"],
+        "configured_video_native": [],
+        "configured_video_motion": ["yandexart_motion"],
+        "video_generation_mode": "motion",
+        "models": {},
+        "runtime": {},
+        "circuits": {},
+    }
+    snapshot = provider_health.VisualProviderHealthSnapshot(
+        available=True,
+        configured_image=("yandexart",),
+        configured_video=("yandexart_motion",),
+        configured_video_motion=("yandexart_motion",),
+        video_generation_mode="motion",
+        models={
+            "yandexart": {
+                "model": "art://folder/aliceai-image-art-3.0",
+                "model_id": "aliceai-image-art-3.0",
+                "days_remaining": None,
+                "status": "active",
+                "deprecated_at": "",
+                "replacement": "",
+                "catalog_available": False,
+                "configured_model_present": False,
+                "catalog_error": "yandex_models_http_403",
+                "available_art_models": (),
+            }
+        },
+    )
+
+    _current, alerts = monitor._provider_state_and_alerts(snapshot, previous)
+
+    message = "\n".join(alerts)
+    assert "scope API-ключа" in message
+    assert "не означает, что генерация изображений сломана" in message
