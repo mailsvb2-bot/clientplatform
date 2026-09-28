@@ -150,6 +150,66 @@ jobs:
           )
           print("CLIENTPLATFORM_PRODUCTION_VISUAL_READINESS state=" + readiness)
           PY
+
+          privileged docker exec -i "$provider_id" python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import sqlite3
+          import time
+
+          db_path = str(os.environ.get("VISUAL_GATEWAY_DB") or "/data/visual_gateway.sqlite3")
+          now = int(time.time())
+          safe_rows = []
+          counts = {}
+          with sqlite3.connect(db_path) as conn:
+              conn.row_factory = sqlite3.Row
+              rows = conn.execute(
+                  """
+                  SELECT kind,status,provider,model,error_code,created_at,updated_at,asset_path
+                  FROM visual_jobs
+                  WHERE client_id='clientplatform'
+                  ORDER BY updated_at DESC
+                  LIMIT 20
+                  """
+              ).fetchall()
+              for row in rows:
+                  kind = str(row["kind"] or "")
+                  status = str(row["status"] or "")
+                  provider = str(row["provider"] or "")
+                  error_code = str(row["error_code"] or "")[:160]
+                  key = f"{kind}:{status}:{provider or 'none'}:{error_code or 'none'}"
+                  counts[key] = counts.get(key, 0) + 1
+                  asset_path = str(row["asset_path"] or "")
+                  asset_exists = bool(asset_path and os.path.isfile(asset_path))
+                  asset_size = (
+                      int(os.path.getsize(asset_path))
+                      if asset_exists
+                      else 0
+                  )
+                  safe_rows.append(
+                      {
+                          "kind": kind,
+                          "status": status,
+                          "provider": provider,
+                          "model": str(row["model"] or "")[:160],
+                          "error_code": error_code,
+                          "age_seconds": max(0, now - int(row["updated_at"] or row["created_at"] or now)),
+                          "asset_exists": asset_exists,
+                          "asset_size_bytes": asset_size,
+                      }
+                  )
+
+          print(
+              "CLIENTPLATFORM_PRODUCTION_VISUAL_RECENT_JOB_COUNTS "
+              + json.dumps(counts, ensure_ascii=False, sort_keys=True)
+          )
+          print(
+              "CLIENTPLATFORM_PRODUCTION_VISUAL_RECENT_JOBS "
+              + json.dumps(safe_rows, ensure_ascii=False, sort_keys=True)
+          )
+          PY
           REMOTE
           status=${PIPESTATUS[0]}
           set -e
