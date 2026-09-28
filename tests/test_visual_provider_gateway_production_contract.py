@@ -26,6 +26,12 @@ class VisualProviderGatewayProductionContractTests(unittest.TestCase):
         self.assertIn('security_opt: ["no-new-privileges:true"]', provider_section)
         self.assertIn("bool(payload.get('configured_image'))", provider_section)
         self.assertIn("bool(payload.get('configured_video'))", provider_section)
+        self.assertIn("VISUAL_CREATIVE_OUTPUT_DIR: /tmp/visual-output", provider_section)
+        self.assertIn('VISUAL_TRANSIENT_OUTPUT_REQUIRED: "1"', provider_section)
+        self.assertIn("VISUAL_TRANSIENT_ASSET_TTL_SECONDS:", provider_section)
+        self.assertIn("VISUAL_TRANSIENT_ASSET_CLEANUP_LIMIT:", provider_section)
+        self.assertIn("/tmp:size=256m,mode=1777", provider_section)
+        self.assertNotIn("VISUAL_CREATIVE_OUTPUT_DIR: /data/output", provider_section)
 
     def test_canonical_deploy_owner_recreates_wrapper_with_healthy_provider_dependency(self) -> None:
         root = Path(__file__).resolve().parents[1]

@@ -37,7 +37,65 @@ class VisualGatewayService:
         self.engine = engine or VisualCreativeEngine()
 
     @staticmethod
-    def _response(job: StoredJob) -> dict[str, Any]:
+    def _output_root() -> Path:
+        return Path(
+            os.getenv("VISUAL_CREATIVE_OUTPUT_DIR", "data/visual_creatives")
+        ).expanduser().resolve()
+
+    def _asset_ready(self, job: StoredJob) -> bool:
+        if job.status != "succeeded" or not job.asset_path:
+            return False
+        try:
+            root = self._output_root()
+            candidate = Path(job.asset_path).expanduser().resolve()
+            candidate.relative_to(root)
+            return candidate.is_file()
+        except (OSError, ValueError):
+            return False
+
+    def _cleanup_transient_assets(self) -> int:
+        """Bound transient provider media without retaining user bytes indefinitely."""
+
+        root = self._output_root()
+        ttl = self._env_int(
+            "VISUAL_TRANSIENT_ASSET_TTL_SECONDS",
+            21_600,
+            minimum=300,
+            maximum=86_400,
+        )
+        limit = self._env_int(
+            "VISUAL_TRANSIENT_ASSET_CLEANUP_LIMIT",
+            200,
+            minimum=1,
+            maximum=5_000,
+        )
+        try:
+            if not root.is_dir():
+                return 0
+        except OSError:
+            return 0
+        cutoff = time.time() - ttl
+        removed = 0
+        try:
+            candidates = sorted(
+                (item for item in root.iterdir() if item.is_file()),
+                key=lambda item: item.stat().st_mtime,
+            )
+        except OSError:
+            return 0
+        for candidate in candidates:
+            if removed >= limit:
+                break
+            try:
+                if candidate.stat().st_mtime > cutoff:
+                    continue
+                candidate.unlink(missing_ok=True)
+                removed += 1
+            except OSError:
+                continue
+        return removed
+
+    def _response(self, job: StoredJob) -> dict[str, Any]:
         return {
             "id": job.id,
             "provider": job.provider,
@@ -47,7 +105,7 @@ class VisualGatewayService:
             "model": job.model,
             "mime_type": job.mime_type,
             "error_code": job.error_code,
-            "asset_ready": bool(job.asset_path and job.status == "succeeded"),
+            "asset_ready": self._asset_ready(job),
         }
 
     @staticmethod
@@ -157,6 +215,7 @@ class VisualGatewayService:
         return raw
 
     def submit(self, payload: dict[str, Any], *, client_id: str) -> dict[str, Any]:
+        self._cleanup_transient_assets()
         scope_id = str(payload.get("scope_id") or "global").strip() or "global"
         idempotency_key = str(payload.get("idempotency_key") or "").strip()
         kind = str(payload.get("kind") or "image").strip().lower()
@@ -256,6 +315,7 @@ class VisualGatewayService:
         return self._response(stored)
 
     def poll(self, gateway_id: str, *, client_id: str, scope_id: str) -> dict[str, Any]:
+        self._cleanup_transient_assets()
         scope = str(scope_id or "").strip()
         stored = self.store.get(gateway_id, client_id=client_id, scope_id=scope)
         if stored.status in {"succeeded", "failed"}:
@@ -299,10 +359,11 @@ class VisualGatewayService:
         return self._response(updated)
 
     def content_path(self, gateway_id: str, *, client_id: str, scope_id: str) -> tuple[Path, str]:
+        self._cleanup_transient_assets()
         stored = self.store.get(gateway_id, client_id=client_id, scope_id=scope_id)
         if stored.status != "succeeded" or not stored.asset_path:
             raise FileNotFoundError(gateway_id)
-        output_root = Path(os.getenv("VISUAL_CREATIVE_OUTPUT_DIR", "data/visual_creatives")).expanduser().resolve()
+        output_root = self._output_root()
         candidate = Path(stored.asset_path).expanduser().resolve()
         try:
             candidate.relative_to(output_root)

@@ -26,6 +26,17 @@ def _clear_provider_routing(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
+def test_transient_output_requirement_rejects_persistent_directory(tmp_path, monkeypatch):
+    from visual_provider_gateway.models import ensure_output_dir
+
+    persistent = tmp_path / "persistent-output"
+    monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path / "ram-root"))
+
+    with pytest.raises(RuntimeError, match="persistent_user_media_forbidden"):
+        ensure_output_dir(str(persistent))
+
+
 def test_ru_defaults_keep_global_clouds_out(monkeypatch):
     _clear_provider_routing(monkeypatch)
     assert provider_order("image", "RU") == ("yandexart", "gigachat", "selfhosted")
@@ -656,6 +667,25 @@ def test_yandexart_uses_current_alice_images_api(monkeypatch, tmp_path):
     assert job.status == "succeeded"
     assert job.mime_type == "image/png"
     assert Path(job.asset_path).read_bytes() == b"png-bytes"
+
+
+def test_stored_visual_uses_actual_image_signature_for_mime_and_suffix(tmp_path):
+    job = CreativeJob(
+        provider="yandexart",
+        kind="image",
+        status="succeeded",
+        external_id="image-signature-1",
+        mime_type="image/png",
+    )
+    stored = providers._store_asset(
+        ProviderConfig(name="yandexart", output_dir=str(tmp_path)),
+        job,
+        b"\xff\xd8\xff\xe0jpeg-payload",
+    )
+
+    assert stored.mime_type == "image/jpeg"
+    assert Path(stored.asset_path).suffix == ".jpg"
+    assert Path(stored.asset_path).read_bytes().startswith(b"\xff\xd8\xff")
 
 
 def test_yandexart_motion_video_renders_current_alice_keyframe(monkeypatch, tmp_path):

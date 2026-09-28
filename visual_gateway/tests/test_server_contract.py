@@ -3,13 +3,15 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import os
+import time
 
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from PIL import Image
 
-from visual_gateway.server import FORMATS, GatewayConfig, create_app
+from visual_gateway.server import FORMATS, GatewayConfig, Store, create_app
 
 TOKEN = "test-gateway-token"
 UPSTREAM_TOKEN = "test-upstream-token"
@@ -19,6 +21,62 @@ def _image() -> bytes:
     out = io.BytesIO()
     Image.new("RGB", (800, 600), "#8899AA").save(out, format="JPEG")
     return out.getvalue()
+
+
+def test_transient_render_cleanup_expires_bytes_and_readiness(tmp_path):
+    state = tmp_path / "state"
+    transient = tmp_path / "transient"
+    store = Store(state, asset_root=transient, asset_ttl_seconds=300)
+    pack_id, _ = store.get_or_create_pack(
+        scope_id="tenant-a",
+        source_job_id="job1",
+        idempotency_key="tenant-a:render:cleanup",
+        request_hash="a" * 64,
+        formats=["feed"],
+        composition={},
+    )
+    claim = store.claim(pack_id)
+    assert claim
+    pack_dir = transient / pack_id
+    pack_dir.mkdir(parents=True)
+    target = pack_dir / "feed.jpg"
+    target.write_bytes(_image())
+    old = time.time() - 601
+    os.utime(target, (old, old))
+    store.succeed(
+        pack_id,
+        claim,
+        [{
+            "format_id": "feed",
+            "kind": "image",
+            "width": 1080,
+            "height": 1350,
+            "mime_type": "image/jpeg",
+            "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+            "path": f"{pack_id}/feed.jpg",
+        }],
+    )
+
+    assert store.pack(pack_id, "tenant-a")["assets"][0]["asset_ready"] is True
+    assert store.cleanup_transient_assets() == 1
+    assert store.pack(pack_id, "tenant-a")["assets"][0]["asset_ready"] is False
+    assert not target.exists()
+
+
+def test_transient_render_output_requirement_rejects_persistent_directory(tmp_path, monkeypatch):
+    persistent = tmp_path / "persistent-assets"
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path / "ram-root"))
+    config = GatewayConfig(
+        token=TOKEN,
+        upstream_url="http://127.0.0.1:9999",
+        upstream_token="",
+        state_dir=tmp_path / "state",
+        asset_dir=persistent,
+        transient_assets_required=True,
+    )
+
+    with pytest.raises(RuntimeError, match="persistent_user_media_forbidden"):
+        create_app(config)
 
 
 @pytest.fixture
