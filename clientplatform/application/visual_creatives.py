@@ -521,7 +521,7 @@ def _image_background_repair_box(image: Image.Image) -> tuple[int, int, int, int
     return tuple(crop)
 
 
-def _normalize_materialized_image(path: Path) -> Path:
+def _normalize_materialized_image(path: Path, *, repair_blank_bands: bool = True) -> Path:
     temporary = path.with_suffix(path.suffix + ".normalized.tmp")
     try:
         with Image.open(path) as opened:
@@ -530,6 +530,8 @@ def _normalize_materialized_image(path: Path) -> Path:
             source_format = str(opened.format or "").upper()
             image = ImageOps.exif_transpose(opened)
             image.load()
+            if "A" not in image.getbands() and "transparency" in image.info:
+                image = image.convert("RGBA")
 
             alpha = image.getchannel("A") if "A" in image.getbands() else None
             alpha_box = alpha.point(lambda value: 255 if value >= 16 else 0).getbbox() if alpha is not None else None
@@ -547,7 +549,7 @@ def _normalize_materialized_image(path: Path) -> Path:
             else:
                 image = image.convert("RGB")
 
-            repair_box = _image_background_repair_box(image)
+            repair_box = _image_background_repair_box(image) if repair_blank_bands else None
             if repair_box is not None:
                 image = image.crop(repair_box)
 
@@ -567,12 +569,18 @@ def _normalize_materialized_image(path: Path) -> Path:
 
 
 def materialize_ad_visual(
-    job: VisualCreativeJob, *, output_dir: str | None = None
+    job: VisualCreativeJob,
+    *,
+    output_dir: str | None = None,
+    repair_blank_bands: bool = True,
 ) -> Path:
     try:
         path = download_visual(job, output_dir=output_dir)
         if str(job.kind or "").strip().lower() == "image":
-            return _normalize_materialized_image(path)
+            return _normalize_materialized_image(
+                path,
+                repair_blank_bands=repair_blank_bands,
+            )
         return path
     except (VisualCreativeGatewayError, OSError) as exc:
         raise VisualCreativeError("visual_creative_materialization_failed") from exc
