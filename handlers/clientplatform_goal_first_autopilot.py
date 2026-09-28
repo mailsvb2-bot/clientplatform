@@ -10,6 +10,7 @@ image or video. Paid generation and real advertising spend remain explicit.
 import asyncio
 import hashlib
 import os
+import tempfile
 from decimal import Decimal
 from io import BytesIO
 from types import ModuleType
@@ -37,6 +38,7 @@ from clientplatform.application.creative_studio_publication import (
     goal_variant_labels,
     load_goal_visual_brand,
     poll_goal_image_variant,
+    render_format_for_placement,
     selected_goal_variant,
     start_goal_image_variant,
 )
@@ -56,6 +58,7 @@ from clientplatform.domain.ad_spend import AdSpendError
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.integrations.yandex_direct import YandexDirectError
+from services.visual_creative_gateway import download_render_asset
 from clientplatform.presentation.visual_generation import (
     visual_failure_message,
     visual_provider_unavailable_message,
@@ -734,13 +737,21 @@ async def _finish_generated_visual(
             creative_variant_id=result.binding.variant_id,
         )
         await state.set_state(GoalFirstAutopilotState.customizing)
-        await control._callback_message(event).answer_photo(
-            FSInputFile(result.asset.storage_path),
-            caption="✅ Картинка готова и уже сохранена как рекламный asset ClientPlatform.",
-        )
+        if result.render is not None:
+            with tempfile.TemporaryDirectory(prefix="clientplatform-preview-") as directory:
+                preview = await asyncio.to_thread(
+                    download_render_asset,
+                    result.render,
+                    render_format_for_placement("yandex_direct"),
+                    output_dir=directory,
+                )
+                await control._callback_message(event).answer_photo(
+                    FSInputFile(preview),
+                    caption="✅ Картинка готова и загружена в рекламный provider.",
+                )
         await control._callback_message(event).answer(
-            "Квадратный формат будет прикреплён к Yandex DRAFT существующим "
-            "restart-safe media-контуром; остальные форматы остаются в render-pack.",
+            "Квадратный формат уже передан в Yandex Direct по provider reference. "
+            "Постоянную копию картинки ClientPlatform не хранит.",
             reply_markup=_custom_keyboard(str(data["business_token"])),
         )
         return True
