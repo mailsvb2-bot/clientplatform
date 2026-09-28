@@ -24,7 +24,7 @@ The owner requirement is stricter: ClientPlatform must not be a permanent storag
 
 - A provider/app restart may invalidate an undelivered transient asset. Recovery must therefore prefer immediate delivery/provider upload and durable external references instead of extending local retention.
 - Retry semantics must distinguish paid generation from media delivery so a delivery retry never silently starts another paid generation.
-- Advertising media selection/upload now transfers bytes directly to the advertising provider and persists only provider identifiers plus non-payload metadata; the legacy storage_path column is constrained to the empty string for new schemas.
+- Advertising media selection/upload now transfers bytes directly to the advertising provider and persists only provider identifiers plus non-payload metadata; the advertising asset model and new schema contain no local storage-path field at all.
 - Existing program/course media that is explicitly sourced from external cloud storage is unaffected by this generated-media slice; those references remain external rather than being copied into ClientPlatform.
 
 ## First implementation slice
