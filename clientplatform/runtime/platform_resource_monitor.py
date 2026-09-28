@@ -391,22 +391,25 @@ def _provider_state_and_alerts(
 
     previous_video_mode = str(prev.get("video_generation_mode") or "")
     video_mode = _effective_video_mode(snapshot)
-    if video_mode == "motion" and previous_video_mode != "motion":
-        alerts.append(
-            "🟠 Полноценная AI-генерация видео недоступна\n"
-            "Работает только motion fallback: AI-кадр + движение камеры.\n"
-            "Проверьте native video worker/provider."
-        )
-    elif video_mode == "native" and previous_video_mode in {"motion", "unavailable"}:
-        alerts.append("🟢 Полноценная AI-генерация видео восстановлена.")
-    elif (
-        video_mode == "unavailable"
-        and snapshot.configured_video
-        and previous_video_mode != "unavailable"
-    ):
-        alerts.append(
-            "🔴 Video providers настроены, но рабочий video capability tier не определён."
-        )
+    # Establish the first health snapshot silently. Alerts describe transitions,
+    # not the mere fact that production starts in a known degraded mode.
+    if previous_video_mode:
+        if video_mode == "motion" and previous_video_mode != "motion":
+            alerts.append(
+                "🟠 Полноценная AI-генерация видео недоступна\n"
+                "Работает только motion fallback: AI-кадр + движение камеры.\n"
+                "Проверьте native video worker/provider."
+            )
+        elif video_mode == "native" and previous_video_mode in {"motion", "unavailable"}:
+            alerts.append("🟢 Полноценная AI-генерация видео восстановлена.")
+        elif (
+            video_mode == "unavailable"
+            and snapshot.configured_video
+            and previous_video_mode != "unavailable"
+        ):
+            alerts.append(
+                "🔴 Video providers настроены, но рабочий video capability tier не определён."
+            )
 
     prev_models = prev.get("models") if isinstance(prev.get("models"), dict) else {}
     for provider, raw in snapshot.models.items():
