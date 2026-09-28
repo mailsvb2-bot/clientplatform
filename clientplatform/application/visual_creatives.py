@@ -471,14 +471,23 @@ def _image_background_repair_box(image: Image.Image) -> tuple[int, int, int, int
     probe.thumbnail((256, 256), Image.Resampling.LANCZOS)
     pw, ph = probe.size
     band_h = max(4, ph // 6)
-    bottom = probe.crop((0, ph - band_h, pw, ph))
-    bottom_stats = ImageStat.Stat(bottom)
-    if max(bottom_stats.stddev or [999.0]) > 8.0:
+    band_w = max(4, pw // 6)
+    bands = (
+        probe.crop((0, 0, pw, band_h)),
+        probe.crop((0, ph - band_h, pw, ph)),
+        probe.crop((0, 0, band_w, ph)),
+        probe.crop((pw - band_w, 0, pw, ph)),
+    )
+    stats = [ImageStat.Stat(band) for band in bands]
+    quietest = min(stats, key=lambda item: max(item.stddev or [999.0]))
+    if max(quietest.stddev or [999.0]) > 8.0:
         return None
 
-    background = tuple(int(round(value)) for value in bottom_stats.mean[:3])
-    diff = ImageChops.difference(probe, Image.new("RGB", probe.size, background)).convert("L")
-    mask = diff.point(lambda value: 255 if value >= 20 else 0)
+    background = tuple(int(round(value)) for value in quietest.mean[:3])
+    diff = ImageChops.difference(probe, Image.new("RGB", probe.size, background))
+    channel_max = ImageChops.lighter(diff.getchannel("R"), diff.getchannel("G"))
+    channel_max = ImageChops.lighter(channel_max, diff.getchannel("B"))
+    mask = channel_max.point(lambda value: 255 if value >= 18 else 0)
     bbox = mask.getbbox()
     if bbox is None:
         return None
@@ -524,6 +533,8 @@ def _normalize_materialized_image(path: Path) -> Path:
 
             alpha = image.getchannel("A") if "A" in image.getbands() else None
             alpha_box = alpha.point(lambda value: 255 if value >= 16 else 0).getbbox() if alpha is not None else None
+            if alpha is not None and alpha_box is None:
+                raise VisualCreativeError("visual_creative_invalid_image_asset")
             if alpha_box is not None and alpha_box != (0, 0, image.width, image.height):
                 visible = image.crop(alpha_box)
                 if visible.width * visible.height < image.width * image.height * 0.82:
