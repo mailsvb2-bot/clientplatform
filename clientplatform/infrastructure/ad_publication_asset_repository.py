@@ -99,12 +99,15 @@ class AdPublicationAssetRepository:
         publication_job_id: str,
         kind: AdPublicationAssetKind,
         source: AdPublicationAssetSource,
-        storage_path: str,
+        storage_path: str = "",
         content_type: str,
         original_name: str,
         sha256: str,
         size_bytes: int,
         duration_seconds: int | None,
+        provider_image_hash: str | None = None,
+        provider_video_id: str | None = None,
+        provider_creative_id: str | None = None,
     ) -> tuple[AdPublicationAsset, str | None]:
         current = self._actor(actor)
         job_id = normalize_uuid(publication_job_id, field_name="publication_job_id")
@@ -123,7 +126,7 @@ class AdPublicationAssetRepository:
                 content_type, original_name, sha256, size_bytes, duration_seconds,
                 provider_image_hash, provider_video_id, provider_creative_id,
                 provider_error_code, created_by_member_id, created_at, updated_at
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?)
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
             ON CONFLICT(publication_job_id, business_id) DO UPDATE SET
                 kind=excluded.kind,
                 source=excluded.source,
@@ -133,9 +136,9 @@ class AdPublicationAssetRepository:
                 sha256=excluded.sha256,
                 size_bytes=excluded.size_bytes,
                 duration_seconds=excluded.duration_seconds,
-                provider_image_hash=NULL,
-                provider_video_id=NULL,
-                provider_creative_id=NULL,
+                provider_image_hash=excluded.provider_image_hash,
+                provider_video_id=excluded.provider_video_id,
+                provider_creative_id=excluded.provider_creative_id,
                 provider_error_code=NULL,
                 created_by_member_id=excluded.created_by_member_id,
                 updated_at=excluded.updated_at
@@ -151,6 +154,9 @@ class AdPublicationAssetRepository:
                 sha256,
                 int(size_bytes),
                 duration_seconds,
+                provider_image_hash,
+                provider_video_id,
+                provider_creative_id,
                 current.membership_id,
                 created_at,
                 now,
