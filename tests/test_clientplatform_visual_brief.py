@@ -388,6 +388,33 @@ class VisualCreativeApplicationTests(unittest.TestCase):
                 self.assertEqual(repaired.size, (128, 128))
 
     @unittest.skipUnless(_PIL_AVAILABLE, "Pillow is optional in dependency-light canon")
+    def test_materialization_rejects_truncated_image_payload(self) -> None:
+        Image = self._pillow_image()
+        job = VisualCreativeJob(
+            id="job-image",
+            provider="yandexart",
+            scope_id="business-id",
+            kind="image",
+            status="succeeded",
+            asset_ready=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "generated.jpg"
+            image = Image.new("RGB", (256, 256), (35, 45, 55))
+            for y in range(128):
+                for x in range(256):
+                    image.putpixel((x, y), ((x + y) % 255, y % 255, x % 255))
+            image.save(path, format="JPEG", quality=92)
+            raw = path.read_bytes()
+            path.write_bytes(raw[: max(256, len(raw) // 2)])
+            with patch.object(visual_creatives, "download_visual", return_value=path):
+                with self.assertRaisesRegex(
+                    visual_creatives.VisualCreativeError,
+                    "visual_creative_invalid_image_asset",
+                ):
+                    visual_creatives.materialize_ad_visual(job)
+
+    @unittest.skipUnless(_PIL_AVAILABLE, "Pillow is optional in dependency-light canon")
     def test_materialization_rejects_non_image_payload(self) -> None:
         self._pillow_image()
         job = VisualCreativeJob(
