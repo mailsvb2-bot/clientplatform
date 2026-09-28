@@ -11,6 +11,7 @@ from PIL import Image
 
 from clientplatform.application import ad_goal_publication
 from clientplatform.application import ad_publication_assets as assets
+from clientplatform.infrastructure.ad_publication_asset_repository import AdMediaUploadReservation
 from clientplatform.domain.ad_publication_assets import (
     AdPublicationAsset,
     AdPublicationAssetKind,
@@ -47,7 +48,8 @@ def test_advertising_asset_domain_has_no_local_storage_field() -> None:
         _asset(provider_image_hash=None)
 
 
-def test_image_bytes_upload_immediately_and_persist_only_provider_reference(monkeypatch) -> None:
+def test_image_bytes_claim_before_provider_and_persist_only_reference(monkeypatch) -> None:
+    order: list[str] = []
     captured: dict[str, object] = {}
     actor = SimpleNamespace(business_id=str(uuid4()))
     publication_job_id = str(uuid4())
@@ -59,42 +61,50 @@ def test_image_bytes_upload_immediately_and_persist_only_provider_reference(monk
 
     class Provider:
         def upload_image(self, *, access_token: str, payload: bytes, name: str) -> str:
-            captured["access_token"] = access_token
+            order.append("provider")
             captured["payload"] = payload
-            captured["name"] = name
             return "provider-image-hash"
 
     class Repository:
         def __init__(self, _conn) -> None:
             pass
 
-        def replace(self, **kwargs):
-            captured["replace"] = kwargs
+        def begin_upload(self, **kwargs):
+            order.append("claim")
+            captured["begin"] = kwargs
+            return AdMediaUploadReservation("claimed", claim_token="claim-1")
+
+        def complete_upload(self, **kwargs):
+            order.append("complete")
+            captured["complete"] = kwargs
             return AdPublicationAsset(
-                    publication_job_id=publication_job_id,
-                    business_id=actor.business_id,
-                    kind=kwargs["kind"],
-                    source=kwargs["source"],
-                    content_type=kwargs["content_type"],
-                    original_name=kwargs["original_name"],
-                    sha256=kwargs["sha256"],
-                    size_bytes=kwargs["size_bytes"],
-                    duration_seconds=kwargs["duration_seconds"],
-                    provider_image_hash=kwargs["provider_image_hash"],
-                    created_by_member_id=str(uuid4()),
-                    created_at="2026-09-29T00:00:00+00:00",
-                    updated_at="2026-09-29T00:00:00+00:00",
-                )
+                publication_job_id=publication_job_id,
+                business_id=actor.business_id,
+                kind=AdPublicationAssetKind.IMAGE,
+                source=AdPublicationAssetSource.UPLOAD,
+                content_type="image/jpeg",
+                original_name="owner-photo.png",
+                sha256=str(captured["begin"]["sha256"]),
+                size_bytes=int(captured["begin"]["size_bytes"]),
+                provider_image_hash=str(kwargs["provider_image_hash"]),
+                created_by_member_id=str(uuid4()),
+                created_at="2026-09-29T00:00:00+00:00",
+                updated_at="2026-09-29T00:00:00+00:00",
+            )
 
     @contextmanager
     def fake_db():
         yield object()
 
     provider = Provider()
-    vault = object()
     monkeypatch.setattr(assets, "_publication_job", lambda **_kwargs: job)
     monkeypatch.setattr(assets, "get_db", fake_db)
     monkeypatch.setattr(assets, "AdPublicationAssetRepository", Repository)
+    monkeypatch.setattr(
+        assets,
+        "load_bundle",
+        lambda **_kwargs: (SimpleNamespace(), SimpleNamespace(access_token="token", refresh_token="")),
+    )
     monkeypatch.setattr(
         assets,
         "with_access_token",
@@ -107,18 +117,77 @@ def test_image_bytes_upload_immediately_and_persist_only_provider_reference(monk
         payload=_jpeg(),
         original_name="owner-photo.png",
         provider=provider,
-        vault=vault,
+        vault=object(),
     )
 
+    assert order == ["claim", "provider", "complete"]
     uploaded = captured["payload"]
     assert isinstance(uploaded, bytes)
     assert uploaded.startswith(b"\xff\xd8\xff")
-    assert captured["access_token"] == "access-token"
-    replace = captured["replace"]
-    assert isinstance(replace, dict)
-    assert "storage_path" not in replace
-    assert replace["provider_image_hash"] == "provider-image-hash"
     assert result.provider_image_hash == "provider-image-hash"
+    assert "storage_path" not in captured["begin"]
+
+
+def test_ready_digest_reuses_provider_reference_without_second_upload(monkeypatch) -> None:
+    actor = SimpleNamespace(business_id=str(uuid4()))
+    publication_job_id = str(uuid4())
+    normalized = assets._normalized_image(_jpeg())
+    digest = __import__("hashlib").sha256(normalized).hexdigest()
+    existing = AdPublicationAsset(
+        publication_job_id=publication_job_id,
+        business_id=actor.business_id,
+        kind=AdPublicationAssetKind.IMAGE,
+        source=AdPublicationAssetSource.UPLOAD,
+        content_type="image/jpeg",
+        original_name="image.jpg",
+        sha256=digest,
+        size_bytes=len(normalized),
+        provider_image_hash="existing-hash",
+        created_by_member_id=str(uuid4()),
+        created_at="2026-09-29T00:00:00+00:00",
+        updated_at="2026-09-29T00:00:00+00:00",
+    )
+
+    class Provider:
+        def upload_image(self, **_kwargs):
+            raise AssertionError("ready digest must not be uploaded twice")
+
+    class Repository:
+        def __init__(self, _conn) -> None:
+            pass
+
+        def begin_upload(self, **_kwargs):
+            return AdMediaUploadReservation("ready", asset=existing)
+
+    @contextmanager
+    def fake_db():
+        yield object()
+
+    monkeypatch.setattr(
+        assets,
+        "_publication_job",
+        lambda **_kwargs: SimpleNamespace(
+            id=publication_job_id,
+            business_id=actor.business_id,
+            connection_id=str(uuid4()),
+        ),
+    )
+    monkeypatch.setattr(assets, "get_db", fake_db)
+    monkeypatch.setattr(assets, "AdPublicationAssetRepository", Repository)
+    monkeypatch.setattr(
+        assets,
+        "load_bundle",
+        lambda **_kwargs: (SimpleNamespace(), SimpleNamespace(access_token="token", refresh_token="")),
+    )
+
+    result = assets.attach_image_bytes(
+        actor=actor,
+        publication_job_id=publication_job_id,
+        payload=_jpeg(),
+        provider=Provider(),
+        vault=object(),
+    )
+    assert result.provider_image_hash == "existing-hash"
 
 
 def test_publication_worker_attaches_existing_hash_without_media_bytes(monkeypatch) -> None:
