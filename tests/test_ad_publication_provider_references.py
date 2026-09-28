@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
@@ -132,7 +133,7 @@ def test_ready_digest_reuses_provider_reference_without_second_upload(monkeypatc
     actor = SimpleNamespace(business_id=str(uuid4()))
     publication_job_id = str(uuid4())
     normalized = assets._normalized_image(_jpeg())
-    digest = __import__("hashlib").sha256(normalized).hexdigest()
+    digest = hashlib.sha256(normalized).hexdigest()
     existing = AdPublicationAsset(
         publication_job_id=publication_job_id,
         business_id=actor.business_id,
@@ -188,6 +189,70 @@ def test_ready_digest_reuses_provider_reference_without_second_upload(monkeypatc
         vault=object(),
     )
     assert result.provider_image_hash == "existing-hash"
+
+
+def test_provider_failure_marks_claim_ambiguous_and_raises_recoverable_error(monkeypatch) -> None:
+    actor = SimpleNamespace(business_id=str(uuid4()))
+    publication_job_id = str(uuid4())
+    marked: dict[str, object] = {}
+
+    class Provider:
+        def upload_image(self, **_kwargs):
+            raise RuntimeError("provider unavailable")
+
+    class Repository:
+        def __init__(self, _conn) -> None:
+            pass
+
+        def begin_upload(self, **_kwargs):
+            return AdMediaUploadReservation("claimed", claim_token="claim-ambiguous")
+
+        def mark_upload_ambiguous(self, **kwargs):
+            marked.update(kwargs)
+
+    @contextmanager
+    def fake_db():
+        yield object()
+
+    monkeypatch.setattr(
+        assets,
+        "_publication_job",
+        lambda **_kwargs: SimpleNamespace(
+            id=publication_job_id,
+            business_id=actor.business_id,
+            connection_id=str(uuid4()),
+        ),
+    )
+    monkeypatch.setattr(assets, "get_db", fake_db)
+    monkeypatch.setattr(assets, "AdPublicationAssetRepository", Repository)
+    monkeypatch.setattr(
+        assets,
+        "load_bundle",
+        lambda **_kwargs: (
+            SimpleNamespace(),
+            SimpleNamespace(access_token="token", refresh_token=""),
+        ),
+    )
+    monkeypatch.setattr(
+        assets,
+        "with_access_token",
+        lambda *, operation, **_kwargs: operation("token"),
+    )
+
+    with pytest.raises(
+        assets.AdPublicationAssetError,
+        match="provider upload could not be confirmed",
+    ):
+        assets.attach_image_bytes(
+            actor=actor,
+            publication_job_id=publication_job_id,
+            payload=_jpeg(),
+            provider=Provider(),
+            vault=object(),
+        )
+
+    assert marked["claim_token"] == "claim-ambiguous"
+    assert marked["error_code"] == "ad_image_upload_ambiguous"
 
 
 def test_publication_worker_attaches_existing_hash_without_media_bytes(monkeypatch) -> None:
