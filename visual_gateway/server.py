@@ -10,6 +10,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import tempfile
 import time
 import urllib.parse
 import uuid
@@ -47,6 +48,7 @@ class GatewayConfig:
     upstream_token: str
     state_dir: Path
     asset_dir: Path | None = None
+    transient_assets_required: bool = False
     transient_asset_ttl_seconds: int = 21_600
     transient_asset_cleanup_limit: int = 200
     daily_generation_limit: int = 100
@@ -67,6 +69,9 @@ class GatewayConfig:
             upstream_token=str(os.getenv("VISUAL_GATEWAY_UPSTREAM_TOKEN", "") or "").strip(),
             state_dir=Path(os.getenv("VISUAL_GATEWAY_STATE_DIR", "/var/lib/visual-gateway")).expanduser(),
             asset_dir=Path(os.getenv("VISUAL_GATEWAY_ASSET_DIR", "/tmp/visual-gateway-assets")).expanduser(),
+            transient_assets_required=str(
+                os.getenv("VISUAL_GATEWAY_TRANSIENT_OUTPUT_REQUIRED", "0") or "0"
+            ).strip().lower() in {"1", "true", "yes", "on"},
             transient_asset_ttl_seconds=_env_int("VISUAL_GATEWAY_TRANSIENT_ASSET_TTL_SECONDS", 21_600, 300, 86_400),
             transient_asset_cleanup_limit=_env_int("VISUAL_GATEWAY_TRANSIENT_ASSET_CLEANUP_LIMIT", 200, 1, 5_000),
             daily_generation_limit=_env_int("VISUAL_GATEWAY_DAILY_GENERATION_LIMIT", 100, 1, 100000),
@@ -126,50 +131,6 @@ class Store:
         self.root.mkdir(parents=True, exist_ok=True)
         self.assets.mkdir(parents=True, exist_ok=True)
         self._init_schema()
-        self._purge_legacy_persistent_assets()
-
-    def _purge_legacy_persistent_assets(self) -> int:
-        legacy_assets = (self.root / "assets").resolve()
-        if legacy_assets == self.assets:
-            return 0
-        removed = 0
-        try:
-            candidates = sorted(
-                (item for item in legacy_assets.rglob("*") if item.is_file()),
-                key=lambda item: len(item.parts),
-                reverse=True,
-            ) if legacy_assets.is_dir() else []
-        except OSError:
-            candidates = []
-        for candidate in candidates:
-            try:
-                resolved = candidate.resolve()
-                resolved.relative_to(legacy_assets)
-                resolved.unlink(missing_ok=True)
-                removed += 1
-            except (OSError, ValueError):
-                continue
-        if legacy_assets.is_dir():
-            try:
-                directories = sorted(
-                    (item for item in legacy_assets.rglob("*") if item.is_dir()),
-                    key=lambda item: len(item.parts),
-                    reverse=True,
-                )
-            except OSError:
-                directories = []
-            for directory in directories:
-                try:
-                    directory.rmdir()
-                except OSError:
-                    continue
-            try:
-                legacy_assets.rmdir()
-            except OSError:
-                pass
-        with self._connect() as conn:
-            conn.execute("UPDATE render_assets SET asset_ready=0 WHERE asset_ready<>0")
-        return removed
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
@@ -900,9 +861,16 @@ def create_app(config: GatewayConfig | None = None) -> web.Application:
     config = config or GatewayConfig.from_env()
     app = web.Application(middlewares=[_boundary], client_max_size=config.max_json_bytes)
     app["config"] = config
+    asset_root = (config.asset_dir or (config.state_dir / "assets")).expanduser().resolve()
+    if config.transient_assets_required:
+        transient_root = Path(tempfile.gettempdir()).resolve()
+        try:
+            asset_root.relative_to(transient_root)
+        except ValueError as exc:
+            raise RuntimeError("visual_gateway_persistent_user_media_forbidden") from exc
     app["store"] = Store(
         config.state_dir,
-        asset_root=config.asset_dir or (config.state_dir / "assets"),
+        asset_root=asset_root,
         asset_ttl_seconds=config.transient_asset_ttl_seconds,
         asset_cleanup_limit=config.transient_asset_cleanup_limit,
     )
