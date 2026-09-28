@@ -71,6 +71,35 @@ def test_pending_threshold_delivery_survives_utc_day_rollover(monkeypatch):
 
 
 def test_provider_monitor_alerts_when_only_motion_fallback_remains():
+    previous = {
+        "available": True,
+        "configured_image": ["yandexart"],
+        "configured_video": ["selfhosted", "yandexart_motion"],
+        "configured_video_native": ["selfhosted"],
+        "configured_video_motion": ["yandexart_motion"],
+        "video_generation_mode": "native",
+        "models": {},
+        "runtime": {},
+        "circuits": {},
+    }
+    snapshot = provider_health.VisualProviderHealthSnapshot(
+        available=True,
+        configured_image=("yandexart",),
+        configured_video=("yandexart_motion",),
+        configured_video_native=(),
+        configured_video_motion=("yandexart_motion",),
+        video_generation_mode="motion",
+    )
+
+    current, alerts = monitor._provider_state_and_alerts(snapshot, previous)
+
+    assert current["video_generation_mode"] == "motion"
+    assert current["configured_video_native"] == []
+    assert current["configured_video_motion"] == ["yandexart_motion"]
+    assert any("Полноценная AI-генерация видео недоступна" in item for item in alerts)
+
+
+def test_provider_monitor_initial_motion_baseline_is_silent():
     snapshot = provider_health.VisualProviderHealthSnapshot(
         available=True,
         configured_image=("yandexart",),
@@ -83,9 +112,7 @@ def test_provider_monitor_alerts_when_only_motion_fallback_remains():
     current, alerts = monitor._provider_state_and_alerts(snapshot, {})
 
     assert current["video_generation_mode"] == "motion"
-    assert current["configured_video_native"] == []
-    assert current["configured_video_motion"] == ["yandexart_motion"]
-    assert any("Полноценная AI-генерация видео недоступна" in item for item in alerts)
+    assert alerts == []
 
 
 def test_provider_monitor_alerts_when_native_video_recovers():
