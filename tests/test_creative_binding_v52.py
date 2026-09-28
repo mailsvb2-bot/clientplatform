@@ -194,14 +194,16 @@ def test_ready_render_uses_square_and_canonical_generated_asset(
         quality={},
     )
     pack = VisualRenderPack("pack1", business_id, "job1", "succeeded", "", (asset_meta,))
-    rendered = tmp_path / "square.jpg"
-    rendered.write_bytes(b"render")
     seen: dict[str, object] = {}
-    monkeypatch.setattr(
-        publication,
-        "download_render_asset",
-        lambda p, f: seen.update(format=f) or rendered,
-    )
+
+    def download(_pack, format_id, *, output_dir=None):
+        seen["format"] = format_id
+        seen["output_dir"] = output_dir
+        rendered = Path(str(output_dir)) / "square.jpg"
+        rendered.write_bytes(b"render")
+        return rendered
+
+    monkeypatch.setattr(publication, "download_render_asset", download)
     current = type(
         "Binding",
         (),
@@ -209,7 +211,7 @@ def test_ready_render_uses_square_and_canonical_generated_asset(
     )()
     monkeypatch.setattr(publication, "_current_binding", lambda **kwargs: current)
 
-    fake_asset = type("Asset", (), {"storage_path": str(tmp_path / "persisted.jpg")})()
+    fake_asset = type("Asset", (), {"provider_image_hash": "provider-hash"})()
 
     def attach(**kwargs):
         seen["source"] = kwargs["source"]
@@ -230,5 +232,5 @@ def test_ready_render_uses_square_and_canonical_generated_asset(
     assert returned_binding is binding
     assert seen["format"] == "square"
     assert str(seen["source"]) == "generated"
-    assert seen["path"] == rendered
-    assert not rendered.exists()
+    assert Path(str(seen["path"])).parent == Path(str(seen["output_dir"]))
+    assert not Path(str(seen["output_dir"])).exists()
