@@ -150,6 +150,10 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
             "CLIENTPLATFORM_PRODUCTION_VISUAL_RECENT_JOBS",
             'privileged docker exec -i "$provider_id" python -',
             "CLIENTPLATFORM_PRODUCTION_VISUAL_PROVIDER_CREDENTIAL_PRESENCE",
+            "CLIENTPLATFORM_PRODUCTION_VISUAL_PROVIDER_CONTENT_CHAIN",
+            "CLIENTPLATFORM_PRODUCTION_VISUAL_APP_CONTENT_CHAIN",
+            'CLIENTPLATFORM_PROBE_JOB_ID="$job_id"',
+            'CLIENTPLATFORM_PROBE_SCOPE_ID="$scope_id"',
             '"YANDEX_MODEL_CATALOG_API_KEY": bool(os.environ.get("YANDEX_MODEL_CATALOG_API_KEY"))',
             '"YANDEX_MODEL_CATALOG_AUTH_SCHEME": bool(os.environ.get("YANDEX_MODEL_CATALOG_AUTH_SCHEME"))',
         ):
@@ -162,6 +166,8 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
         self.assertIn("YANDEX_MODEL_CATALOG_AUTH_SCHEME", provider_probe)
         self.assertNotIn('"model": str(row["model"] or "")[:160]', text)
         self.assertNotIn('error_code = str(row["error_code"] or "")[:160]', text)
+        self.assertNotIn('print(job_id)', text)
+        self.assertNotIn('print(scope_id)', text)
 
     def test_operations_doc_preserves_private_health_contract(self) -> None:
         text = self._text(OPERATIONS)
