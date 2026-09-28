@@ -17,6 +17,7 @@ from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 
 _SAFE_ERROR_RE = re.compile(r"^[a-z0-9_.:-]{1,120}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_UPLOAD_STALE_SECONDS = 300
 
 
 def _iso_now() -> str:
@@ -137,6 +138,48 @@ class AdPublicationAssetRepository:
             raise ValueError("advertising asset duration is invalid")
         return media_kind, media_source, mime, name, digest, size, duration
 
+    @staticmethod
+    def _upload_is_stale(asset: AdPublicationAsset) -> bool:
+        if asset.provider_upload_status != "uploading":
+            return False
+        try:
+            updated = datetime.fromisoformat(asset.updated_at)
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return True
+        age = (datetime.now(timezone.utc) - updated.astimezone(timezone.utc)).total_seconds()
+        return age >= _UPLOAD_STALE_SECONDS
+
+    def _mark_stale_upload_ambiguous(
+        self,
+        *,
+        business_id: str,
+        publication_job_id: str,
+        observed: AdPublicationAsset,
+    ) -> bool:
+        if not self._upload_is_stale(observed):
+            return False
+        cursor = self._conn.execute(
+            """
+            UPDATE ad_publication_assets
+            SET provider_upload_status='ambiguous',
+                provider_upload_claim_token='',
+                provider_error_code='ad_media_upload_stale_ambiguous',
+                updated_at=?
+            WHERE publication_job_id=? AND business_id=?
+              AND provider_upload_status='uploading'
+              AND updated_at=?
+            """,
+            (
+                _iso_now(),
+                publication_job_id,
+                business_id,
+                observed.updated_at,
+            ),
+        )
+        return int(getattr(cursor, "rowcount", 0) or 0) == 1
+
     def begin_upload(
         self,
         *,
@@ -168,6 +211,20 @@ class AdPublicationAssetRepository:
         ).fetchone()
         if row is not None:
             observed = _asset(row)
+            stale_upload = self._mark_stale_upload_ambiguous(
+                business_id=current.business_id,
+                publication_job_id=job_id,
+                observed=observed,
+            )
+            if stale_upload:
+                observed_row = self._conn.execute(
+                    _SELECT + " WHERE publication_job_id=? AND business_id=? LIMIT 1",
+                    (job_id, current.business_id),
+                ).fetchone()
+                if observed_row is None:
+                    raise RuntimeError("advertising media upload receipt disappeared")
+                observed = _asset(observed_row)
+                row = observed_row
             if observed.sha256 == digest and observed.kind.value == media_kind:
                 if observed.provider_upload_status == "ready":
                     return AdMediaUploadReservation("ready", asset=observed)
