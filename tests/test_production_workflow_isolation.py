@@ -148,6 +148,8 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
             '"model_recorded": bool(str(row["model"] or "").strip())',
             "CLIENTPLATFORM_PRODUCTION_VISUAL_RECENT_JOB_COUNTS",
             "CLIENTPLATFORM_PRODUCTION_VISUAL_RECENT_JOBS",
+            '"YANDEX_MODEL_CATALOG_API_KEY": bool(os.environ.get("YANDEX_MODEL_CATALOG_API_KEY"))',
+            '"YANDEX_MODEL_CATALOG_AUTH_SCHEME": bool(os.environ.get("YANDEX_MODEL_CATALOG_AUTH_SCHEME"))',
         ):
             with self.subTest(required=required):
                 self.assertIn(required, text)
