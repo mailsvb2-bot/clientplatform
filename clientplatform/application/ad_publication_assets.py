@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from clientplatform.application.ad_provider_session import (
     ad_vault,
+    load_bundle,
     with_access_token,
     yandex_provider,
 )
@@ -21,9 +23,11 @@ from clientplatform.infrastructure.ad_goal_publication_repository import (
     AdGoalPublicationRepository,
 )
 from clientplatform.infrastructure.ad_publication_asset_repository import (
+    AdMediaUploadReservation,
     AdPublicationAssetRepository,
 )
 from clientplatform.infrastructure.ad_credential_vault import AdCredentialVault
+from clientplatform.integrations.yandex_direct import YandexDirectError
 from clientplatform.integrations.yandex_direct_media import MediaAwareYandexDirectProvider
 from services.db import get_db, get_db_ro
 
@@ -77,6 +81,124 @@ def _publication_job(*, actor: TenantContext, publication_job_id: str):
         )
 
 
+def _reserve_upload(
+    *,
+    actor: TenantContext,
+    publication_job_id: str,
+    kind: AdPublicationAssetKind,
+    source: AdPublicationAssetSource,
+    content_type: str,
+    original_name: str,
+    sha256: str,
+    size_bytes: int,
+    duration_seconds: int | None,
+) -> AdMediaUploadReservation:
+    try:
+        with get_db() as conn:
+            return AdPublicationAssetRepository(conn).begin_upload(
+                actor=actor,
+                publication_job_id=publication_job_id,
+                kind=kind,
+                source=source,
+                content_type=content_type,
+                original_name=original_name,
+                sha256=sha256,
+                size_bytes=size_bytes,
+                duration_seconds=duration_seconds,
+            )
+    except (sqlite3.Error, RuntimeError, ValueError) as exc:
+        raise AdPublicationAssetError(
+            "advertising media upload could not be reserved"
+        ) from exc
+
+
+def _reservation_result(
+    reservation: AdMediaUploadReservation,
+) -> AdPublicationAsset | None:
+    if reservation.state == "ready" and reservation.asset is not None:
+        return reservation.asset
+    if reservation.state == "uploading":
+        raise AdPublicationAssetError("advertising media upload is already in progress")
+    if reservation.state == "ambiguous":
+        raise AdPublicationAssetError(
+            "advertising media upload result is ambiguous; automatic retry is blocked"
+        )
+    if reservation.state == "failed":
+        raise AdPublicationAssetError("advertising media upload previously failed")
+    if not reservation.claimed:
+        raise AdPublicationAssetError("advertising media upload could not be claimed")
+    return None
+
+
+def _mark_upload_ambiguous(
+    *,
+    actor: TenantContext,
+    publication_job_id: str,
+    claim_token: str,
+    error_code: str,
+) -> None:
+    try:
+        with get_db() as conn:
+            AdPublicationAssetRepository(conn).mark_upload_ambiguous(
+                actor=actor,
+                publication_job_id=publication_job_id,
+                claim_token=claim_token,
+                error_code=error_code,
+            )
+    except (sqlite3.Error, RuntimeError, ValueError):
+        # The durable pre-claim remains in "uploading" and still blocks an
+        # automatic second provider write.
+        return
+
+
+def _complete_upload(
+    *,
+    actor: TenantContext,
+    publication_job_id: str,
+    claim_token: str,
+    provider_image_hash: str | None = None,
+    provider_video_id: str | None = None,
+) -> AdPublicationAsset:
+    try:
+        with get_db() as conn:
+            return AdPublicationAssetRepository(conn).complete_upload(
+                actor=actor,
+                publication_job_id=publication_job_id,
+                claim_token=claim_token,
+                provider_image_hash=provider_image_hash,
+                provider_video_id=provider_video_id,
+            )
+    except (sqlite3.Error, RuntimeError, ValueError) as exc:
+        _mark_upload_ambiguous(
+            actor=actor,
+            publication_job_id=publication_job_id,
+            claim_token=claim_token,
+            error_code="ad_media_receipt_persist_ambiguous",
+        )
+        raise AdPublicationAssetError(
+            "provider accepted media but the receipt could not be confirmed"
+        ) from exc
+
+
+def _provider_failure(
+    *,
+    actor: TenantContext,
+    publication_job_id: str,
+    reservation: AdMediaUploadReservation,
+    code: str,
+    cause: BaseException,
+) -> AdPublicationAssetError:
+    _mark_upload_ambiguous(
+        actor=actor,
+        publication_job_id=publication_job_id,
+        claim_token=reservation.claim_token,
+        error_code=code,
+    )
+    return AdPublicationAssetError(
+        "advertising provider upload could not be confirmed"
+    )
+
+
 def attach_image_bytes(
     *,
     actor: TenantContext,
@@ -87,37 +209,61 @@ def attach_image_bytes(
     provider: MediaAwareYandexDirectProvider | None = None,
     vault: AdCredentialVault | None = None,
 ) -> AdPublicationAsset:
-    """Normalize in memory, upload immediately, then persist only provider metadata."""
+    """Normalize in memory and persist only the provider-side image reference."""
 
     normalized = _normalized_image(payload)
     digest = hashlib.sha256(normalized).hexdigest()
     selected_provider = provider or yandex_provider()
     selected_vault = vault or ad_vault()
     job = _publication_job(actor=actor, publication_job_id=publication_job_id)
-    image_hash = with_access_token(
-        job=job,
-        provider=selected_provider,
-        vault=selected_vault,
-        operation=lambda access_token: selected_provider.upload_image(
-            access_token=access_token,
-            payload=normalized,
-            name=original_name or "image.jpg",
-        ),
+    try:
+        connection, bundle = load_bundle(job=job, vault=selected_vault)
+    except (sqlite3.Error, RuntimeError, ValueError, YandexDirectError) as exc:
+        raise AdPublicationAssetError(
+            "advertising provider authorization is unavailable"
+        ) from exc
+    reservation = _reserve_upload(
+        actor=actor,
+        publication_job_id=publication_job_id,
+        kind=AdPublicationAssetKind.IMAGE,
+        source=source,
+        content_type="image/jpeg",
+        original_name=original_name or "image.jpg",
+        sha256=digest,
+        size_bytes=len(normalized),
+        duration_seconds=None,
     )
-    with get_db() as conn:
-        asset = AdPublicationAssetRepository(conn).replace(
+    existing = _reservation_result(reservation)
+    if existing is not None:
+        return existing
+    try:
+        image_hash = with_access_token(
+            job=job,
+            provider=selected_provider,
+            vault=selected_vault,
+            connection=connection,
+            bundle=bundle,
+            operation=lambda access_token: selected_provider.upload_image(
+                access_token=access_token,
+                payload=normalized,
+                name=original_name or "image.jpg",
+            ),
+        )
+    except (sqlite3.Error, RuntimeError, ValueError, YandexDirectError) as exc:
+        error = _provider_failure(
             actor=actor,
             publication_job_id=publication_job_id,
-            kind=AdPublicationAssetKind.IMAGE,
-            source=source,
-            content_type="image/jpeg",
-            original_name=original_name or "image.jpg",
-            sha256=digest,
-            size_bytes=len(normalized),
-            duration_seconds=None,
-            provider_image_hash=image_hash,
+            reservation=reservation,
+            code="ad_image_upload_ambiguous",
+            cause=exc,
         )
-    return asset
+        raise error from exc
+    return _complete_upload(
+        actor=actor,
+        publication_job_id=publication_job_id,
+        claim_token=reservation.claim_token,
+        provider_image_hash=image_hash,
+    )
 
 
 def attach_image_file(
@@ -129,7 +275,7 @@ def attach_image_file(
     provider: MediaAwareYandexDirectProvider | None = None,
     vault: AdCredentialVault | None = None,
 ) -> AdPublicationAsset:
-    """Consume one transient file without promoting it to durable ClientPlatform storage."""
+    """Consume a transient image without promoting it to ClientPlatform storage."""
 
     candidate = path.expanduser().resolve(strict=True)
     if not candidate.is_file() or candidate.is_symlink():
@@ -159,7 +305,7 @@ def attach_video_bytes(
     provider: MediaAwareYandexDirectProvider | None = None,
     vault: AdCredentialVault | None = None,
 ) -> AdPublicationAsset:
-    """Upload video bytes immediately; retain only Yandex video identifiers."""
+    """Upload video at most once and persist only its provider-side identifier."""
 
     if not payload or len(payload) > _VIDEO_LIMIT:
         raise AdPublicationAssetError("video must be no larger than 100 MB")
@@ -184,30 +330,54 @@ def attach_video_bytes(
     selected_provider = provider or yandex_provider()
     selected_vault = vault or ad_vault()
     job = _publication_job(actor=actor, publication_job_id=publication_job_id)
-    video_id = with_access_token(
-        job=job,
-        provider=selected_provider,
-        vault=selected_vault,
-        operation=lambda access_token: selected_provider.upload_video(
-            access_token=access_token,
-            payload=payload,
-            name=original_name or f"video.{suffix}",
-        ),
+    try:
+        connection, bundle = load_bundle(job=job, vault=selected_vault)
+    except (sqlite3.Error, RuntimeError, ValueError, YandexDirectError) as exc:
+        raise AdPublicationAssetError(
+            "advertising provider authorization is unavailable"
+        ) from exc
+    reservation = _reserve_upload(
+        actor=actor,
+        publication_job_id=publication_job_id,
+        kind=AdPublicationAssetKind.VIDEO,
+        source=source,
+        content_type=normalized_type,
+        original_name=original_name or f"video.{suffix}",
+        sha256=digest,
+        size_bytes=len(payload),
+        duration_seconds=duration,
     )
-    with get_db() as conn:
-        asset, _previous = AdPublicationAssetRepository(conn).replace(
+    existing = _reservation_result(reservation)
+    if existing is not None:
+        return existing
+    try:
+        video_id = with_access_token(
+            job=job,
+            provider=selected_provider,
+            vault=selected_vault,
+            connection=connection,
+            bundle=bundle,
+            operation=lambda access_token: selected_provider.upload_video(
+                access_token=access_token,
+                payload=payload,
+                name=original_name or f"video.{suffix}",
+            ),
+        )
+    except (sqlite3.Error, RuntimeError, ValueError, YandexDirectError) as exc:
+        error = _provider_failure(
             actor=actor,
             publication_job_id=publication_job_id,
-            kind=AdPublicationAssetKind.VIDEO,
-            source=source,
-            content_type=normalized_type,
-            original_name=original_name or f"video.{suffix}",
-            sha256=digest,
-            size_bytes=len(payload),
-            duration_seconds=duration,
-            provider_video_id=video_id,
+            reservation=reservation,
+            code="ad_video_upload_ambiguous",
+            cause=exc,
         )
-    return asset
+        raise error from exc
+    return _complete_upload(
+        actor=actor,
+        publication_job_id=publication_job_id,
+        claim_token=reservation.claim_token,
+        provider_video_id=video_id,
+    )
 
 
 def remove_asset(*, actor: TenantContext, publication_job_id: str) -> bool:
@@ -230,13 +400,6 @@ def get_asset_for_worker(
         )
 
 
-def read_asset_bytes(asset: AdPublicationAsset) -> bytes:
-    del asset
-    raise AdPublicationAssetError(
-        "persistent advertising media bytes are forbidden; use provider references"
-    )
-
-
 def remember_provider_ids(
     *,
     business_id: str,
@@ -255,24 +418,11 @@ def remember_provider_ids(
         )
 
 
-def cleanup_orphaned_assets(
-    *,
-    grace_seconds: int = 300,
-    max_files: int = 200,
-) -> int:
-    """Compatibility no-op: advertising media no longer has local files."""
-
-    del grace_seconds, max_files
-    return 0
-
-
 __all__ = [
     "attach_image_bytes",
     "attach_image_file",
     "attach_video_bytes",
-    "cleanup_orphaned_assets",
     "get_asset_for_worker",
-    "read_asset_bytes",
     "remember_provider_ids",
     "remove_asset",
 ]
