@@ -22,36 +22,19 @@ def _column_names(c: sqlite3.Connection) -> set[str]:
     }
 
 
-def _upgrade_legacy_shape(c: sqlite3.Connection) -> None:
+def _drop_prelaunch_legacy_shape(c: sqlite3.Connection) -> None:
     columns = _column_names(c)
-    if not columns:
+    if "storage_path" not in columns:
         return
-    if "storage_path" in columns:
-        # The owner confirmed there are no production users yet. Preserve only
-        # already-provider-backed metadata and eliminate the obsolete local-path
-        # column before the product opens to users.
-        c.execute(
-            "DELETE FROM ad_publication_assets "
-            "WHERE (kind='image' AND provider_image_hash IS NULL) "
-            "OR (kind='video' AND provider_video_id IS NULL)"
-        )
-        c.execute("ALTER TABLE ad_publication_assets DROP COLUMN storage_path")
-        columns.discard("storage_path")
-    if "provider_upload_status" not in columns:
-        c.execute(
-            "ALTER TABLE ad_publication_assets "
-            "ADD COLUMN provider_upload_status TEXT NOT NULL DEFAULT 'ready'"
-        )
-    if "provider_upload_claim_token" not in columns:
-        c.execute(
-            "ALTER TABLE ad_publication_assets "
-            "ADD COLUMN provider_upload_claim_token TEXT NOT NULL DEFAULT ''"
-        )
+    # Owner-directed pre-launch cutover: there are no product users yet, so do
+    # not preserve or perpetuate the obsolete server-file media model.
+    c.execute("DROP TABLE ad_publication_assets")
 
 
 def ensure(c: sqlite3.Connection) -> None:
-    """Persist one replaceable media asset per tenant-scoped ad publication."""
+    """Persist provider references only; user media bytes are never DB state."""
 
+    _drop_prelaunch_legacy_shape(c)
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS ad_publication_assets(
@@ -91,7 +74,6 @@ def ensure(c: sqlite3.Connection) -> None:
         )
         """
     )
-    _upgrade_legacy_shape(c)
     c.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_ad_publication_assets_business
