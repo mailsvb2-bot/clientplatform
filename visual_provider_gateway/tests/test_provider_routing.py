@@ -26,6 +26,17 @@ def _clear_provider_routing(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
+def test_transient_output_requirement_rejects_persistent_directory(tmp_path, monkeypatch):
+    from visual_provider_gateway.models import ensure_output_dir
+
+    persistent = tmp_path / "persistent-output"
+    monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path / "ram-root"))
+
+    with pytest.raises(RuntimeError, match="persistent_user_media_forbidden"):
+        ensure_output_dir(str(persistent))
+
+
 def test_ru_defaults_keep_global_clouds_out(monkeypatch):
     _clear_provider_routing(monkeypatch)
     assert provider_order("image", "RU") == ("yandexart", "gigachat", "selfhosted")
