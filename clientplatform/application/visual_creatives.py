@@ -592,7 +592,16 @@ def _normalize_materialized_image(path: Path, *, repair_blank_bands: bool = True
                 image.save(temporary, format="PNG", optimize=True)
         os.replace(temporary, path)
         return path
-    except (Image.DecompressionBombError, UnidentifiedImageError, OSError, ValueError) as exc:
+    except Image.DecompressionBombError as exc:
+        temporary.unlink(missing_ok=True)
+        raise VisualCreativeError("visual_creative_invalid_image_asset") from exc
+    except UnidentifiedImageError as exc:
+        temporary.unlink(missing_ok=True)
+        raise VisualCreativeError("visual_creative_invalid_image_asset") from exc
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        raise VisualCreativeError("visual_creative_invalid_image_asset") from exc
+    except ValueError as exc:
         temporary.unlink(missing_ok=True)
         raise VisualCreativeError("visual_creative_invalid_image_asset") from exc
 
