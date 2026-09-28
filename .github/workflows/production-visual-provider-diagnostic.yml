@@ -421,8 +421,17 @@ jobs:
             if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi
           }
           provider_id="$(privileged docker ps --filter name=clientplatform-production-visual-provider-gateway-1 --format '{{.ID}}' | head -n1)"
-          [ -n "$provider_id" ]
-          privileged docker exec -i "$provider_id" python - <<'PY'
+          app_id="$(privileged docker ps --filter name=clientplatform-production-app-1 --format '{{.ID}}' | head -n1)"
+          [ -n "$provider_id" ] && [ -n "$app_id" ]
+          host_asset="$(mktemp /tmp/clientplatform-production-image.XXXXXX)"
+          app_asset="/tmp/clientplatform-production-image-export"
+          cleanup() {
+            rm -f -- "$host_asset"
+            privileged docker exec "$app_id" rm -f -- "$app_asset" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          privileged docker exec -i "$provider_id" python - <<'PY' > "$host_asset"
           from __future__ import annotations
           import os
           import sqlite3
@@ -459,21 +468,44 @@ jobs:
               raise SystemExit(44)
           sys.stdout.buffer.write(raw)
           PY
+          test -s "$host_asset"
+          privileged docker cp "$host_asset" "$app_id:$app_asset"
+          privileged docker exec -e CLIENTPLATFORM_EXPORTED_ASSET="$app_asset" -i "$app_id" python - <<'PY'
+          from __future__ import annotations
+          import os
+          from pathlib import Path
+          from PIL import Image, UnidentifiedImageError
+
+          path = Path(os.environ["CLIENTPLATFORM_EXPORTED_ASSET"])
+          try:
+              with Image.open(path) as opened:
+                  if str(opened.format or "").upper() not in {"JPEG", "PNG", "WEBP"}:
+                      raise SystemExit(45)
+                  width, height = map(int, opened.size)
+                  if width < 64 or height < 64:
+                      raise SystemExit(46)
+                  opened.verify()
+          except (OSError, UnidentifiedImageError):
+              raise SystemExit(47)
+          PY
+          cat "$host_asset"
           REMOTE
           test -s "$asset"
           python - "$asset" <<'PY'
           from __future__ import annotations
           import sys
           from pathlib import Path
-          from PIL import Image
 
           path = Path(sys.argv[1])
-          with Image.open(path) as opened:
-              fmt = str(opened.format or "").upper()
-              opened.verify()
-          suffix = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}.get(fmt)
-          if suffix is None:
-              raise SystemExit(45)
+          raw = path.read_bytes()
+          if raw.startswith(b"\xff\xd8\xff"):
+              fmt, suffix = "JPEG", ".jpg"
+          elif raw.startswith(b"\x89PNG\r\n\x1a\n"):
+              fmt, suffix = "PNG", ".png"
+          elif len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+              fmt, suffix = "WEBP", ".webp"
+          else:
+              raise SystemExit(48)
           target = path.with_suffix(suffix)
           path.replace(target)
           print(f"CLIENTPLATFORM_PRODUCTION_VISUAL_ASSET_EXPORTED bytes={target.stat().st_size} format={fmt}")
