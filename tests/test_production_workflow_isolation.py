@@ -148,11 +148,18 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
             '"model_recorded": bool(str(row["model"] or "").strip())',
             "CLIENTPLATFORM_PRODUCTION_VISUAL_RECENT_JOB_COUNTS",
             "CLIENTPLATFORM_PRODUCTION_VISUAL_RECENT_JOBS",
+            'privileged docker exec -i "$provider_id" python -',
+            "CLIENTPLATFORM_PRODUCTION_VISUAL_PROVIDER_CREDENTIAL_PRESENCE",
             '"YANDEX_MODEL_CATALOG_API_KEY": bool(os.environ.get("YANDEX_MODEL_CATALOG_API_KEY"))',
             '"YANDEX_MODEL_CATALOG_AUTH_SCHEME": bool(os.environ.get("YANDEX_MODEL_CATALOG_AUTH_SCHEME"))',
         ):
             with self.subTest(required=required):
                 self.assertIn(required, text)
+        app_probe, provider_probe = text.split('privileged docker exec -i "$provider_id" python -', 1)
+        self.assertNotIn("YANDEX_MODEL_CATALOG_API_KEY", app_probe)
+        self.assertNotIn("YANDEX_MODEL_CATALOG_AUTH_SCHEME", app_probe)
+        self.assertIn("YANDEX_MODEL_CATALOG_API_KEY", provider_probe)
+        self.assertIn("YANDEX_MODEL_CATALOG_AUTH_SCHEME", provider_probe)
         self.assertNotIn('"model": str(row["model"] or "")[:160]', text)
         self.assertNotIn('error_code = str(row["error_code"] or "")[:160]', text)
 
