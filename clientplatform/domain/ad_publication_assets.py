@@ -86,6 +86,10 @@ class AdPublicationAsset:
                 if not normalized or len(normalized) > 255 or "\x00" in normalized:
                     raise ValueError(f"{name} is invalid")
                 object.__setattr__(self, name, normalized)
+        if self.kind == AdPublicationAssetKind.IMAGE and not self.provider_image_hash:
+            raise ValueError("advertising image provider reference is required")
+        if self.kind == AdPublicationAssetKind.VIDEO and not self.provider_video_id:
+            raise ValueError("advertising video provider reference is required")
         if self.provider_error_code is not None:
             error_code = str(self.provider_error_code).strip().lower()
             if not _SAFE_PROVIDER_ERROR_RE.fullmatch(error_code):
