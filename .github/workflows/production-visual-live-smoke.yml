@@ -1,0 +1,202 @@
+name: ClientPlatform Production Visual Live Smoke
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: clientplatform-production-visual-live-smoke
+  cancel-in-progress: false
+
+jobs:
+  live-image-smoke:
+    if: contains(github.event.head_commit.message, '[probe-production-visual-live]')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 8
+    env:
+      SSH_HOST: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_HOST }}
+      SSH_USER: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_KNOWN_HOSTS }}
+      SSH_PORT_SECRET: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_PORT }}
+
+    steps:
+      - name: Require dedicated ClientPlatform SSH credentials
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${SSH_HOST:?CLIENTPLATFORM_PRODUCTION_SSH_HOST is required}"
+          : "${SSH_USER:?CLIENTPLATFORM_PRODUCTION_SSH_USER is required}"
+          : "${SSH_PRIVATE_KEY:?CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY is required}"
+          : "${SSH_KNOWN_HOSTS:?CLIENTPLATFORM_PRODUCTION_SSH_KNOWN_HOSTS is required}"
+          SSH_PORT="${SSH_PORT_SECRET:-22}"
+          case "$SSH_PORT" in ''|*[!0-9]*) exit 2 ;; esac
+          if [ "$SSH_PORT" -lt 1 ] || [ "$SSH_PORT" -gt 65535 ]; then exit 2; fi
+          echo "SSH_PORT=$SSH_PORT" >> "$GITHUB_ENV"
+
+      - name: Configure pinned production SSH identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/clientplatform-production-ssh-key"
+          known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$known_hosts"
+          chmod 600 "$key" "$known_hosts"
+          ssh-keygen -y -f "$key" >/dev/null
+
+      - name: Run one idempotent paid image smoke through the app-facing gateway
+        id: smoke
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/clientplatform-production-ssh-key"
+          known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
+          output="$RUNNER_TEMP/clientplatform-production-visual-live-smoke.log"
+          smoke_key="ops-live-image-${GITHUB_SHA}"
+
+          set +e
+          ssh \
+            -p "$SSH_PORT" \
+            -i "$key" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$known_hosts" \
+            -o ConnectTimeout=10 \
+            "$SSH_USER@$SSH_HOST" "SMOKE_IDEMPOTENCY_KEY=$smoke_key bash -s" 2>&1 <<'REMOTE' | tee "$output"
+          set -Eeuo pipefail
+
+          privileged() {
+            if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi
+          }
+
+          app_id="$(privileged docker ps --filter name=clientplatform-production-app-1 --format '{{.ID}}' | head -n1)"
+          if [ -z "$app_id" ]; then
+            echo "CLIENTPLATFORM_PRODUCTION_VISUAL_LIVE_SMOKE_FAILED:app_container_missing"
+            exit 20
+          fi
+
+          privileged docker exec -i -e SMOKE_IDEMPOTENCY_KEY "$app_id" python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import tempfile
+          from pathlib import Path
+
+          from clientplatform.application.visual_creatives import materialize_ad_visual
+          from services.visual_creative_gateway import (
+              VisualCreativeBrief,
+              submit_visual,
+              wait_visual,
+          )
+
+          idem = str(os.environ.get("SMOKE_IDEMPOTENCY_KEY") or "").strip()
+          if not idem:
+              raise SystemExit("CLIENTPLATFORM_PRODUCTION_VISUAL_LIVE_SMOKE_FAILED:idempotency_missing")
+
+          brief = VisualCreativeBrief(
+              kind="image",
+              prompt=(
+                  "A simple neutral square test image with one centered ceramic sphere "
+                  "on a soft studio background, the full object comfortably inside the "
+                  "frame, no text, no logos, no people, no large blank bands."
+              ),
+              country_code="RU",
+              aspect_ratio="1:1",
+          )
+          job = submit_visual(
+              brief,
+              scope_id="ops-visual-smoke",
+              idempotency_key=idem,
+              wait_seconds=60,
+          )
+          job = wait_visual(job, wait_seconds=60, poll_interval=2.0)
+
+          safe = {
+              "id": job.id,
+              "provider": job.provider,
+              "kind": job.kind,
+              "status": job.status,
+              "model": job.model,
+              "mime_type": job.mime_type,
+              "error_code": job.error_code,
+              "asset_ready": job.asset_ready,
+          }
+          print("CLIENTPLATFORM_PRODUCTION_VISUAL_LIVE_SMOKE_JOB " + json.dumps(safe, ensure_ascii=False, sort_keys=True))
+          if job.status != "succeeded" or not job.asset_ready:
+              print("CLIENTPLATFORM_PRODUCTION_VISUAL_LIVE_SMOKE_FAILED:generation_" + (job.error_code or job.status or "unknown"))
+              raise SystemExit(21)
+
+          with tempfile.TemporaryDirectory(prefix="clientplatform-visual-smoke-") as directory:
+              path = materialize_ad_visual(job, output_dir=directory)
+              from PIL import Image
+              with Image.open(path) as image:
+                  image.load()
+                  width, height = image.size
+                  mode = image.mode
+              size_bytes = Path(path).stat().st_size
+              if width < 64 or height < 64 or size_bytes <= 0:
+                  print("CLIENTPLATFORM_PRODUCTION_VISUAL_LIVE_SMOKE_FAILED:invalid_materialized_asset")
+                  raise SystemExit(22)
+              print(
+                  "CLIENTPLATFORM_PRODUCTION_VISUAL_LIVE_SMOKE_OK "
+                  + json.dumps(
+                      {
+                          "provider": job.provider,
+                          "model": job.model,
+                          "width": width,
+                          "height": height,
+                          "mode": mode,
+                          "size_bytes": size_bytes,
+                      },
+                      ensure_ascii=False,
+                      sort_keys=True,
+                  )
+              )
+          PY
+          REMOTE
+          status=${PIPESTATUS[0]}
+          set -e
+
+          if [ "$status" -ne 0 ]; then
+            marker="$(grep -E '^CLIENTPLATFORM_PRODUCTION_VISUAL_LIVE_SMOKE_FAILED:' "$output" | tail -n1 || true)"
+            [ -n "$marker" ] || marker="CLIENTPLATFORM_PRODUCTION_VISUAL_LIVE_SMOKE_FAILED:probe_failed_without_safe_marker"
+            echo "failure_marker=$marker" >> "$GITHUB_OUTPUT"
+            exit "$status"
+          fi
+
+      - name: Upload safe live smoke log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: production-visual-live-smoke
+          path: ${{ runner.temp }}/clientplatform-production-visual-live-smoke.log
+          if-no-files-found: warn
+
+      - name: Publish live smoke status
+        if: always()
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
+        env:
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+          FAILURE_MARKER: ${{ steps.smoke.outputs.failure_marker }}
+        with:
+          script: |
+            const ok = process.env.SMOKE_OUTCOME === 'success';
+            const marker = process.env.FAILURE_MARKER || 'production visual live smoke failed';
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: ok ? 'success' : 'failure',
+              context: 'ops/clientplatform-production-visual-live-smoke',
+              description: (ok ? 'Paid production image smoke succeeded' : marker).slice(0, 140),
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });
