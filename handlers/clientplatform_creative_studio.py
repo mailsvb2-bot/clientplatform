@@ -546,6 +546,21 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
     )
 
 
+def _owner_requested_copy_space(request_text: str) -> bool:
+    normalized = " ".join(str(request_text or "").casefold().split())
+    markers = (
+        "место для текста",
+        "место под текст",
+        "свободное место",
+        "пустое место",
+        "copy space",
+        "negative space",
+        "space for text",
+        "пространство для текста",
+    )
+    return any(marker in normalized for marker in markers)
+
+
 async def _finish_visual(
     callback: CallbackQuery,
     *,
@@ -565,6 +580,7 @@ async def _finish_visual(
                 materialize_ad_visual,
                 job,
                 output_dir=directory,
+                repair_blank_bands=not _owner_requested_copy_space(receipt.request_text),
             )
             binding = frozen_business_visual_binding(receipt.provider_payload_json)
             if binding is not None and binding.get("type") == "event_content":
