@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 
 from clientplatform.application.ad_publication_assets import (
     get_asset_for_worker,
-    read_asset_bytes,
     remember_provider_ids,
 )
 from clientplatform.domain.ad_connections import (
@@ -174,20 +173,12 @@ def _attach_media(
     if asset.provider_error_code:
         provider.clear_media(access_token=bundle.access_token, ad_id=ad_id)
         return False, False, True
-    payload = read_asset_bytes(asset)
     if asset.kind == AdPublicationAssetKind.IMAGE:
         image_hash = asset.provider_image_hash
         if not image_hash:
-            image_hash = provider.upload_image(
-                access_token=bundle.access_token,
-                payload=payload,
-                name=asset.original_name,
-            )
-            remember_provider_ids(
-                business_id=job.business_id,
-                publication_job_id=job.id,
-                provider_image_hash=image_hash,
-            )
+            provider.clear_media(access_token=bundle.access_token, ad_id=ad_id)
+            _remember_media_error(job=job, error_code="ad_image_reference_missing")
+            return False, False, True
         provider.attach_image(
             access_token=bundle.access_token,
             ad_id=ad_id,
@@ -197,16 +188,9 @@ def _attach_media(
 
     video_id = asset.provider_video_id
     if not video_id:
-        video_id = provider.upload_video(
-            access_token=bundle.access_token,
-            payload=payload,
-            name=asset.original_name,
-        )
-        asset = remember_provider_ids(
-            business_id=job.business_id,
-            publication_job_id=job.id,
-            provider_video_id=video_id,
-        ) or asset
+        provider.clear_media(access_token=bundle.access_token, ad_id=ad_id)
+        _remember_media_error(job=job, error_code="ad_video_reference_missing")
+        return False, False, True
     status = provider.video_status(
         access_token=bundle.access_token,
         video_id=video_id,
