@@ -18,7 +18,7 @@ from clientplatform.integrations.yandex_direct_media import MediaAwareYandexDire
 from services.db import get_db, get_db_ro
 
 
-_AUTH_ERRORS = frozenset(
+AUTH_ERRORS = frozenset(
     {
         "provider_http_401",
         "provider_53",
@@ -99,7 +99,7 @@ def with_access_token(
     try:
         return operation(bundle.access_token)
     except YandexDirectError as exc:
-        if exc.code not in _AUTH_ERRORS or not bundle.refresh_token:
+        if exc.code not in AUTH_ERRORS or not bundle.refresh_token:
             raise
         refreshed = refresh_bundle(
             connection=connection,
@@ -111,7 +111,7 @@ def with_access_token(
 
 
 __all__ = [
-    "_AUTH_ERRORS",
+    "AUTH_ERRORS",
     "ad_vault",
     "load_bundle",
     "refresh_bundle",
