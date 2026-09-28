@@ -29,6 +29,7 @@ def test_visual_gateway_is_internal_versioned_production_service() -> None:
     assert "VISUAL_GATEWAY_UPSTREAM_TOKEN: ${" not in gateway
     assert "VISUAL_GATEWAY_STATE_DIR: /var/lib/visual-gateway" in gateway
     assert "VISUAL_GATEWAY_ASSET_DIR: /tmp/visual-gateway-assets" in gateway
+    assert 'VISUAL_GATEWAY_TRANSIENT_OUTPUT_REQUIRED: "1"' in gateway
     assert "VISUAL_GATEWAY_TRANSIENT_ASSET_TTL_SECONDS:" in gateway
     assert "VISUAL_GATEWAY_TRANSIENT_ASSET_CLEANUP_LIMIT:" in gateway
     assert "clientplatform-visual-gateway:/var/lib/visual-gateway" in gateway
