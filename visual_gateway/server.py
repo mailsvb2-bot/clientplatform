@@ -46,6 +46,9 @@ class GatewayConfig:
     upstream_url: str
     upstream_token: str
     state_dir: Path
+    asset_dir: Path
+    transient_asset_ttl_seconds: int = 21_600
+    transient_asset_cleanup_limit: int = 200
     daily_generation_limit: int = 100
     upstream_timeout_seconds: int = 90
     max_json_bytes: int = 128 * 1024
@@ -63,6 +66,9 @@ class GatewayConfig:
             upstream_url=upstream_url,
             upstream_token=str(os.getenv("VISUAL_GATEWAY_UPSTREAM_TOKEN", "") or "").strip(),
             state_dir=Path(os.getenv("VISUAL_GATEWAY_STATE_DIR", "/var/lib/visual-gateway")).expanduser(),
+            asset_dir=Path(os.getenv("VISUAL_GATEWAY_ASSET_DIR", "/tmp/visual-gateway-assets")).expanduser(),
+            transient_asset_ttl_seconds=_env_int("VISUAL_GATEWAY_TRANSIENT_ASSET_TTL_SECONDS", 21_600, 300, 86_400),
+            transient_asset_cleanup_limit=_env_int("VISUAL_GATEWAY_TRANSIENT_ASSET_CLEANUP_LIMIT", 200, 1, 5_000),
             daily_generation_limit=_env_int("VISUAL_GATEWAY_DAILY_GENERATION_LIMIT", 100, 1, 100000),
             upstream_timeout_seconds=_env_int("VISUAL_GATEWAY_UPSTREAM_TIMEOUT_SECONDS", 90, 5, 300),
             max_json_bytes=_env_int("VISUAL_GATEWAY_MAX_JSON_BYTES", 128 * 1024, 4096, 2 * 1024 * 1024),
@@ -104,10 +110,19 @@ def _canonical(value: object) -> str:
 
 
 class Store:
-    def __init__(self, root: Path) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        asset_root: Path | None = None,
+        asset_ttl_seconds: int = 21_600,
+        asset_cleanup_limit: int = 200,
+    ) -> None:
         self.root = root.resolve()
-        self.assets = self.root / "assets"
+        self.assets = (asset_root or (self.root / "assets")).resolve()
         self.db_path = self.root / "gateway.sqlite3"
+        self.asset_ttl_seconds = max(300, min(int(asset_ttl_seconds), 86_400))
+        self.asset_cleanup_limit = max(1, min(int(asset_cleanup_limit), 5_000))
         self.root.mkdir(parents=True, exist_ok=True)
         self.assets.mkdir(parents=True, exist_ok=True)
         self._init_schema()
@@ -173,6 +188,50 @@ class Store:
                 """
             )
             conn.execute("UPDATE render_packs SET claim_token='' WHERE status='running'")
+
+    def cleanup_transient_assets(self) -> int:
+        cutoff = time.time() - self.asset_ttl_seconds
+        removed = 0
+        try:
+            candidates = sorted(
+                (item for item in self.assets.rglob("*") if item.is_file()),
+                key=lambda item: item.stat().st_mtime,
+            )
+        except OSError:
+            return 0
+        for candidate in candidates:
+            if removed >= self.asset_cleanup_limit:
+                break
+            try:
+                resolved = candidate.resolve()
+                resolved.relative_to(self.assets)
+                if resolved.stat().st_mtime > cutoff:
+                    continue
+                resolved.unlink(missing_ok=True)
+                removed += 1
+            except (OSError, ValueError):
+                continue
+        if removed:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    "SELECT pack_id,format_id,path FROM render_assets WHERE asset_ready=1"
+                ).fetchall()
+                for row in rows:
+                    path = (self.assets / str(row["path"])).resolve()
+                    try:
+                        path.relative_to(self.assets)
+                    except ValueError:
+                        conn.execute(
+                            "UPDATE render_assets SET asset_ready=0 WHERE pack_id=? AND format_id=?",
+                            (str(row["pack_id"]), str(row["format_id"])),
+                        )
+                        continue
+                    if not path.is_file():
+                        conn.execute(
+                            "UPDATE render_assets SET asset_ready=0 WHERE pack_id=? AND format_id=?",
+                            (str(row["pack_id"]), str(row["format_id"])),
+                        )
+        return removed
 
     def reserve_generation(self, scope_id: str, idempotency_key: str, request_hash: str, limit: int) -> str:
         """Reserve provider egress once per exact idempotent request."""
@@ -330,8 +389,12 @@ class Store:
             ).fetchone()
         if not row or str(row["status"]) != "succeeded" or not bool(row["asset_ready"]):
             raise GatewayError(404, "render_asset_not_found")
-        path = (self.root / str(row["path"])).resolve()
-        if self.root not in path.parents or not path.is_file():
+        path = (self.assets / str(row["path"])).resolve()
+        try:
+            path.relative_to(self.assets)
+        except ValueError:
+            raise GatewayError(409, "render_asset_missing") from None
+        if not path.is_file():
             raise GatewayError(409, "render_asset_missing")
         raw_digest = _sha256_file(path)
         if raw_digest != str(row["sha256"]):
@@ -716,6 +779,7 @@ async def create_render_pack(request: web.Request) -> web.Response:
     payload = await _json_body(request)
     source_job_id, scope_id, idem, formats, composition, request_hash = _render_request(payload)
     store: Store = request.app["store"]
+    store.cleanup_transient_assets()
     pack_id, _ = store.get_or_create_pack(
         scope_id=scope_id,
         source_job_id=source_job_id,
@@ -741,7 +805,7 @@ async def create_render_pack(request: web.Request) -> web.Response:
             else:
                 assets = await asyncio.to_thread(_render_video, request.app["config"], raw, mime, pack_dir, formats, composition)
             for asset in assets:
-                asset["path"] = str(Path(asset["path"]).resolve().relative_to(store.root))
+                asset["path"] = str(Path(asset["path"]).resolve().relative_to(store.assets))
             store.succeed(pack_id, claim, assets)
         except GatewayError as exc:
             store.fail(pack_id, claim, exc.code)
@@ -755,6 +819,7 @@ async def get_render_pack(request: web.Request) -> web.Response:
     if _ID_RE.fullmatch(pack_id) is None:
         raise GatewayError(400, "invalid_render_pack_id")
     scope_id = _scope(request.query.get("scope_id"))
+    request.app["store"].cleanup_transient_assets()
     return web.json_response(request.app["store"].pack(pack_id, scope_id))
 
 
@@ -764,6 +829,7 @@ async def render_content(request: web.Request) -> web.StreamResponse:
     if _ID_RE.fullmatch(pack_id) is None or format_id not in FORMATS:
         raise GatewayError(400, "invalid_render_asset")
     scope_id = _scope(request.query.get("scope_id"))
+    request.app["store"].cleanup_transient_assets()
     path, mime, digest = request.app["store"].asset(pack_id, scope_id, format_id)
     response = web.FileResponse(path)
     response.content_type = mime
@@ -790,7 +856,12 @@ def create_app(config: GatewayConfig | None = None) -> web.Application:
     config = config or GatewayConfig.from_env()
     app = web.Application(middlewares=[_boundary], client_max_size=config.max_json_bytes)
     app["config"] = config
-    app["store"] = Store(config.state_dir)
+    app["store"] = Store(
+        config.state_dir,
+        asset_root=config.asset_dir,
+        asset_ttl_seconds=config.transient_asset_ttl_seconds,
+        asset_cleanup_limit=config.transient_asset_cleanup_limit,
+    )
     app.on_startup.append(_startup)
     app.on_cleanup.append(_cleanup)
     app.router.add_get("/health", health)
