@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import os
+
 
 from services.visual_creative_gateway import (
     VisualCreativeBrief,
@@ -260,6 +262,10 @@ def build_business_visual_brief(
         medium
         + f"Owner request: {owner_request}. "
         "Use credible natural details, human proportions and realistic lighting. "
+        "Keep the main subject fully inside the frame with comfortable margins and "
+        "use the whole canvas. Do not crop the important subject against an edge or "
+        "leave a large empty, solid or transparent band unless the owner explicitly "
+        "asked for intentional copy space. "
         "No fake awards, fake reviews, invented statistics, before/after claims, "
         "medical guarantees, money guarantees or manipulative urgency. "
         "Do not bake readable advertising text into the pixels unless the owner "
@@ -400,6 +406,9 @@ def build_ad_visual_brief(
         "or small service business. "
         f"Service: {str(title or '').strip()}. Context: {str(body or '').strip()}. "
         f"{motion} "
+        "Keep the primary subject fully inside the frame. Any copy space must look "
+        "intentional and visually balanced, never like a blank technical band or "
+        "unfinished canvas. "
         "No fake awards, fake reviews, invented statistics, before/after claims, "
         "medical guarantees, money guarantees or manipulative urgency. "
         "Do not bake readable advertising text into the pixels; typography will be "
@@ -444,11 +453,173 @@ def create_ad_visual(
         raise VisualCreativeError("visual_creative_generation_failed") from exc
 
 
+_MAX_MATERIALIZED_IMAGE_SIDE = 8192
+_MAX_MATERIALIZED_IMAGE_PIXELS = 25_000_000
+
+
+def _validate_materialized_image_dimensions(image) -> None:
+    width, height = image.size
+    if (
+        width < 64
+        or height < 64
+        or width > _MAX_MATERIALIZED_IMAGE_SIDE
+        or height > _MAX_MATERIALIZED_IMAGE_SIDE
+        or width * height > _MAX_MATERIALIZED_IMAGE_PIXELS
+    ):
+        raise VisualCreativeError("visual_creative_invalid_image_dimensions")
+
+
+def _image_background_repair_box(image) -> tuple[int, int, int, int] | None:
+    """Return a conservative crop box for pathological one-sided blank padding.
+
+    Generative providers occasionally return a valid bitmap where most of one side
+    is a nearly uniform filler/transparent band. Telegram then faithfully displays
+    the broken composition. We only repair extreme cases so intentional copy space
+    is preserved.
+    """
+
+    try:
+        from PIL import Image, ImageChops, ImageStat
+    except ImportError as exc:
+        raise VisualCreativeError("visual_creative_image_runtime_unavailable") from exc
+
+    _validate_materialized_image_dimensions(image)
+    width, height = image.size
+
+    probe = image.convert("RGB")
+    probe.thumbnail((256, 256), Image.Resampling.LANCZOS)
+    pw, ph = probe.size
+    band_h = max(4, ph // 6)
+    band_w = max(4, pw // 6)
+    bands = (
+        probe.crop((0, 0, pw, band_h)),
+        probe.crop((0, ph - band_h, pw, ph)),
+        probe.crop((0, 0, band_w, ph)),
+        probe.crop((pw - band_w, 0, pw, ph)),
+    )
+    stats = [ImageStat.Stat(band) for band in bands]
+    quietest = min(stats, key=lambda item: max(item.stddev or [999.0]))
+    if max(quietest.stddev or [999.0]) > 8.0:
+        return None
+
+    background = tuple(int(round(value)) for value in quietest.mean[:3])
+    diff = ImageChops.difference(probe, Image.new("RGB", probe.size, background))
+    channel_max = ImageChops.lighter(diff.getchannel("R"), diff.getchannel("G"))
+    channel_max = ImageChops.lighter(channel_max, diff.getchannel("B"))
+    mask = channel_max.point(lambda value: 255 if value >= 18 else 0)
+    bbox = mask.getbbox()
+    if bbox is None:
+        return None
+
+    left, top, right, bottom_y = bbox
+    blank_bottom = (ph - bottom_y) / ph
+    blank_top = top / ph
+    blank_left = left / pw
+    blank_right = (pw - right) / pw
+    if max(blank_bottom, blank_top, blank_left, blank_right) < 0.50:
+        return None
+
+    sx = width / pw
+    sy = height / ph
+    crop = [
+        max(0, int(left * sx)),
+        max(0, int(top * sy)),
+        min(width, int(right * sx)),
+        min(height, int(bottom_y * sy)),
+    ]
+    content_w = max(1, crop[2] - crop[0])
+    content_h = max(1, crop[3] - crop[1])
+    margin_x = max(8, int(content_w * 0.08))
+    margin_y = max(8, int(content_h * 0.08))
+    crop[0] = max(0, crop[0] - margin_x)
+    crop[1] = max(0, crop[1] - margin_y)
+    crop[2] = min(width, crop[2] + margin_x)
+    crop[3] = min(height, crop[3] + margin_y)
+    if (crop[2] - crop[0]) * (crop[3] - crop[1]) >= width * height * 0.82:
+        return None
+    return tuple(crop)
+
+
+def _normalize_materialized_image(path: Path, *, repair_blank_bands: bool = True) -> Path:
+    try:
+        from PIL import Image, ImageOps, UnidentifiedImageError
+    except ImportError as exc:
+        raise VisualCreativeError("visual_creative_image_runtime_unavailable") from exc
+
+    temporary = path.with_suffix(path.suffix + ".normalized.tmp")
+    try:
+        with Image.open(path) as opened:
+            _validate_materialized_image_dimensions(opened)
+            opened.verify()
+        with Image.open(path) as opened:
+            _validate_materialized_image_dimensions(opened)
+            source_format = str(opened.format or "").upper()
+            image = ImageOps.exif_transpose(opened)
+            _validate_materialized_image_dimensions(image)
+            image.load()
+            if "A" not in image.getbands() and "transparency" in image.info:
+                image = image.convert("RGBA")
+
+            alpha = image.getchannel("A") if "A" in image.getbands() else None
+            alpha_box = alpha.point(lambda value: 255 if value >= 16 else 0).getbbox() if alpha is not None else None
+            if alpha is not None and alpha_box is None:
+                raise VisualCreativeError("visual_creative_invalid_image_asset")
+            if alpha_box is not None and alpha_box != (0, 0, image.width, image.height):
+                visible = image.crop(alpha_box)
+                if visible.width * visible.height < image.width * image.height * 0.82:
+                    image = visible
+
+            if "A" in image.getbands():
+                flattened = Image.new("RGB", image.size, (255, 255, 255))
+                flattened.paste(image, mask=image.getchannel("A"))
+                image = flattened
+            else:
+                image = image.convert("RGB")
+
+            repair_box = _image_background_repair_box(image) if repair_blank_bands else None
+            if repair_box is not None:
+                image = image.crop(repair_box)
+
+            if image.width < 64 or image.height < 64:
+                raise VisualCreativeError("visual_creative_invalid_image_dimensions")
+
+            suffix = path.suffix.lower()
+            if suffix in {".jpg", ".jpeg"} or source_format in {"JPG", "JPEG"}:
+                image.save(temporary, format="JPEG", quality=94, optimize=True)
+            elif suffix == ".webp" or source_format == "WEBP":
+                image.save(temporary, format="WEBP", quality=94, method=6)
+            else:
+                image.save(temporary, format="PNG", optimize=True)
+        os.replace(temporary, path)
+        return path
+    except Image.DecompressionBombError as exc:
+        temporary.unlink(missing_ok=True)
+        raise VisualCreativeError("visual_creative_invalid_image_asset") from exc
+    except UnidentifiedImageError as exc:
+        temporary.unlink(missing_ok=True)
+        raise VisualCreativeError("visual_creative_invalid_image_asset") from exc
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        raise VisualCreativeError("visual_creative_invalid_image_asset") from exc
+    except ValueError as exc:
+        temporary.unlink(missing_ok=True)
+        raise VisualCreativeError("visual_creative_invalid_image_asset") from exc
+
+
 def materialize_ad_visual(
-    job: VisualCreativeJob, *, output_dir: str | None = None
+    job: VisualCreativeJob,
+    *,
+    output_dir: str | None = None,
+    repair_blank_bands: bool = True,
 ) -> Path:
     try:
-        return download_visual(job, output_dir=output_dir)
+        path = download_visual(job, output_dir=output_dir)
+        if str(job.kind or "").strip().lower() == "image":
+            return _normalize_materialized_image(
+                path,
+                repair_blank_bands=repair_blank_bands,
+            )
+        return path
     except (VisualCreativeGatewayError, OSError) as exc:
         raise VisualCreativeError("visual_creative_materialization_failed") from exc
 

@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import importlib.util
+import tempfile
 import unittest
 from pathlib import Path
+
 from unittest.mock import patch
 
 from clientplatform.application import visual_creatives
+
+_PIL_AVAILABLE = importlib.util.find_spec("PIL") is not None
 from services.visual_creative_gateway import (
     VisualCreativeGatewayError,
     VisualCreativeJob,
@@ -12,6 +17,13 @@ from services.visual_creative_gateway import (
 
 
 class VisualCreativeApplicationTests(unittest.TestCase):
+    def _pillow_image(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow is not installed in dependency-light Canon")
+        return Image
+
     def test_clientplatform_image_visual_brief_is_presentation_only(self) -> None:
         brief = visual_creatives.build_ad_visual_brief(
             title="Консультация психолога",
@@ -23,6 +35,7 @@ class VisualCreativeApplicationTests(unittest.TestCase):
         self.assertEqual(brief.aspect_ratio, "4:5")
         self.assertEqual(brief.country_code, "RU")
         self.assertIn("fake reviews", brief.prompt)
+        self.assertIn("fully inside the frame", brief.prompt)
         self.assertIn("invented statistics", brief.prompt)
         self.assertIn("typography", brief.prompt)
 
@@ -205,13 +218,222 @@ class VisualCreativeApplicationTests(unittest.TestCase):
             id="job-1",
             provider="fake",
             scope_id="business-id",
+            kind="video",
+            status="succeeded",
+            asset_ready=True,
+        )
+        expected = Path("/tmp/creative.mp4")
+        with patch.object(visual_creatives, "download_visual", return_value=expected):
+            self.assertEqual(visual_creatives.materialize_ad_visual(job), expected)
+
+    @unittest.skipUnless(_PIL_AVAILABLE, "Pillow is optional in dependency-light canon")
+    def test_materialization_repairs_large_uniform_bottom_band(self) -> None:
+        Image = self._pillow_image()
+        job = VisualCreativeJob(
+            id="job-image",
+            provider="yandexart",
+            scope_id="business-id",
             kind="image",
             status="succeeded",
             asset_ready=True,
         )
-        expected = Path("/tmp/creative.jpg")
-        with patch.object(visual_creatives, "download_visual", return_value=expected):
-            self.assertEqual(visual_creatives.materialize_ad_visual(job), expected)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "generated.png"
+            from PIL import Image
+
+            image = Image.new("RGB", (200, 300), (128, 128, 128))
+            for x in range(25, 175):
+                for y in range(20, 95):
+                    image.putpixel((x, y), (20, 25, 30))
+            image.save(path)
+            with patch.object(visual_creatives, "download_visual", return_value=path):
+                result = visual_creatives.materialize_ad_visual(job)
+            with Image.open(result) as repaired:
+                self.assertLess(repaired.height, 180)
+                self.assertLess(repaired.width, 200)
+
+    @unittest.skipUnless(_PIL_AVAILABLE, "Pillow is optional in dependency-light canon")
+    def test_materialization_keeps_moderate_intentional_copy_space(self) -> None:
+        Image = self._pillow_image()
+        job = VisualCreativeJob(
+            id="job-image",
+            provider="fake",
+            scope_id="business-id",
+            kind="image",
+            status="succeeded",
+            asset_ready=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "generated.png"
+            from PIL import Image
+
+            image = Image.new("RGB", (200, 300), (128, 128, 128))
+            for x in range(20, 180):
+                for y in range(20, 195):
+                    image.putpixel((x, y), (20, 25, 30))
+            image.save(path)
+            with patch.object(visual_creatives, "download_visual", return_value=path):
+                result = visual_creatives.materialize_ad_visual(job)
+            with Image.open(result) as repaired:
+                self.assertEqual(repaired.size, (200, 300))
+
+    @unittest.skipUnless(_PIL_AVAILABLE, "Pillow is optional in dependency-light canon")
+    def test_materialization_can_preserve_large_intentional_copy_space(self) -> None:
+        Image = self._pillow_image()
+        job = VisualCreativeJob(
+            id="job-image",
+            provider="fake",
+            scope_id="business-id",
+            kind="image",
+            status="succeeded",
+            asset_ready=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "generated.png"
+            from PIL import Image
+
+            image = Image.new("RGB", (200, 300), (128, 128, 128))
+            for x in range(25, 175):
+                for y in range(20, 95):
+                    image.putpixel((x, y), (20, 25, 30))
+            image.save(path)
+            with patch.object(visual_creatives, "download_visual", return_value=path):
+                result = visual_creatives.materialize_ad_visual(
+                    job,
+                    repair_blank_bands=False,
+                )
+            with Image.open(result) as repaired:
+                self.assertEqual(repaired.size, (200, 300))
+
+
+    @unittest.skipUnless(_PIL_AVAILABLE, "Pillow is optional in dependency-light canon")
+    def test_materialization_crops_large_transparent_padding(self) -> None:
+        Image = self._pillow_image()
+        job = VisualCreativeJob(
+            id="job-image",
+            provider="yandexart",
+            scope_id="business-id",
+            kind="image",
+            status="succeeded",
+            asset_ready=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "generated.png"
+            from PIL import Image
+
+            image = Image.new("RGBA", (200, 300), (0, 0, 0, 0))
+            for x in range(20, 180):
+                for y in range(20, 100):
+                    image.putpixel((x, y), (40, 50, 60, 255))
+            image.save(path)
+            with patch.object(visual_creatives, "download_visual", return_value=path):
+                result = visual_creatives.materialize_ad_visual(job)
+            with Image.open(result) as repaired:
+                self.assertEqual(repaired.mode, "RGB")
+                self.assertEqual(repaired.size, (160, 80))
+
+    def test_materialization_rejects_excessive_decoded_dimensions(self) -> None:
+        self._pillow_image()
+        fake = type("FakeImage", (), {"size": (8193, 64)})()
+        with self.assertRaisesRegex(
+            visual_creatives.VisualCreativeError,
+            "visual_creative_invalid_image_dimensions",
+        ):
+            visual_creatives._validate_materialized_image_dimensions(fake)
+
+    def test_materialization_normalizes_decompression_bomb_error(self) -> None:
+        Image = self._pillow_image()
+        job = VisualCreativeJob(
+            id="job-image",
+            provider="fake",
+            scope_id="business-id",
+            kind="image",
+            status="succeeded",
+            asset_ready=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "generated.png"
+            Image.new("RGB", (100, 100), (30, 40, 50)).save(path)
+            original_limit = Image.MAX_IMAGE_PIXELS
+            try:
+                Image.MAX_IMAGE_PIXELS = 1000
+                with patch.object(visual_creatives, "download_visual", return_value=path):
+                    with self.assertRaisesRegex(
+                        visual_creatives.VisualCreativeError,
+                        "visual_creative_invalid_image_asset",
+                    ):
+                        visual_creatives.materialize_ad_visual(job)
+            finally:
+                Image.MAX_IMAGE_PIXELS = original_limit
+
+    def test_materialization_preserves_webp_bytes_for_webp_path(self) -> None:
+        Image = self._pillow_image()
+        if "WEBP" not in Image.registered_extensions().values():
+            self.skipTest("Pillow WebP codec is unavailable")
+        job = VisualCreativeJob(
+            id="job-image",
+            provider="fake",
+            scope_id="business-id",
+            kind="image",
+            status="succeeded",
+            asset_ready=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "generated.webp"
+            Image.new("RGB", (128, 128), (30, 40, 50)).save(path, format="WEBP")
+            with patch.object(visual_creatives, "download_visual", return_value=path):
+                result = visual_creatives.materialize_ad_visual(job)
+            with Image.open(result) as repaired:
+                self.assertEqual(repaired.format, "WEBP")
+                self.assertEqual(repaired.size, (128, 128))
+
+    @unittest.skipUnless(_PIL_AVAILABLE, "Pillow is optional in dependency-light canon")
+    def test_materialization_rejects_truncated_image_payload(self) -> None:
+        Image = self._pillow_image()
+        job = VisualCreativeJob(
+            id="job-image",
+            provider="yandexart",
+            scope_id="business-id",
+            kind="image",
+            status="succeeded",
+            asset_ready=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "generated.jpg"
+            image = Image.new("RGB", (256, 256), (35, 45, 55))
+            for y in range(128):
+                for x in range(256):
+                    image.putpixel((x, y), ((x + y) % 255, y % 255, x % 255))
+            image.save(path, format="JPEG", quality=92)
+            raw = path.read_bytes()
+            path.write_bytes(raw[: max(256, len(raw) // 2)])
+            with patch.object(visual_creatives, "download_visual", return_value=path):
+                with self.assertRaisesRegex(
+                    visual_creatives.VisualCreativeError,
+                    "visual_creative_invalid_image_asset",
+                ):
+                    visual_creatives.materialize_ad_visual(job)
+
+    @unittest.skipUnless(_PIL_AVAILABLE, "Pillow is optional in dependency-light canon")
+    def test_materialization_rejects_non_image_payload(self) -> None:
+        self._pillow_image()
+        job = VisualCreativeJob(
+            id="job-image",
+            provider="fake",
+            scope_id="business-id",
+            kind="image",
+            status="succeeded",
+            asset_ready=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "generated.png"
+            path.write_bytes(b"not-an-image")
+            with patch.object(visual_creatives, "download_visual", return_value=path):
+                with self.assertRaisesRegex(
+                    visual_creatives.VisualCreativeError,
+                    "visual_creative_invalid_image_asset",
+                ):
+                    visual_creatives.materialize_ad_visual(job)
 
 
 if __name__ == "__main__":

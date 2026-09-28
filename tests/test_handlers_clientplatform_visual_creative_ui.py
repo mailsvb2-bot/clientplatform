@@ -212,13 +212,14 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
                     "create_ad_visual",
                     return_value=visual_job(status="succeeded", ready=True),
                 ),
-                patch.object(ui, "materialize_ad_visual", return_value=asset),
+                patch.object(ui, "materialize_ad_visual", return_value=asset) as materialize,
                 patch.object(ui, "_message", return_value=target),
                 patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
             ):
                 await ui._render_ad_visual(cb, st, kind="image")
         target.answer_photo.assert_awaited_once()
         target.answer_video.assert_not_awaited()
+        self.assertFalse(materialize.call_args.kwargs["repair_blank_bands"])
         self.assertEqual(
             target.answer_photo.await_args.kwargs["caption"],
             "Готовое рекламное изображение",
@@ -340,12 +341,13 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
                     "poll_ad_visual",
                     return_value=visual_job(status="succeeded", ready=True),
                 ) as poll_visual,
-                patch.object(ui, "materialize_ad_visual", return_value=asset),
+                patch.object(ui, "materialize_ad_visual", return_value=asset) as materialize,
                 patch.object(ui, "_message", return_value=target),
                 patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
             ):
                 await ui.refresh_ad_visual(cb, st)
         self.assertEqual(poll_visual.call_args.kwargs["scope_id"], "business-id")
+        self.assertFalse(materialize.call_args.kwargs["repair_blank_bands"])
         st.update_data.assert_awaited_with(creative_job_id="")
         target.answer_photo.assert_awaited_once()
         self.assertIn("не прикрепляется", target.answer.await_args.args[0])
