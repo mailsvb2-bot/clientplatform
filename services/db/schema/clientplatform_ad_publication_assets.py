@@ -2,26 +2,22 @@ from __future__ import annotations
 
 import sqlite3
 
+from services.db.runtime import is_postgres_enabled
+
 
 def _column_names(c: sqlite3.Connection) -> set[str]:
-    try:
-        rows = c.execute("PRAGMA table_info(ad_publication_assets)").fetchall()
-        if rows:
-            return {
-                str(row["name"] if hasattr(row, "keys") else row[1])
-                for row in rows
-            }
-    except Exception:
-        pass
-    try:
+    if is_postgres_enabled():
         rows = c.execute(
             "SELECT column_name FROM information_schema.columns "
             "WHERE table_schema=current_schema() AND table_name='ad_publication_assets'"
         ).fetchall()
-    except Exception:
-        return set()
+        return {
+            str(row["column_name"] if hasattr(row, "keys") else row[0])
+            for row in rows
+        }
+    rows = c.execute("PRAGMA table_info(ad_publication_assets)").fetchall()
     return {
-        str(row["column_name"] if hasattr(row, "keys") else row[0])
+        str(row["name"] if hasattr(row, "keys") else row[1])
         for row in rows
     }
 
