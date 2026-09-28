@@ -238,6 +238,156 @@ jobs:
               + json.dumps(safe_rows, ensure_ascii=False, sort_keys=True)
           )
           PY
+
+          probe_ref="$(privileged docker exec -i "$provider_id" python - <<'PY'
+          from __future__ import annotations
+
+          import os
+          import re
+          import sqlite3
+
+          db_path = str(os.environ.get("VISUAL_GATEWAY_DB") or "/data/visual_gateway.sqlite3")
+          with sqlite3.connect(db_path) as conn:
+              conn.row_factory = sqlite3.Row
+              row = conn.execute(
+                  """
+                  SELECT id,scope_id
+                  FROM visual_jobs
+                  WHERE client_id='clientplatform'
+                    AND kind='image'
+                    AND status='succeeded'
+                    AND asset_path<>''
+                  ORDER BY updated_at DESC
+                  LIMIT 1
+                  """
+              ).fetchone()
+          if row is None:
+              raise SystemExit(31)
+          job_id = str(row["id"] or "").strip()
+          scope_id = str(row["scope_id"] or "").strip()
+          if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", job_id) is None:
+              raise SystemExit(32)
+          if re.fullmatch(r"[A-Za-z0-9_.:@/-]{1,160}", scope_id) is None:
+              raise SystemExit(33)
+          print(job_id)
+          print(scope_id)
+          PY
+          )"
+          job_id="$(printf '%s\n' "$probe_ref" | sed -n '1p')"
+          scope_id="$(printf '%s\n' "$probe_ref" | sed -n '2p')"
+          if [[ ! "$job_id" =~ ^[A-Za-z0-9_-]{1,128}$ ]] || [[ ! "$scope_id" =~ ^[A-Za-z0-9_.:@/-]{1,160}$ ]]; then
+            echo "CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:latest_asset_reference_invalid"
+            exit 34
+          fi
+
+          privileged docker exec \
+            -e CLIENTPLATFORM_PROBE_JOB_ID="$job_id" \
+            -e CLIENTPLATFORM_PROBE_SCOPE_ID="$scope_id" \
+            -i "$provider_id" python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          job_id = os.environ["CLIENTPLATFORM_PROBE_JOB_ID"]
+          scope_id = os.environ["CLIENTPLATFORM_PROBE_SCOPE_ID"]
+          token = str(os.environ.get("VISUAL_GATEWAY_UPSTREAM_TOKEN") or "")
+          query = urllib.parse.urlencode({"scope_id": scope_id})
+          request = urllib.request.Request(
+              f"http://127.0.0.1:8097/v1/creative/generations/{urllib.parse.quote(job_id, safe='')}/content?{query}",
+              headers={"Authorization": "Bearer " + token},
+          )
+          with urllib.request.urlopen(request, timeout=15) as response:
+              raw = response.read(32 * 1024 * 1024 + 1)
+              content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+              status = int(response.status)
+          if len(raw) > 32 * 1024 * 1024:
+              raise SystemExit(35)
+          signature = (
+              "jpeg" if raw.startswith(b"\xff\xd8\xff")
+              else "png" if raw.startswith(b"\x89PNG\r\n\x1a\n")
+              else "webp" if len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP"
+              else "unknown"
+          )
+          print(
+              "CLIENTPLATFORM_PRODUCTION_VISUAL_PROVIDER_CONTENT_CHAIN "
+              + json.dumps(
+                  {
+                      "http_status": status,
+                      "bytes": len(raw),
+                      "content_type": content_type,
+                      "signature": signature,
+                      "sha256_recorded": bool(hashlib.sha256(raw).hexdigest()),
+                  },
+                  ensure_ascii=False,
+                  sort_keys=True,
+              )
+          )
+          PY
+
+          privileged docker exec \
+            -e CLIENTPLATFORM_PROBE_JOB_ID="$job_id" \
+            -e CLIENTPLATFORM_PROBE_SCOPE_ID="$scope_id" \
+            -i "$app_id" python - <<'PY'
+          from __future__ import annotations
+
+          import io
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          from PIL import Image
+
+          job_id = os.environ["CLIENTPLATFORM_PROBE_JOB_ID"]
+          scope_id = os.environ["CLIENTPLATFORM_PROBE_SCOPE_ID"]
+          base = str(os.environ.get("VISUAL_GATEWAY_URL") or "").rstrip("/")
+          token = str(os.environ.get("VISUAL_GATEWAY_TOKEN") or "")
+          query = urllib.parse.urlencode({"scope_id": scope_id})
+          request = urllib.request.Request(
+              base + f"/v1/creative/generations/{urllib.parse.quote(job_id, safe='')}/content?{query}",
+              headers={"Authorization": "Bearer " + token},
+          )
+          with urllib.request.urlopen(request, timeout=15) as response:
+              raw = response.read(32 * 1024 * 1024 + 1)
+              content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+              status = int(response.status)
+          if len(raw) > 32 * 1024 * 1024:
+              raise SystemExit(36)
+          decode_ok = False
+          image_format = ""
+          width = 0
+          height = 0
+          try:
+              with Image.open(io.BytesIO(raw)) as opened:
+                  image_format = str(opened.format or "").upper()
+                  width, height = map(int, opened.size)
+                  opened.verify()
+              decode_ok = True
+          except Exception:
+              decode_ok = False
+          print(
+              "CLIENTPLATFORM_PRODUCTION_VISUAL_APP_CONTENT_CHAIN "
+              + json.dumps(
+                  {
+                      "http_status": status,
+                      "bytes": len(raw),
+                      "content_type": content_type,
+                      "decode_ok": decode_ok,
+                      "image_format": image_format,
+                      "width": width,
+                      "height": height,
+                  },
+                  ensure_ascii=False,
+                  sort_keys=True,
+              )
+          )
+          if not decode_ok:
+              raise SystemExit(37)
+          PY
           REMOTE
           status=${PIPESTATUS[0]}
           set -e
