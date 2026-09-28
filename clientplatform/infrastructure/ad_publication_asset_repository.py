@@ -99,7 +99,7 @@ class AdPublicationAssetRepository:
         publication_job_id: str,
         kind: AdPublicationAssetKind,
         source: AdPublicationAssetSource,
-        storage_path: str = "",
+        storage_path: str,
         content_type: str,
         original_name: str,
         sha256: str,
