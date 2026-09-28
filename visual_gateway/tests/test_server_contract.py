@@ -3,13 +3,15 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import os
+import time
 
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from PIL import Image
 
-from visual_gateway.server import FORMATS, GatewayConfig, create_app
+from visual_gateway.server import FORMATS, GatewayConfig, Store, create_app
 
 TOKEN = "test-gateway-token"
 UPSTREAM_TOKEN = "test-upstream-token"
@@ -19,6 +21,88 @@ def _image() -> bytes:
     out = io.BytesIO()
     Image.new("RGB", (800, 600), "#8899AA").save(out, format="JPEG")
     return out.getvalue()
+
+
+def test_transient_render_cleanup_expires_bytes_and_readiness(tmp_path):
+    state = tmp_path / "state"
+    transient = tmp_path / "transient"
+    store = Store(state, asset_root=transient, asset_ttl_seconds=300)
+    pack_id, _ = store.get_or_create_pack(
+        scope_id="tenant-a",
+        source_job_id="job1",
+        idempotency_key="tenant-a:render:cleanup",
+        request_hash="a" * 64,
+        formats=["feed"],
+        composition={},
+    )
+    claim = store.claim(pack_id)
+    assert claim
+    pack_dir = transient / pack_id
+    pack_dir.mkdir(parents=True)
+    target = pack_dir / "feed.jpg"
+    target.write_bytes(_image())
+    old = time.time() - 601
+    os.utime(target, (old, old))
+    store.succeed(
+        pack_id,
+        claim,
+        [{
+            "format_id": "feed",
+            "kind": "image",
+            "width": 1080,
+            "height": 1350,
+            "mime_type": "image/jpeg",
+            "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+            "path": f"{pack_id}/feed.jpg",
+        }],
+    )
+
+    assert store.pack(pack_id, "tenant-a")["assets"][0]["asset_ready"] is True
+    assert store.cleanup_transient_assets() == 1
+    assert store.pack(pack_id, "tenant-a")["assets"][0]["asset_ready"] is False
+    assert not target.exists()
+
+
+def test_transient_migration_purges_legacy_persistent_render_bytes(tmp_path):
+    state = tmp_path / "state"
+    legacy = state / "assets" / "old-pack"
+    legacy.mkdir(parents=True)
+    old_file = legacy / "feed.jpg"
+    old_file.write_bytes(_image())
+
+    legacy_store = Store(state)
+    pack_id, _ = legacy_store.get_or_create_pack(
+        scope_id="tenant-a",
+        source_job_id="job1",
+        idempotency_key="tenant-a:render:legacy",
+        request_hash="b" * 64,
+        formats=["feed"],
+        composition={},
+    )
+    claim = legacy_store.claim(pack_id)
+    assert claim
+    persisted = legacy_store.assets / pack_id
+    persisted.mkdir(parents=True, exist_ok=True)
+    persisted_file = persisted / "feed.jpg"
+    persisted_file.write_bytes(_image())
+    legacy_store.succeed(
+        pack_id,
+        claim,
+        [{
+            "format_id": "feed",
+            "kind": "image",
+            "width": 1080,
+            "height": 1350,
+            "mime_type": "image/jpeg",
+            "sha256": hashlib.sha256(persisted_file.read_bytes()).hexdigest(),
+            "path": f"{pack_id}/feed.jpg",
+        }],
+    )
+
+    transient = tmp_path / "tmpfs-assets"
+    migrated = Store(state, asset_root=transient)
+    assert not (state / "assets").exists()
+    assert migrated.pack(pack_id, "tenant-a")["assets"][0]["asset_ready"] is False
 
 
 @pytest.fixture
