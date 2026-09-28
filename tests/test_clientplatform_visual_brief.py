@@ -223,6 +223,7 @@ class VisualCreativeApplicationTests(unittest.TestCase):
         with patch.object(visual_creatives, "download_visual", return_value=expected):
             self.assertEqual(visual_creatives.materialize_ad_visual(job), expected)
 
+    @unittest.skipUnless(_PIL_AVAILABLE, "Pillow is optional in dependency-light canon")
     def test_materialization_repairs_large_uniform_bottom_band(self) -> None:
         Image = self._pillow_image()
         job = VisualCreativeJob(
@@ -235,6 +236,8 @@ class VisualCreativeApplicationTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "generated.png"
+            from PIL import Image
+
             image = Image.new("RGB", (200, 300), (128, 128, 128))
             for x in range(25, 175):
                 for y in range(20, 95):
@@ -246,6 +249,7 @@ class VisualCreativeApplicationTests(unittest.TestCase):
                 self.assertLess(repaired.height, 180)
                 self.assertLess(repaired.width, 200)
 
+    @unittest.skipUnless(_PIL_AVAILABLE, "Pillow is optional in dependency-light canon")
     def test_materialization_keeps_moderate_intentional_copy_space(self) -> None:
         Image = self._pillow_image()
         job = VisualCreativeJob(
@@ -258,6 +262,8 @@ class VisualCreativeApplicationTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "generated.png"
+            from PIL import Image
+
             image = Image.new("RGB", (200, 300), (128, 128, 128))
             for x in range(20, 180):
                 for y in range(20, 195):
@@ -268,6 +274,7 @@ class VisualCreativeApplicationTests(unittest.TestCase):
             with Image.open(result) as repaired:
                 self.assertEqual(repaired.size, (200, 300))
 
+    @unittest.skipUnless(_PIL_AVAILABLE, "Pillow is optional in dependency-light canon")
     def test_materialization_can_preserve_large_intentional_copy_space(self) -> None:
         Image = self._pillow_image()
         job = VisualCreativeJob(
@@ -280,6 +287,8 @@ class VisualCreativeApplicationTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "generated.png"
+            from PIL import Image
+
             image = Image.new("RGB", (200, 300), (128, 128, 128))
             for x in range(25, 175):
                 for y in range(20, 95):
@@ -294,6 +303,7 @@ class VisualCreativeApplicationTests(unittest.TestCase):
                 self.assertEqual(repaired.size, (200, 300))
 
 
+    @unittest.skipUnless(_PIL_AVAILABLE, "Pillow is optional in dependency-light canon")
     def test_materialization_crops_large_transparent_padding(self) -> None:
         Image = self._pillow_image()
         job = VisualCreativeJob(
@@ -306,6 +316,8 @@ class VisualCreativeApplicationTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "generated.png"
+            from PIL import Image
+
             image = Image.new("RGBA", (200, 300), (0, 0, 0, 0))
             for x in range(20, 180):
                 for y in range(20, 100):
@@ -374,6 +386,7 @@ class VisualCreativeApplicationTests(unittest.TestCase):
                 self.assertEqual(repaired.format, "WEBP")
                 self.assertEqual(repaired.size, (128, 128))
 
+    @unittest.skipUnless(_PIL_AVAILABLE, "Pillow is optional in dependency-light canon")
     def test_materialization_rejects_non_image_payload(self) -> None:
         self._pillow_image()
         job = VisualCreativeJob(
