@@ -63,46 +63,20 @@ def test_transient_render_cleanup_expires_bytes_and_readiness(tmp_path):
     assert not target.exists()
 
 
-def test_transient_migration_purges_legacy_persistent_render_bytes(tmp_path):
-    state = tmp_path / "state"
-    legacy = state / "assets" / "old-pack"
-    legacy.mkdir(parents=True)
-    old_file = legacy / "feed.jpg"
-    old_file.write_bytes(_image())
-
-    legacy_store = Store(state)
-    pack_id, _ = legacy_store.get_or_create_pack(
-        scope_id="tenant-a",
-        source_job_id="job1",
-        idempotency_key="tenant-a:render:legacy",
-        request_hash="b" * 64,
-        formats=["feed"],
-        composition={},
-    )
-    claim = legacy_store.claim(pack_id)
-    assert claim
-    persisted = legacy_store.assets / pack_id
-    persisted.mkdir(parents=True, exist_ok=True)
-    persisted_file = persisted / "feed.jpg"
-    persisted_file.write_bytes(_image())
-    legacy_store.succeed(
-        pack_id,
-        claim,
-        [{
-            "format_id": "feed",
-            "kind": "image",
-            "width": 1080,
-            "height": 1350,
-            "mime_type": "image/jpeg",
-            "sha256": hashlib.sha256(persisted_file.read_bytes()).hexdigest(),
-            "path": f"{pack_id}/feed.jpg",
-        }],
+def test_transient_render_output_requirement_rejects_persistent_directory(tmp_path, monkeypatch):
+    persistent = tmp_path / "persistent-assets"
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path / "ram-root"))
+    config = GatewayConfig(
+        token=TOKEN,
+        upstream_url="http://127.0.0.1:9999",
+        upstream_token="",
+        state_dir=tmp_path / "state",
+        asset_dir=persistent,
+        transient_assets_required=True,
     )
 
-    transient = tmp_path / "tmpfs-assets"
-    migrated = Store(state, asset_root=transient)
-    assert not (state / "assets").exists()
-    assert migrated.pack(pack_id, "tenant-a")["assets"][0]["asset_ready"] is False
+    with pytest.raises(RuntimeError, match="persistent_user_media_forbidden"):
+        create_app(config)
 
 
 @pytest.fixture
