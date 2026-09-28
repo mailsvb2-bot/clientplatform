@@ -46,7 +46,7 @@ class GatewayConfig:
     upstream_url: str
     upstream_token: str
     state_dir: Path
-    asset_dir: Path = Path("/tmp/visual-gateway-assets")
+    asset_dir: Path | None = None
     transient_asset_ttl_seconds: int = 21_600
     transient_asset_cleanup_limit: int = 200
     daily_generation_limit: int = 100
@@ -902,7 +902,7 @@ def create_app(config: GatewayConfig | None = None) -> web.Application:
     app["config"] = config
     app["store"] = Store(
         config.state_dir,
-        asset_root=config.asset_dir,
+        asset_root=config.asset_dir or (config.state_dir / "assets"),
         asset_ttl_seconds=config.transient_asset_ttl_seconds,
         asset_cleanup_limit=config.transient_asset_cleanup_limit,
     )
