@@ -43,6 +43,7 @@ class AdPublicationAsset:
     provider_video_id: str | None = None
     provider_creative_id: str | None = None
     provider_error_code: str | None = None
+    provider_upload_status: str = "ready"
 
     def __post_init__(self) -> None:
         for name in ("publication_job_id", "business_id", "created_by_member_id"):
@@ -81,10 +82,15 @@ class AdPublicationAsset:
                 if not normalized or len(normalized) > 255 or "\x00" in normalized:
                     raise ValueError(f"{name} is invalid")
                 object.__setattr__(self, name, normalized)
-        if self.kind == AdPublicationAssetKind.IMAGE and not self.provider_image_hash:
-            raise ValueError("advertising image provider reference is required")
-        if self.kind == AdPublicationAssetKind.VIDEO and not self.provider_video_id:
-            raise ValueError("advertising video provider reference is required")
+        upload_status = str(self.provider_upload_status or "").strip().lower()
+        if upload_status not in {"uploading", "ready", "ambiguous", "failed"}:
+            raise ValueError("advertising media upload status is invalid")
+        object.__setattr__(self, "provider_upload_status", upload_status)
+        if upload_status == "ready":
+            if self.kind == AdPublicationAssetKind.IMAGE and not self.provider_image_hash:
+                raise ValueError("advertising image provider reference is required")
+            if self.kind == AdPublicationAssetKind.VIDEO and not self.provider_video_id:
+                raise ValueError("advertising video provider reference is required")
         if self.provider_error_code is not None:
             error_code = str(self.provider_error_code).strip().lower()
             if not _SAFE_PROVIDER_ERROR_RE.fullmatch(error_code):
