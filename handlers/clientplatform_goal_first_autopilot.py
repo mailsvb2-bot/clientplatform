@@ -487,6 +487,9 @@ async def receive_custom_image(message: Message, state: FSMContext) -> None:
         OSError,
         asyncio.TimeoutError,
         AdPublicationAssetError,
+        AdConnectionError,
+        YandexDirectError,
+        RuntimeError,
         TenantPermissionDenied,
     ):
         await message.answer(
@@ -495,8 +498,9 @@ async def receive_custom_image(message: Message, state: FSMContext) -> None:
         return
     await state.set_state(GoalFirstAutopilotState.customizing)
     await message.answer(
-        "✅ Картинку добавил. Я сама подготовлю и прикреплю её к объявлению — "
-        "скачивать или загружать её в Яндекс вручную не понадобится.",
+        "✅ Картинка уже загружена в Яндекс Директ и привязана к этому "
+        "рекламному черновику через provider reference. Постоянную копию файла "
+        "ClientPlatform не хранит.",
         reply_markup=_custom_keyboard(str(data["business_token"])),
     )
 
@@ -556,8 +560,9 @@ async def receive_custom_video(message: Message, state: FSMContext) -> None:
         return
     await state.set_state(GoalFirstAutopilotState.customizing)
     await message.answer(
-        "✅ Видео добавил. Дальше всё автоматически: ClientPlatform загрузит его "
-        "в Яндекс, дождётся конвертации и прикрепит к объявлению.",
+        "✅ Видео уже передано в Яндекс. ClientPlatform хранит только provider "
+        "reference, дождётся конвертации и прикрепит ролик к объявлению без "
+        "постоянной серверной копии.",
         reply_markup=_custom_keyboard(str(data["business_token"])),
     )
 
@@ -780,15 +785,15 @@ async def _finish_generated_visual(
     if visual_kind == "video":
         await control._callback_message(event).answer_video(
             FSInputFile(path),
-            caption="✅ Видео готово и уже привязано к рекламному черновику ClientPlatform.",
+            caption="✅ Видео готово и передано в рекламный provider.",
         )
-        follow_up = "В Яндекс вручную его загружать не нужно."
+        follow_up = "В Яндекс вручную его загружать не нужно; локальной постоянной копии нет."
     else:
         await control._callback_message(event).answer_photo(
             FSInputFile(path),
-            caption="✅ Картинка готова и уже привязана к рекламному черновику ClientPlatform.",
+            caption="✅ Картинка готова и загружена в рекламный provider.",
         )
-        follow_up = "В Яндекс вручную её загружать не нужно."
+        follow_up = "В Яндекс вручную её загружать не нужно; локальной постоянной копии нет."
     await control._callback_message(event).answer(
         follow_up,
         reply_markup=_custom_keyboard(str(data["business_token"])),
