@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import tempfile
 from pathlib import Path
 
 from clientplatform.application.ad_publication_assets import attach_image_file
@@ -198,9 +199,8 @@ def _attach_render(
     format_id = render_format_for_placement(placement)
     if format_id not in variant.formats:
         raise CreativeStudioPublicationError("creative_render_format_not_requested")
-    temporary: Path | None = None
-    try:
-        temporary = download_render_asset(render, format_id)
+    with tempfile.TemporaryDirectory(prefix="clientplatform-render-") as directory:
+        temporary = download_render_asset(render, format_id, output_dir=directory)
         binding = _current_binding(actor=actor, publication_job_id=publication_job_id)
         if binding.variant_id != variant.variant_id:
             raise ValueError("creative_variant_binding_changed")
@@ -212,12 +212,6 @@ def _attach_render(
             path=temporary,
             source=AdPublicationAssetSource.GENERATED,
         )
-    finally:
-        if temporary is not None:
-            try:
-                temporary.unlink(missing_ok=True)
-            except OSError:
-                pass
     binding = _remember(
         actor=actor,
         publication_job_id=publication_job_id,
