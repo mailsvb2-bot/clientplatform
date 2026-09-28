@@ -55,9 +55,9 @@ class AdPublicationAsset:
         object.__setattr__(self, "kind", AdPublicationAssetKind(self.kind))
         object.__setattr__(self, "source", AdPublicationAssetSource(self.source))
         path = str(self.storage_path or "").strip()
-        if not path or "\x00" in path or len(path) > 2048:
-            raise ValueError("advertising asset storage path is invalid")
-        object.__setattr__(self, "storage_path", path)
+        if path:
+            raise ValueError("persistent advertising media storage is forbidden")
+        object.__setattr__(self, "storage_path", "")
         content_type = str(self.content_type or "").strip().lower()
         if not content_type or len(content_type) > 120 or "\x00" in content_type:
             raise ValueError("advertising asset content type is invalid")
