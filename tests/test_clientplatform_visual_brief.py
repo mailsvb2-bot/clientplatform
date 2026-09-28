@@ -318,6 +318,7 @@ class VisualCreativeApplicationTests(unittest.TestCase):
                 self.assertEqual(repaired.size, (160, 80))
 
     def test_materialization_rejects_non_image_payload(self) -> None:
+        self._pillow_image()
         job = VisualCreativeJob(
             id="job-image",
             provider="fake",
