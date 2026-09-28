@@ -8,7 +8,7 @@ from clientplatform.application.ad_publication_assets import (
     remember_provider_ids,
 )
 from clientplatform.application.ad_provider_session import (
-    _AUTH_ERRORS,
+    AUTH_ERRORS,
     ad_vault,
     load_bundle,
     refresh_bundle,
@@ -22,10 +22,7 @@ from clientplatform.domain.ad_connections import (
 from clientplatform.domain.ad_publication_assets import AdPublicationAssetKind
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.ad_connection_repository import AdConnectionRepository
-from clientplatform.infrastructure.ad_credential_vault import (
-    AdCredentialVault,
-    AgeAdCredentialVault,
-)
+from clientplatform.infrastructure.ad_credential_vault import AdCredentialVault
 from clientplatform.infrastructure.ad_goal_publication_repository import (
     AdGoalPublicationRepository,
 )
@@ -176,7 +173,7 @@ def _sync_submitted_media(
                 ad_id=job.external_ad_id,
             )
         except YandexDirectError as exc:
-            if exc.code not in _AUTH_ERRORS or not bundle.refresh_token:
+            if exc.code not in AUTH_ERRORS or not bundle.refresh_token:
                 raise
             bundle = refresh_bundle(
                 connection=connection,
@@ -258,7 +255,7 @@ def submit_goal_publication(
                 ad_id=result.ad_id,
             )
         except YandexDirectError as exc:
-            if exc.code not in _AUTH_ERRORS or not bundle.refresh_token:
+            if exc.code not in AUTH_ERRORS or not bundle.refresh_token:
                 raise
             bundle = refresh_bundle(
                 connection=connection,
@@ -370,7 +367,7 @@ def process_one_pending_video_asset(
             video_id=video_id,
         )
     except YandexDirectError as exc:
-        if exc.code not in _AUTH_ERRORS or not bundle.refresh_token:
+        if exc.code not in AUTH_ERRORS or not bundle.refresh_token:
             return False
         bundle = refresh_bundle(
             connection=connection,
