@@ -325,6 +325,22 @@ def _lifecycle_level(days_remaining: object, status: object) -> int:
     return 0
 
 
+def _effective_video_mode(snapshot: VisualProviderHealthSnapshot) -> str:
+    explicit = str(snapshot.video_generation_mode or "").strip().lower()
+    if explicit in {"native", "motion", "unavailable"}:
+        return explicit
+    if snapshot.configured_video_native:
+        return "native"
+    if snapshot.configured_video_motion:
+        return "motion"
+    configured = tuple(str(name or "").strip().lower() for name in snapshot.configured_video)
+    if any(name and name != "yandexart_motion" for name in configured):
+        return "native"
+    if "yandexart_motion" in configured:
+        return "motion"
+    return "unavailable"
+
+
 def _provider_state_and_alerts(
     snapshot: VisualProviderHealthSnapshot,
     previous: dict[str, Any] | None,
@@ -337,7 +353,7 @@ def _provider_state_and_alerts(
         "configured_video": list(snapshot.configured_video),
         "configured_video_native": list(snapshot.configured_video_native),
         "configured_video_motion": list(snapshot.configured_video_motion),
-        "video_generation_mode": snapshot.video_generation_mode,
+        "video_generation_mode": _effective_video_mode(snapshot),
         "models": {},
         "runtime": {},
         "circuits": {},
@@ -374,7 +390,7 @@ def _provider_state_and_alerts(
             )
 
     previous_video_mode = str(prev.get("video_generation_mode") or "")
-    video_mode = str(snapshot.video_generation_mode or "unavailable")
+    video_mode = _effective_video_mode(snapshot)
     if video_mode == "motion" and previous_video_mode != "motion":
         alerts.append(
             "🟠 Полноценная AI-генерация видео недоступна\n"
