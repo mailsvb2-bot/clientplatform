@@ -260,6 +260,31 @@ class VisualCreativeApplicationTests(unittest.TestCase):
             with Image.open(result) as repaired:
                 self.assertEqual(repaired.size, (200, 300))
 
+    def test_materialization_can_preserve_large_intentional_copy_space(self) -> None:
+        job = VisualCreativeJob(
+            id="job-image",
+            provider="fake",
+            scope_id="business-id",
+            kind="image",
+            status="succeeded",
+            asset_ready=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "generated.png"
+            image = Image.new("RGB", (200, 300), (128, 128, 128))
+            for x in range(25, 175):
+                for y in range(20, 95):
+                    image.putpixel((x, y), (20, 25, 30))
+            image.save(path)
+            with patch.object(visual_creatives, "download_visual", return_value=path):
+                result = visual_creatives.materialize_ad_visual(
+                    job,
+                    repair_blank_bands=False,
+                )
+            with Image.open(result) as repaired:
+                self.assertEqual(repaired.size, (200, 300))
+
+
     def test_materialization_crops_large_transparent_padding(self) -> None:
         job = VisualCreativeJob(
             id="job-image",
