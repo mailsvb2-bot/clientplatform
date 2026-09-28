@@ -1,12 +1,18 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from clientplatform.application.ad_publication_assets import (
     get_asset_for_worker,
     remember_provider_ids,
+)
+from clientplatform.application.ad_provider_session import (
+    _AUTH_ERRORS,
+    ad_vault,
+    load_bundle,
+    refresh_bundle,
+    yandex_provider,
 )
 from clientplatform.domain.ad_connections import (
     AdConnectionError,
@@ -29,89 +35,12 @@ from clientplatform.infrastructure.ad_publication_asset_repository import (
 from clientplatform.infrastructure.ad_worker_store import AdWorkerStore
 from clientplatform.integrations.yandex_direct import (
     YandexDirectError,
-    YandexOAuthConfig,
     YandexTokenBundle,
 )
 from clientplatform.integrations.yandex_direct_media import (
     MediaAwareYandexDirectProvider,
 )
 from services.db import get_db, get_db_ro
-
-
-_AUTH_ERRORS = {
-    "provider_http_401",
-    "provider_53",
-    "provider_54",
-    "provider_55",
-    "provider_56",
-    "provider_invalid_token",
-    "provider_unauthorized",
-    "oauth_refresh_token_missing",
-}
-
-
-class GoalPublicationBusy(AdConnectionError):
-    """The exact idempotent draft is already being processed."""
-
-
-@dataclass(frozen=True, slots=True)
-class GoalPublicationResult:
-    job: AdPublicationJob
-    media_attached: bool
-    media_pending: bool
-    media_failed: bool = False
-
-
-def _vault() -> AdCredentialVault:
-    return AgeAdCredentialVault()
-
-
-def _provider() -> MediaAwareYandexDirectProvider:
-    enabled = str(os.getenv("CLIENTPLATFORM_AD_CONNECTIONS_ENABLED") or "").strip().lower()
-    if enabled not in {"1", "true", "yes", "on"}:
-        raise RuntimeError("advertising account connections are disabled")
-    client_id = str(os.getenv("CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_ID") or "").strip()
-    redirect_uri = str(os.getenv("CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI") or "").strip()
-    if not client_id or not redirect_uri:
-        raise RuntimeError("Yandex Direct provider is not configured")
-    return MediaAwareYandexDirectProvider(
-        oauth=YandexOAuthConfig(
-            client_id=client_id,
-            client_secret=str(
-                os.getenv("CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_SECRET") or ""
-            ).strip(),
-            redirect_uri=redirect_uri,
-        )
-    )
-
-
-def _load_bundle(
-    *,
-    job: AdPublicationJob,
-    vault: AdCredentialVault,
-) -> tuple[object, YandexTokenBundle]:
-    with get_db_ro() as conn:
-        connection, token_json = AdWorkerStore(conn, vault=vault).load_active(
-            business_id=job.business_id,
-            connection_id=job.connection_id,
-        )
-    return connection, YandexTokenBundle.from_json(token_json)
-
-
-def _refresh_bundle(
-    *,
-    connection: object,
-    bundle: YandexTokenBundle,
-    provider: MediaAwareYandexDirectProvider,
-    vault: AdCredentialVault,
-) -> YandexTokenBundle:
-    refreshed = provider.refresh(bundle=bundle)
-    with get_db() as conn:
-        AdWorkerStore(conn, vault=vault).replace_token_bundle(
-            connection=connection,
-            token_bundle_json=refreshed.to_json(),
-        )
-    return refreshed
 
 
 def _publish_text(
@@ -231,7 +160,7 @@ def _sync_submitted_media(
 ) -> GoalPublicationResult:
     if not job.external_ad_id:
         raise AdConnectionError("submitted advertising draft is missing provider ad id")
-    connection, bundle = _load_bundle(job=job, vault=vault)
+    connection, bundle = load_bundle(job=job, vault=vault)
     try:
         try:
             _sync_copy(
@@ -249,7 +178,7 @@ def _sync_submitted_media(
         except YandexDirectError as exc:
             if exc.code not in _AUTH_ERRORS or not bundle.refresh_token:
                 raise
-            bundle = _refresh_bundle(
+            bundle = refresh_bundle(
                 connection=connection,
                 bundle=bundle,
                 provider=provider,
@@ -286,8 +215,8 @@ def submit_goal_publication(
 ) -> GoalPublicationResult:
     """Create/sync exactly this owner's Yandex DRAFT before spend consent."""
 
-    selected_vault = vault or _vault()
-    selected_provider = provider or _provider()
+    selected_vault = vault or ad_vault()
+    selected_provider = provider or yandex_provider()
     submitted_current: AdPublicationJob | None = None
     with get_db() as conn:
         repository = AdGoalPublicationRepository(conn)
@@ -308,7 +237,7 @@ def submit_goal_publication(
     if claim is None:
         raise GoalPublicationBusy("advertising draft claim was not acquired")
     job, lock_token = claim.job, claim.lock_token
-    connection, bundle = _load_bundle(job=job, vault=selected_vault)
+    connection, bundle = load_bundle(job=job, vault=selected_vault)
     try:
         try:
             result = _publish_text(
@@ -331,7 +260,7 @@ def submit_goal_publication(
         except YandexDirectError as exc:
             if exc.code not in _AUTH_ERRORS or not bundle.refresh_token:
                 raise
-            bundle = _refresh_bundle(
+            bundle = refresh_bundle(
                 connection=connection,
                 bundle=bundle,
                 provider=selected_provider,
@@ -397,8 +326,8 @@ def process_one_pending_video_asset(
 ) -> bool:
     """Finish one persisted Yandex video extension after provider conversion."""
 
-    selected_vault = vault or _vault()
-    selected_provider = provider or _provider()
+    selected_vault = vault or ad_vault()
+    selected_provider = provider or yandex_provider()
     threshold = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat(
         timespec="seconds"
     )
@@ -443,7 +372,7 @@ def process_one_pending_video_asset(
     except YandexDirectError as exc:
         if exc.code not in _AUTH_ERRORS or not bundle.refresh_token:
             return False
-        bundle = _refresh_bundle(
+        bundle = refresh_bundle(
             connection=connection,
             bundle=bundle,
             provider=selected_provider,
