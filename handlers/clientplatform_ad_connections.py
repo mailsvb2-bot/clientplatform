@@ -772,7 +772,11 @@ async def _render_ad_visual(
     target = _message(callback)
     if job.status == "succeeded" and job.asset_ready:
         try:
-            path = await asyncio.to_thread(materialize_ad_visual, job)
+            path = await asyncio.to_thread(
+                materialize_ad_visual,
+                job,
+                repair_blank_bands=False,
+            )
         except VisualCreativeError:
             await state.update_data(creative_job_id="")
             await target.answer(
@@ -870,7 +874,11 @@ async def refresh_ad_visual(callback: CallbackQuery, state: FSMContext) -> None:
     target = _message(callback)
     if job.status == "succeeded" and job.asset_ready:
         try:
-            path = await asyncio.to_thread(materialize_ad_visual, job)
+            path = await asyncio.to_thread(
+                materialize_ad_visual,
+                job,
+                repair_blank_bands=False,
+            )
         except VisualCreativeError:
             await state.update_data(creative_job_id="")
             await target.answer(
