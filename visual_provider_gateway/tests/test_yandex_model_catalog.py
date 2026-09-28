@@ -124,6 +124,29 @@ def test_catalog_allows_dedicated_key_even_when_generation_key_is_absent(monkeyp
     assert snapshot.available is True
 
 
+def test_dedicated_catalog_key_does_not_inherit_generation_bearer_scheme(monkeypatch):
+    catalog.clear_yandex_model_catalog_cache()
+    observed = {}
+
+    def fake_urlopen(request, timeout):
+        observed["authorization"] = request.headers.get("Authorization")
+        return _Response(
+            b'{"data":[{"id":"art://folder/aliceai-image-art-3.0"}]}'
+        )
+
+    monkeypatch.setenv("YANDEX_MODEL_CATALOG_API_KEY", "catalog-key")
+    monkeypatch.delenv("YANDEX_MODEL_CATALOG_AUTH_SCHEME", raising=False)
+    monkeypatch.setenv("YANDEX_ART_AUTH_SCHEME", "Bearer")
+    monkeypatch.setenv("YANDEX_ART_IAM_TOKEN", "generation-iam-token")
+    monkeypatch.delenv("YANDEX_API_KEY", raising=False)
+    monkeypatch.setattr(catalog.urllib.request, "urlopen", fake_urlopen)
+
+    snapshot = catalog.refresh_yandex_model_catalog(_config())
+
+    assert snapshot.available is True
+    assert observed["authorization"] == "Api-Key catalog-key"
+
+
 def test_catalog_auth_scheme_can_be_separate_from_generation_auth(monkeypatch):
     catalog.clear_yandex_model_catalog_cache()
     observed = {}
