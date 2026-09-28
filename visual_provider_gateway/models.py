@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+import os
+import tempfile
 import urllib.parse
 from typing import Any, Literal
 
@@ -146,6 +148,15 @@ def _normalize_ratio(value: str) -> str:
 
 
 def ensure_output_dir(path: str) -> Path:
-    target = Path(path or "data/visual_creatives").expanduser()
+    target = Path(path or "data/visual_creatives").expanduser().resolve()
+    transient_required = str(
+        os.getenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "0") or "0"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if transient_required:
+        transient_root = Path(tempfile.gettempdir()).resolve()
+        try:
+            target.relative_to(transient_root)
+        except ValueError as exc:
+            raise RuntimeError("visual_persistent_user_media_forbidden") from exc
     target.mkdir(parents=True, exist_ok=True)
     return target
