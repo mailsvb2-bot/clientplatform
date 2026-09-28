@@ -58,7 +58,7 @@ from clientplatform.domain.ad_spend import AdSpendError
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.integrations.yandex_direct import YandexDirectError
-from services.visual_creative_gateway import download_render_asset
+from services.visual_creative_gateway import VisualCreativeGatewayError, download_render_asset
 from clientplatform.presentation.visual_generation import (
     visual_failure_message,
     visual_provider_unavailable_message,
@@ -737,21 +737,31 @@ async def _finish_generated_visual(
             creative_variant_id=result.binding.variant_id,
         )
         await state.set_state(GoalFirstAutopilotState.customizing)
+        preview_available = False
         if result.render is not None:
-            with tempfile.TemporaryDirectory(prefix="clientplatform-preview-") as directory:
-                preview = await asyncio.to_thread(
-                    download_render_asset,
-                    result.render,
-                    render_format_for_placement("yandex_direct"),
-                    output_dir=directory,
-                )
-                await control._callback_message(event).answer_photo(
-                    FSInputFile(preview),
-                    caption="✅ Картинка готова и загружена в рекламный provider.",
-                )
+            try:
+                with tempfile.TemporaryDirectory(prefix="clientplatform-preview-") as directory:
+                    preview = await asyncio.to_thread(
+                        download_render_asset,
+                        result.render,
+                        render_format_for_placement("yandex_direct"),
+                        output_dir=directory,
+                    )
+                    await control._callback_message(event).answer_photo(
+                        FSInputFile(preview),
+                        caption="✅ Картинка готова и загружена в рекламный provider.",
+                    )
+                    preview_available = True
+            except (OSError, VisualCreativeGatewayError):
+                preview_available = False
+        preview_note = (
+            ""
+            if preview_available
+            else " Превью сейчас не удалось повторно получить, но рекламный provider уже подтвердил картинку."
+        )
         await control._callback_message(event).answer(
             "Квадратный формат уже передан в Yandex Direct по provider reference. "
-            "Постоянную копию картинки ClientPlatform не хранит.",
+            "Постоянную копию картинки ClientPlatform не хранит." + preview_note,
             reply_markup=_custom_keyboard(str(data["business_token"])),
         )
         return True
