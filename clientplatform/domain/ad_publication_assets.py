@@ -31,7 +31,6 @@ class AdPublicationAsset:
     business_id: str
     kind: AdPublicationAssetKind
     source: AdPublicationAssetSource
-    storage_path: str
     content_type: str
     original_name: str
     sha256: str
@@ -54,10 +53,6 @@ class AdPublicationAsset:
             )
         object.__setattr__(self, "kind", AdPublicationAssetKind(self.kind))
         object.__setattr__(self, "source", AdPublicationAssetSource(self.source))
-        path = str(self.storage_path or "").strip()
-        if path:
-            raise ValueError("persistent advertising media storage is forbidden")
-        object.__setattr__(self, "storage_path", "")
         content_type = str(self.content_type or "").strip().lower()
         if not content_type or len(content_type) > 120 or "\x00" in content_type:
             raise ValueError("advertising asset content type is invalid")
