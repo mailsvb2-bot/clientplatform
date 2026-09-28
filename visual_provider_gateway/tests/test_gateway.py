@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -121,6 +123,44 @@ def test_service_submit_retry_does_not_duplicate_provider_call(tmp_path, monkeyp
     path, mime = svc.content_path(created["id"], client_id="client-a", scope_id="tenant-a")
     assert path == asset.resolve()
     assert mime == "image/png"
+
+
+def test_succeeded_job_is_not_asset_ready_after_transient_file_disappears(tmp_path, monkeypatch):
+    output = tmp_path / "out"
+    output.mkdir()
+    asset = output / "image-fake-provider-1.png"
+    asset.write_bytes(b"png")
+    monkeypatch.setenv("VISUAL_CREATIVE_OUTPUT_DIR", str(output))
+    engine = FakeEngine(asset)
+    svc = VisualGatewayService(store=JobStore(str(tmp_path / "jobs.sqlite3")), engine=engine)
+
+    created = svc.submit(payload(), client_id="client-a")
+    done = svc.poll(created["id"], client_id="client-a", scope_id="tenant-a")
+    assert done["asset_ready"] is True
+
+    asset.unlink()
+    recovered = svc.poll(created["id"], client_id="client-a", scope_id="tenant-a")
+    assert recovered["status"] == "succeeded"
+    assert recovered["asset_ready"] is False
+
+
+def test_transient_asset_cleanup_removes_only_expired_files(tmp_path, monkeypatch):
+    output = tmp_path / "out"
+    output.mkdir()
+    expired = output / "expired.jpg"
+    fresh = output / "fresh.jpg"
+    expired.write_bytes(b"old")
+    fresh.write_bytes(b"new")
+    old = time.time() - 601
+    os.utime(expired, (old, old))
+
+    monkeypatch.setenv("VISUAL_CREATIVE_OUTPUT_DIR", str(output))
+    monkeypatch.setenv("VISUAL_TRANSIENT_ASSET_TTL_SECONDS", "300")
+    svc = VisualGatewayService(store=JobStore(str(tmp_path / "jobs.sqlite3")), engine=FakeEngine(fresh))
+
+    assert svc._cleanup_transient_assets() == 1
+    assert not expired.exists()
+    assert fresh.exists()
 
 
 def test_service_enforces_daily_limit(tmp_path, monkeypatch):
