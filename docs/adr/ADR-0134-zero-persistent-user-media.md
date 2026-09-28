@@ -24,7 +24,7 @@ The owner requirement is stricter: ClientPlatform must not be a permanent storag
 
 - A provider/app restart may invalidate an undelivered transient asset. Recovery must therefore prefer immediate delivery/provider upload and durable external references instead of extending local retention.
 - Retry semantics must distinguish paid generation from media delivery so a delivery retry never silently starts another paid generation.
-- Existing persistent advertising asset storage must be migrated in a later vertical slice before the zero-persistence policy is complete.
+- Advertising media selection/upload now transfers bytes directly to the advertising provider and persists only provider identifiers plus non-payload metadata; the legacy storage_path column is constrained to the empty string for new schemas.
 - Existing program/course media that is explicitly sourced from external cloud storage is unaffected by this generated-media slice; those references remain external rather than being copied into ClientPlatform.
 
 ## First implementation slice
@@ -40,6 +40,9 @@ This PR:
 ## Follow-up slices
 
 1. Persist provider media references after owner-channel delivery and expose «Скачать / сохранить» without a ClientPlatform media archive.
-2. Replace persistent ad publication files with transient upload/normalization plus provider IDs.
-3. Add «Добавить свою картинку» and «Использовать ранее созданную» to advertising setup.
-4. Generalize the same no-persistent-media contract to video/audio owner flows and omnichannel delivery.
+2. Add «Использовать ранее созданную» to advertising setup over durable external provider references.
+3. Generalize the same no-persistent-media contract to remaining video/audio owner flows and omnichannel delivery.
+
+## Advertising provider-reference slice
+
+Advertising image/video bytes are normalized or validated only in memory/transient input, uploaded immediately to the selected advertising provider, and then discarded. Durable ClientPlatform state contains checksum/size/type metadata and Yandex Direct provider identifiers only. Worker publication attaches those identifiers and never reopens a local media file.
