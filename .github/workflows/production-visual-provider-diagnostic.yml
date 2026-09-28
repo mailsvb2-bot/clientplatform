@@ -245,6 +245,7 @@ jobs:
           import os
           import re
           import sqlite3
+          import sys
 
           db_path = str(os.environ.get("VISUAL_GATEWAY_DB") or "/data/visual_gateway.sqlite3")
           with sqlite3.connect(db_path) as conn:
@@ -269,8 +270,7 @@ jobs:
               raise SystemExit(32)
           if re.fullmatch(r"[A-Za-z0-9_.:@/-]{1,160}", scope_id) is None:
               raise SystemExit(33)
-          print(job_id)
-          print(scope_id)
+          sys.stdout.write(job_id + "\n" + scope_id + "\n")
           PY
           )"
           job_id="$(printf '%s\n' "$probe_ref" | sed -n '1p')"
