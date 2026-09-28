@@ -201,7 +201,7 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
             b.text for r in creative._menu_rows(_TOKEN).inline_keyboard for b in r
         ]
         self.assertIn("✨ Создать картинку", menu_labels)
-        self.assertIn("🎬 Создать видео", menu_labels)
+        self.assertIn("🎬 Создать AI-видео", menu_labels)
         prepared = creative._menu_rows(
             _TOKEN, receipt(status=CreativeGenerationReceiptStatus.PREPARED)
         )
@@ -305,6 +305,11 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
                         new=AsyncMock(return_value=actor()),
                     ),
                     patch.object(creative, "visual_generation_ready", return_value=ready),
+                    patch.object(
+                        creative,
+                        "visual_video_generation_mode",
+                        return_value="native" if ready else "unavailable",
+                    ),
                     patch.object(creative.control, "_callback_message", return_value=target),
                 ):
                     await creative.creative_provider_status(cb)
@@ -370,6 +375,7 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(creative, "_actor_for_callback", new=AsyncMock(return_value=actor())),
             patch.object(creative, "_active", new=AsyncMock(return_value=None)),
+            patch.object(creative, "visual_video_generation_mode", return_value="native"),
             patch.object(creative.control, "_callback_message", return_value=target),
         ):
             await creative.ask_creative_video_prompt(video, video_state)
