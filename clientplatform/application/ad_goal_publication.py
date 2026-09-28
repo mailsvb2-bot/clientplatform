@@ -96,6 +96,12 @@ def _attach_media(
     if asset is None:
         provider.clear_media(access_token=bundle.access_token, ad_id=ad_id)
         return False, False, False
+    if asset.provider_upload_status == "uploading":
+        provider.clear_media(access_token=bundle.access_token, ad_id=ad_id)
+        return False, True, False
+    if asset.provider_upload_status != "ready":
+        provider.clear_media(access_token=bundle.access_token, ad_id=ad_id)
+        return False, False, True
     if asset.provider_error_code:
         provider.clear_media(access_token=bundle.access_token, ad_id=ad_id)
         return False, False, True
