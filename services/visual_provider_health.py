@@ -14,7 +14,7 @@ class VisualProviderHealthSnapshot:
     configured_video: tuple[str, ...] = ()
     configured_video_native: tuple[str, ...] = ()
     configured_video_motion: tuple[str, ...] = ()
-    video_generation_mode: str = "unavailable"
+    video_generation_mode: str = ""
     image_order: tuple[str, ...] = ()
     video_order: tuple[str, ...] = ()
     models: dict[str, dict[str, Any]] = field(default_factory=dict)
