@@ -24,13 +24,12 @@ def _jpeg() -> bytes:
     return output.getvalue()
 
 
-def _asset(*, storage_path: str = "", provider_image_hash: str | None = "hash-1"):
+def _asset(*, provider_image_hash: str | None = "hash-1"):
     return AdPublicationAsset(
         publication_job_id=str(uuid4()),
         business_id=str(uuid4()),
         kind=AdPublicationAssetKind.IMAGE,
         source=AdPublicationAssetSource.UPLOAD,
-        storage_path=storage_path,
         content_type="image/jpeg",
         original_name="photo.jpg",
         sha256="a" * 64,
@@ -42,9 +41,8 @@ def _asset(*, storage_path: str = "", provider_image_hash: str | None = "hash-1"
     )
 
 
-def test_advertising_asset_rejects_local_storage_and_missing_provider_reference() -> None:
-    with pytest.raises(ValueError, match="persistent advertising media storage is forbidden"):
-        _asset(storage_path="/var/lib/clientplatform/ad-assets/photo.jpg")
+def test_advertising_asset_domain_has_no_local_storage_field() -> None:
+    assert "storage_path" not in AdPublicationAsset.__dataclass_fields__
     with pytest.raises(ValueError, match="provider reference is required"):
         _asset(provider_image_hash=None)
 
@@ -72,13 +70,11 @@ def test_image_bytes_upload_immediately_and_persist_only_provider_reference(monk
 
         def replace(self, **kwargs):
             captured["replace"] = kwargs
-            return (
-                AdPublicationAsset(
+            return AdPublicationAsset(
                     publication_job_id=publication_job_id,
                     business_id=actor.business_id,
                     kind=kwargs["kind"],
                     source=kwargs["source"],
-                    storage_path=kwargs["storage_path"],
                     content_type=kwargs["content_type"],
                     original_name=kwargs["original_name"],
                     sha256=kwargs["sha256"],
@@ -88,9 +84,7 @@ def test_image_bytes_upload_immediately_and_persist_only_provider_reference(monk
                     created_by_member_id=str(uuid4()),
                     created_at="2026-09-29T00:00:00+00:00",
                     updated_at="2026-09-29T00:00:00+00:00",
-                ),
-                None,
-            )
+                )
 
     @contextmanager
     def fake_db():
@@ -122,9 +116,8 @@ def test_image_bytes_upload_immediately_and_persist_only_provider_reference(monk
     assert captured["access_token"] == "access-token"
     replace = captured["replace"]
     assert isinstance(replace, dict)
-    assert replace["storage_path"] == ""
+    assert "storage_path" not in replace
     assert replace["provider_image_hash"] == "provider-image-hash"
-    assert result.storage_path == ""
     assert result.provider_image_hash == "provider-image-hash"
 
 
@@ -167,3 +160,4 @@ def test_advertising_asset_application_has_no_persistent_storage_primitives() ->
     assert "mkstemp" not in source
     assert "_write_asset" not in source
     assert "/var/lib/clientplatform/ad-assets" not in source
+    assert "storage_path" not in source
