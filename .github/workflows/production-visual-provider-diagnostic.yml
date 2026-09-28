@@ -135,6 +135,8 @@ jobs:
                   "YANDEX_API_KEY": bool(os.environ.get("YANDEX_API_KEY")),
                   "YANDEX_ART_IAM_TOKEN": bool(os.environ.get("YANDEX_ART_IAM_TOKEN")),
                   "YANDEX_ART_FOLDER_ID": bool(os.environ.get("YANDEX_ART_FOLDER_ID")),
+                  "YANDEX_MODEL_CATALOG_API_KEY": bool(os.environ.get("YANDEX_MODEL_CATALOG_API_KEY")),
+                  "YANDEX_MODEL_CATALOG_AUTH_SCHEME": bool(os.environ.get("YANDEX_MODEL_CATALOG_AUTH_SCHEME")),
                   "VISUAL_SELFHOST_BASE_URL": bool(os.environ.get("VISUAL_SELFHOST_BASE_URL")),
                   "VISUAL_SELFHOST_VIDEO_MODEL": bool(os.environ.get("VISUAL_SELFHOST_VIDEO_MODEL")),
                   "VISUAL_SELFHOST_BACKUP_BASE_URL": bool(os.environ.get("VISUAL_SELFHOST_BACKUP_BASE_URL")),
