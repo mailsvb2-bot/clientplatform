@@ -160,6 +160,15 @@ jobs:
           import sqlite3
           import time
 
+          credential_presence = {
+              "YANDEX_MODEL_CATALOG_API_KEY": bool(os.environ.get("YANDEX_MODEL_CATALOG_API_KEY")),
+              "YANDEX_MODEL_CATALOG_AUTH_SCHEME": bool(os.environ.get("YANDEX_MODEL_CATALOG_AUTH_SCHEME")),
+          }
+          print(
+              "CLIENTPLATFORM_PRODUCTION_VISUAL_PROVIDER_CREDENTIAL_PRESENCE "
+              + json.dumps(credential_presence, ensure_ascii=False, sort_keys=True)
+          )
+
           db_path = str(os.environ.get("VISUAL_GATEWAY_DB") or "/data/visual_gateway.sqlite3")
           now = int(time.time())
           safe_rows = []
