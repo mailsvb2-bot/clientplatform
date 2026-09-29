@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import secrets
 from io import BytesIO
 
 from aiogram import F
@@ -952,8 +953,10 @@ async def choose_previous_ad_image(callback: CallbackQuery, state: FSMContext) -
             ),
         )
         return
+    reuse_token = secrets.token_hex(3)
     await state.update_data(
         reusable_image_job_ids=[item.publication_job_id for item in reusable],
+        reusable_image_token=reuse_token,
     )
     rows = []
     for index, item in enumerate(reusable):
@@ -963,7 +966,7 @@ async def choose_previous_ad_image(callback: CallbackQuery, state: FSMContext) -
         if len(name) > 20:
             name = name[:17] + "..."
         rows.append(
-            [(f"🖼 {origin} · {date} · {name}", f"cpa:media:reusepick:{index}")]
+            [(f"🖼 {origin} · {date} · {name}", f"cpa:media:reusepick:{reuse_token}:{index}")]
         )
     rows.append([("↩️ Назад", "cpa:media:cancel")])
     await callback.answer()
@@ -981,7 +984,14 @@ async def choose_previous_ad_image(callback: CallbackQuery, state: FSMContext) -
 async def apply_previous_ad_image(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     try:
-        index = int(str(callback.data).rsplit(":", 1)[1])
+        parts = str(callback.data).split(":")
+        if len(parts) != 5:
+            raise ValueError("stale reusable image callback")
+        callback_token = parts[3]
+        index = int(parts[4])
+        if callback_token != str(data.get("reusable_image_token") or ""):
+            await callback.answer("Список картинок устарел. Откройте его заново.", show_alert=True)
+            return
         source_job_id = str(list(data.get("reusable_image_job_ids") or [])[index])
         actor = await control._actor(
             int(callback.from_user.id),
@@ -999,7 +1009,7 @@ async def apply_previous_ad_image(callback: CallbackQuery, state: FSMContext) ->
     except AdPublicationAssetError:
         await callback.answer("Картинка больше не доступна", show_alert=True)
         return
-    await state.update_data(reusable_image_job_ids=[])
+    await state.update_data(reusable_image_job_ids=[], reusable_image_token="")
     await callback.answer("Картинка выбрана")
     await _message(callback).answer(
         "✅ Ранее использованная картинка привязана к текущему черновику через "
