@@ -468,3 +468,246 @@ def test_goal_first_safety_allows_editor_callbacks_without_weakening_other_state
         "GoalFirstAutopilotState:generation_pending",
         "cpo:editdone:business-token",
     )
+
+
+def _goal_data() -> dict[str, object]:
+    project = _project()
+    return {
+        "business_id": project.business_id,
+        "business_token": "business-token",
+        "job_id": project.publication_job_id,
+        "creative_title": "Обычный заголовок",
+        "creative_body": "Обычный текст",
+        "creative_job_id": "",
+        "creative_variant_id": "",
+    }
+
+
+def _goal_target():
+    return SimpleNamespace(
+        answer=AsyncMock(),
+        answer_photo=AsyncMock(),
+        answer_video=AsyncMock(),
+    )
+
+
+def _goal_callback(data: str, target=None):
+    return SimpleNamespace(
+        data=data,
+        from_user=SimpleNamespace(id=101),
+        answer=AsyncMock(),
+        message=target or _goal_target(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_reopening_finished_editable_project_skips_paid_generation(monkeypatch) -> None:
+    project = _project(status=EditableAdProjectStatus.FINISHED)
+    data = _goal_data()
+    state = _State(data)
+    target = _goal_target()
+    callback = _goal_callback("cpo:editask:image:business-token", target)
+    show = AsyncMock()
+    create_visual = Mock()
+
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(
+        goal.control,
+        "_actor",
+        AsyncMock(return_value=SimpleNamespace(business_id=project.business_id)),
+    )
+    monkeypatch.setattr(goal.control, "_callback_message", lambda _callback: target)
+    monkeypatch.setattr(
+        goal,
+        "load_goal_visual_brand",
+        lambda **_kwargs: SimpleNamespace(render_brand=lambda: BRAND),
+    )
+    monkeypatch.setattr(goal, "create_editable_ad_project", lambda **_kwargs: project)
+    monkeypatch.setattr(goal, "_show_editable_editor", show)
+    monkeypatch.setattr(goal, "create_ad_visual", create_visual)
+
+    await goal.ask_editable_ad_confirmation(callback, state)
+
+    show.assert_awaited_once()
+    create_visual.assert_not_called()
+    assert state.data["editable_ad_project_id"] == project.id
+    assert state.state == goal.GoalFirstAutopilotState.customizing
+
+
+@pytest.mark.asyncio
+async def test_expired_editable_project_requires_explicit_new_source_confirmation(
+    monkeypatch,
+) -> None:
+    project = _project(status=EditableAdProjectStatus.SOURCE_EXPIRED)
+    data = _goal_data()
+    state = _State(data)
+    target = _goal_target()
+    callback = _goal_callback("cpo:editask:image:business-token", target)
+
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(
+        goal.control,
+        "_actor",
+        AsyncMock(return_value=SimpleNamespace(business_id=project.business_id)),
+    )
+    monkeypatch.setattr(goal.control, "_callback_message", lambda _callback: target)
+    monkeypatch.setattr(
+        goal,
+        "load_goal_visual_brand",
+        lambda **_kwargs: SimpleNamespace(render_brand=lambda: BRAND),
+    )
+    monkeypatch.setattr(goal, "create_editable_ad_project", lambda **_kwargs: project)
+
+    await goal.ask_editable_ad_confirmation(callback, state)
+
+    labels_and_callbacks = [
+        (button.text, button.callback_data)
+        for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert any(
+        callback_data == "cpo:editgen:image:business-token"
+        for _label, callback_data in labels_and_callbacks
+    )
+    assert "Предыдущая AI-основа" in target.answer.await_args.args[0]
+    assert state.state == goal.GoalFirstAutopilotState.confirming_generation
+
+
+@pytest.mark.asyncio
+async def test_generate_editable_source_uses_explicit_project_revision(monkeypatch) -> None:
+    draft = _project(status=EditableAdProjectStatus.DRAFT)
+    draft = EditableAdProject(
+        **{
+            **{name: getattr(draft, name) for name in draft.__dataclass_fields__},
+            "source_job_id": "",
+            "revision": 7,
+        }
+    )
+    data = {
+        **_goal_data(),
+        "editable_ad_project_id": draft.id,
+        "editable_ad_kind": "image",
+    }
+    state = _State(data)
+    callback = _goal_callback("cpo:editgen:image:business-token")
+    generate = AsyncMock()
+
+    monkeypatch.setattr(
+        goal.control,
+        "_actor",
+        AsyncMock(return_value=SimpleNamespace(business_id=draft.business_id)),
+    )
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(goal, "get_editable_ad_project", lambda **_kwargs: draft)
+    monkeypatch.setattr(goal, "prepare_editable_ad_source", lambda **_kwargs: draft)
+    monkeypatch.setattr(goal, "_generate_custom_visual", generate)
+
+    await goal.generate_editable_ad_source(callback, state)
+
+    generate.assert_awaited_once()
+    assert generate.await_args.kwargs["editable_project_id"] == draft.id
+    assert generate.await_args.kwargs["editable_revision"] == 7
+    assert generate.await_args.kwargs["source_title"] == draft.headline
+    assert generate.await_args.kwargs["source_body"] == draft.body
+
+
+@pytest.mark.asyncio
+async def test_editable_generation_identity_is_separate_from_ordinary_generation(
+    monkeypatch,
+) -> None:
+    target = _goal_target()
+    callback = _goal_callback("unused", target)
+    editable_state = _State(_goal_data())
+    ordinary_state = _State(_goal_data())
+    jobs = [
+        SimpleNamespace(status="running", asset_ready=False, job_id="editable-job"),
+        SimpleNamespace(status="running", asset_ready=False, job_id="ordinary-job"),
+    ]
+    create = Mock(side_effect=jobs)
+
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(goal, "visual_generation_ready", lambda **_kwargs: True)
+    monkeypatch.setattr(goal, "create_ad_visual", create)
+    monkeypatch.setattr(
+        goal,
+        "_finish_editable_source_generation",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        goal,
+        "_finish_generated_visual",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(goal.control, "_callback_message", lambda _callback: target)
+
+    await goal._generate_custom_visual(
+        callback,
+        editable_state,
+        business_token="business-token",
+        kind="image",
+        editable_project_id=_project().id,
+        editable_revision=4,
+        source_title="Заголовок редактора",
+        source_body="Текст редактора",
+    )
+    await goal._generate_custom_visual(
+        callback,
+        ordinary_state,
+        business_token="business-token",
+        kind="image",
+    )
+
+    editable_key = create.call_args_list[0].kwargs["idempotency_key"]
+    ordinary_key = create.call_args_list[1].kwargs["idempotency_key"]
+    assert editable_key != ordinary_key
+    assert editable_state.data["editable_generation_active"] is True
+    assert ordinary_state.data["editable_generation_active"] is False
+
+
+@pytest.mark.asyncio
+async def test_succeeded_but_expired_editable_source_is_bound_before_recovery(
+    monkeypatch,
+) -> None:
+    project = _project()
+    data = {
+        **_goal_data(),
+        "editable_ad_project_id": project.id,
+        "editable_ad_kind": "image",
+    }
+    state = _State(data)
+    callback = _goal_callback("unused")
+    actor = SimpleNamespace(business_id=project.business_id)
+    bind = Mock(return_value=project)
+    show = AsyncMock()
+
+    monkeypatch.setattr(
+        goal.control,
+        "_actor",
+        AsyncMock(return_value=actor),
+    )
+    monkeypatch.setattr(goal.control, "_callback_message", lambda cb: cb.message)
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(goal, "bind_editable_ad_source", bind)
+    monkeypatch.setattr(goal, "_show_editable_editor", show)
+
+    completed = await goal._finish_editable_source_generation(
+        callback,
+        state,
+        data=data,
+        kind="image",
+        project_id=project.id,
+        job=SimpleNamespace(
+            id="visual-job-1",
+            status="succeeded",
+            asset_ready=False,
+        ),
+    )
+
+    assert completed is True
+    bind.assert_called_once_with(
+        actor=actor,
+        project_id=project.id,
+        source_job_id="visual-job-1",
+    )
+    show.assert_awaited_once()
+    assert state.data["editable_generation_active"] is False
