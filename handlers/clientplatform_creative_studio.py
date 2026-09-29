@@ -1035,8 +1035,6 @@ def install_creative_studio_safety(safety: ModuleType) -> None:
         safety,
         "_REPEATABLE_NAVIGATION_PREFIXES",
         "cpc:open:",
-        "cpc:new:",
-        "cpc:video:",
         "cpc:check:",
     )
     _extend_tuple(

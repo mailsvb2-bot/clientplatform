@@ -21,6 +21,19 @@ class CreativeSafetySourceContractTests(unittest.TestCase):
         self.assertIn("load_goal_visual_brand", source)
         self.assertIn('_receipt_callback("generate"', source)
 
+    def test_prompt_callbacks_are_not_eagerly_acknowledged(self) -> None:
+        source = Path("handlers/clientplatform_creative_studio.py").read_text(encoding="utf-8")
+        repeatable_block = source.split(
+            '_extend_tuple(\n        safety,\n        "_REPEATABLE_NAVIGATION_PREFIXES",',
+            1,
+        )[1].split("    )", 1)[0]
+        self.assertIn('"cpc:open:"', repeatable_block)
+        self.assertIn('"cpc:check:"', repeatable_block)
+        self.assertNotIn('"cpc:new:"', repeatable_block)
+        self.assertNotIn('"cpc:video:"', repeatable_block)
+        self.assertIn('@router.callback_query(F.data.startswith("cpc:new:"))', source)
+        self.assertIn('@router.callback_query(F.data.startswith("cpc:video:"))', source)
+
     def test_existing_visual_gateway_is_reused_not_reimplemented(self) -> None:
         application = Path("clientplatform/application/visual_creatives.py").read_text(encoding="utf-8")
         ast.parse(application)
