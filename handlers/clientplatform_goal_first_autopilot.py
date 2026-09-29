@@ -492,8 +492,6 @@ async def apply_reusable_image(callback: CallbackQuery, state: FSMContext) -> No
     if callback_token != str(data.get("reusable_image_token") or ""):
         await callback.answer("Список картинок устарел. Откройте его заново.", show_alert=True)
         return
-        await callback.answer("Этот черновик уже устарел", show_alert=True)
-        return
     try:
         index = int(raw_index)
         reusable_ids = list(data.get("reusable_image_job_ids") or [])
