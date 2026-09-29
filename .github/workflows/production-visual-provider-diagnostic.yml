@@ -287,7 +287,8 @@ jobs:
               row = candidate_row
               break
           if row is None:
-              raise SystemExit(31)
+              sys.stdout.write("\n\n")
+              raise SystemExit(0)
           job_id = str(row["id"] or "").strip()
           scope_id = str(row["scope_id"] or "").strip()
           if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", job_id) is None:
