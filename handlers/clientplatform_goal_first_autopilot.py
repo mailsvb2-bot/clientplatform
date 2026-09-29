@@ -34,6 +34,18 @@ from clientplatform.application.ad_publication_customization import (
     update_ad_publication_copy,
 )
 from clientplatform.application.ad_spend_operations import ad_spend_mutations_enabled
+from clientplatform.application.editable_advertising import (
+    EditableAdvertisingError,
+    EditableAdvertisingSourceExpired,
+    advance_failed_editable_ad_source,
+    bind_editable_ad_source,
+    create_editable_ad_project,
+    finish_editable_ad_project,
+    get_editable_ad_project,
+    prepare_editable_ad_source,
+    render_editable_ad_project,
+    update_editable_ad_composition,
+)
 from clientplatform.application.creative_studio_publication import (
     CreativeStudioPublicationError,
     GoalStudioPublicationResult,
@@ -58,6 +70,7 @@ from clientplatform.domain.ad_publication_assets import (
     AdPublicationAssetSource,
 )
 from clientplatform.domain.ad_spend import AdSpendError
+from clientplatform.domain.editable_advertising import EditableAdProjectStatus
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.integrations.yandex_direct import YandexDirectError
@@ -82,6 +95,9 @@ class GoalFirstAutopilotState(StatesGroup):
     waiting_text = State()
     waiting_image = State()
     waiting_video = State()
+    waiting_editable_headline = State()
+    waiting_editable_body = State()
+    waiting_editable_cta = State()
     confirming_generation = State()
     generation_pending = State()
     confirming_launch = State()
@@ -153,6 +169,14 @@ def _custom_keyboard(business_token: str):
                 ("✨ AI-картинка", f"cpo:genask:{business_token}"),
                 ("🎬 AI-видео", f"cpo:genvideoask:{business_token}"),
             ],
+            [(
+                "картинка для рекламы (возможность редактирования)",
+                f"cpo:editask:image:{business_token}",
+            )],
+            [(
+                "видео для рекламы (возможность редактирования)",
+                f"cpo:editask:video:{business_token}",
+            )],
             [("🧹 Без картинки и видео", f"cpo:custom-clear:{business_token}")],
             [("✅ Готово", f"cpo:custom-done:{business_token}")],
             [("🧰 Другие настройки", f"cpo:ads:{business_token}")],
@@ -177,11 +201,50 @@ def _result_keyboard(business_token: str, data: dict):
                 ("🖼 Создать картинку", f"cpo:genask:{business_token}"),
                 ("🎬 Создать видео", f"cpo:genvideoask:{business_token}"),
             ],
+            [(
+                "картинка для рекламы (возможность редактирования)",
+                f"cpo:editask:image:{business_token}",
+            )],
+            [(
+                "видео для рекламы (возможность редактирования)",
+                f"cpo:editask:video:{business_token}",
+            )],
             [(_launch_label(data), f"cpo:launch:{business_token}")],
             [("🎨 Настроить под себя", f"cpo:custom:{business_token}")],
             [("🏠 Не запускать", f"cpj:home:{business_token}")],
         ]
     )
+
+
+def _editable_keyboard(business_token: str):
+    return control._keyboard(
+        [
+            [
+                ("✍️ Заголовок", f"cpo:editfield:headline:{business_token}"),
+                ("📝 Текст", f"cpo:editfield:body:{business_token}"),
+            ],
+            [("🔘 CTA", f"cpo:editfield:cta:{business_token}")],
+            [("↕️ Переместить текстовый блок", f"cpo:editlayout:{business_token}")],
+            [("🔄 Обновить превью", f"cpo:editpreview:{business_token}")],
+            [("✅ Завершить редактирование", f"cpo:editdone:{business_token}")],
+            [("↩️ Назад к настройкам", f"cpo:custom:{business_token}")],
+        ]
+    )
+
+
+def _editable_source_keyboard(kind: str, business_token: str):
+    noun = "видео" if kind == "video" else "картинку"
+    return control._keyboard(
+        [
+            [("✅ Создать AI-основу: " + noun, f"cpo:editgen:{kind}:{business_token}")],
+            [("⬅️ Не создавать", f"cpo:custom:{business_token}")],
+        ]
+    )
+
+
+def _editable_format(_kind: str) -> str:
+    # Canonical Yandex Direct media bridge currently owns a square asset.
+    return render_format_for_placement("yandex_direct")
 
 
 def _state_matches(data: dict, business_token: str) -> bool:
@@ -775,6 +838,521 @@ async def ask_generated_video_confirmation(callback: CallbackQuery, state: FSMCo
     )
 
 
+async def _preview_editable_project(
+    target: Message,
+    *,
+    actor,
+    data: dict,
+    project_id: str,
+    kind: str,
+) -> None:
+    project, pack = await asyncio.to_thread(
+        render_editable_ad_project,
+        actor=actor,
+        project_id=project_id,
+        formats=(_editable_format(kind),),
+    )
+    del project
+    with tempfile.TemporaryDirectory(prefix="clientplatform-editable-preview-") as directory:
+        path = await asyncio.to_thread(
+            download_render_asset,
+            pack,
+            _editable_format(kind),
+            output_dir=directory,
+        )
+        if kind == "video":
+            await target.answer_video(
+                FSInputFile(path),
+                caption="👁 Превью редактируемого рекламного видео",
+                supports_streaming=True,
+            )
+        else:
+            await target.answer_photo(
+                FSInputFile(path),
+                caption="👁 Превью редактируемой рекламной картинки",
+            )
+
+
+async def _show_editable_editor(
+    target: Message,
+    *,
+    actor,
+    data: dict,
+    project_id: str,
+    kind: str,
+) -> None:
+    try:
+        await _preview_editable_project(
+            target,
+            actor=actor,
+            data=data,
+            project_id=project_id,
+            kind=kind,
+        )
+        note = (
+            "Это превью. Правки текста, CTA и положения блока не запускают новую "
+            "AI-генерацию и пока не меняют asset в рекламном provider. "
+            "Нажмите «Завершить редактирование», когда макет готов."
+        )
+    except EditableAdvertisingSourceExpired:
+        note = (
+            "AI-основа уже исчезла из временного хранилища. Текст и настройки "
+            "редактора сохранены; новая платная генерация автоматически не запускается."
+        )
+        await target.answer(
+            note,
+            reply_markup=_editable_source_keyboard(kind, str(data["business_token"])),
+        )
+        return
+    except (EditableAdvertisingError, VisualCreativeGatewayError, OSError, ValueError):
+        note = (
+            "Редактор и все правки сохранены, но превью сейчас не удалось пересобрать. "
+            "Новая AI-генерация не запускалась."
+        )
+    await target.answer(
+        note,
+        reply_markup=_editable_keyboard(str(data["business_token"])),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:editask:"))
+async def ask_editable_ad_confirmation(callback: CallbackQuery, state: FSMContext) -> None:
+    try:
+        _, _, kind, business_token = str(callback.data).split(":", 3)
+    except ValueError:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    if kind not in {"image", "video"}:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    data = await state.get_data()
+    if not _state_matches(data, business_token) or not data.get("job_id"):
+        await callback.answer("Этот черновик уже устарел", show_alert=True)
+        return
+    try:
+        actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
+        brand = await asyncio.to_thread(load_goal_visual_brand, actor=actor)
+        project = await asyncio.to_thread(
+            create_editable_ad_project,
+            actor=actor,
+            publication_job_id=str(data["job_id"]),
+            kind=kind,
+            headline=str(data.get("creative_title") or ""),
+            body=str(data.get("creative_body") or ""),
+            brand=brand.render_brand(),
+        )
+    except (KeyError, LookupError, ValueError, TenantPermissionDenied):
+        await callback.answer("Не удалось открыть редактор рекламы", show_alert=True)
+        return
+
+    await state.update_data(
+        editable_ad_project_id=project.id,
+        editable_ad_kind=kind,
+        editable_generation_active=False,
+        editable_source_revision=project.revision,
+        creative_variant_id="",
+        creative_variant_index="",
+    )
+    target = control._callback_message(callback)
+    if (
+        project.status in {
+            EditableAdProjectStatus.SOURCE_READY,
+            EditableAdProjectStatus.FINISHED,
+        }
+        and project.source_job_id
+    ):
+        await state.set_state(GoalFirstAutopilotState.customizing)
+        await callback.answer()
+        await _show_editable_editor(
+            target,
+            actor=actor,
+            data={**data, "business_token": business_token},
+            project_id=project.id,
+            kind=kind,
+        )
+        return
+
+    await state.set_state(GoalFirstAutopilotState.confirming_generation)
+    await callback.answer()
+    expired = project.status == EditableAdProjectStatus.SOURCE_EXPIRED
+    noun = "видео" if kind == "video" else "картинки"
+    prefix = (
+        "Предыдущая AI-основа уже удалена из временного хранилища. "
+        "Ваши правки текста и макета сохранены.\n\n"
+        if expired
+        else ""
+    )
+    await target.answer(
+        prefix
+        + f"Для редактируемой рекламы сначала нужна AI-основа {noun}. "
+        "Это отдельный платный AI-вызов. После него заголовок, текст, CTA и "
+        "положение блока можно менять сколько угодно без новой AI-генерации.\n\n"
+        "Сами пользовательские image/video bytes ClientPlatform постоянно не хранит.",
+        reply_markup=_editable_source_keyboard(kind, business_token),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:editgen:"))
+async def generate_editable_ad_source(callback: CallbackQuery, state: FSMContext) -> None:
+    try:
+        _, _, kind, business_token = str(callback.data).split(":", 3)
+    except ValueError:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    data = await state.get_data()
+    project_id = str(data.get("editable_ad_project_id") or "").strip()
+    if (
+        kind not in {"image", "video"}
+        or not project_id
+        or not _state_matches(data, business_token)
+    ):
+        await callback.answer("Редактируемый макет уже недоступен", show_alert=True)
+        return
+    try:
+        actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
+        project = await asyncio.to_thread(
+            get_editable_ad_project,
+            actor=actor,
+            project_id=project_id,
+        )
+        if project.kind != kind or project.publication_job_id != str(data["job_id"]):
+            raise ValueError("editable_ad_project_mismatch")
+        if (
+            project.status in {
+                EditableAdProjectStatus.SOURCE_READY,
+                EditableAdProjectStatus.FINISHED,
+            }
+            and project.source_job_id
+        ):
+            await state.set_state(GoalFirstAutopilotState.customizing)
+            await callback.answer("AI-основа уже готова")
+            await _show_editable_editor(
+                control._callback_message(callback),
+                actor=actor,
+                data=data,
+                project_id=project.id,
+                kind=kind,
+            )
+            return
+        project = await asyncio.to_thread(
+            prepare_editable_ad_source,
+            actor=actor,
+            project_id=project.id,
+        )
+    except (KeyError, LookupError, ValueError, TenantPermissionDenied):
+        await callback.answer("Не удалось подготовить AI-основу", show_alert=True)
+        return
+
+    await state.update_data(
+        editable_generation_active=True,
+        editable_source_revision=project.revision,
+        editable_ad_kind=kind,
+    )
+    await _generate_custom_visual(
+        callback,
+        state,
+        business_token=business_token,
+        kind=kind,
+        editable_project_id=project.id,
+        editable_revision=project.revision,
+        source_title=project.headline,
+        source_body=project.body,
+    )
+
+
+async def _finish_editable_source_generation(
+    event: CallbackQuery,
+    state: FSMContext,
+    *,
+    data: dict,
+    kind: str,
+    project_id: str,
+    job: object,
+) -> bool:
+    if str(getattr(job, "status", "") or "").strip().lower() != "succeeded":
+        return False
+    if not bool(getattr(job, "asset_ready", False)):
+        return False
+    source_job_id = str(
+        getattr(job, "id", "") or getattr(job, "job_id", "") or ""
+    ).strip()
+    if not source_job_id:
+        return False
+    try:
+        actor = await control._actor(int(event.from_user.id), str(data["business_id"]))
+        project = await asyncio.to_thread(
+            bind_editable_ad_source,
+            actor=actor,
+            project_id=project_id,
+            source_job_id=source_job_id,
+        )
+    except (KeyError, LookupError, ValueError, TenantPermissionDenied):
+        return False
+
+    await state.update_data(
+        creative_job_id="",
+        creative_generation_kind=kind,
+        editable_generation_active=False,
+        editable_source_revision=project.revision,
+    )
+    await state.set_state(GoalFirstAutopilotState.customizing)
+    await _show_editable_editor(
+        control._callback_message(event),
+        actor=actor,
+        data=data,
+        project_id=project.id,
+        kind=kind,
+    )
+    return True
+
+
+@router.callback_query(F.data.startswith("cpo:editfield:"))
+async def ask_editable_field(callback: CallbackQuery, state: FSMContext) -> None:
+    try:
+        _, _, field, business_token = str(callback.data).split(":", 3)
+    except ValueError:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    data = await state.get_data()
+    if (
+        field not in {"headline", "body", "cta"}
+        or not _state_matches(data, business_token)
+        or not str(data.get("editable_ad_project_id") or "").strip()
+    ):
+        await callback.answer("Редактируемый макет уже недоступен", show_alert=True)
+        return
+    target_state = {
+        "headline": GoalFirstAutopilotState.waiting_editable_headline,
+        "body": GoalFirstAutopilotState.waiting_editable_body,
+        "cta": GoalFirstAutopilotState.waiting_editable_cta,
+    }[field]
+    await state.set_state(target_state)
+    await callback.answer()
+    labels = {
+        "headline": "новый заголовок",
+        "body": "новый основной текст",
+        "cta": "новую надпись CTA",
+    }
+    await control._callback_message(callback).answer(
+        f"Отправьте {labels[field]} одним сообщением."
+    )
+
+
+async def _receive_editable_field(
+    message: Message,
+    state: FSMContext,
+    *,
+    field: str,
+) -> None:
+    data = await state.get_data()
+    project_id = str(data.get("editable_ad_project_id") or "").strip()
+    if not project_id:
+        await state.set_state(GoalFirstAutopilotState.customizing)
+        await message.answer("Редактируемый макет уже недоступен.")
+        return
+    try:
+        actor = await control._actor(control._user_id(message), str(data["business_id"]))
+        project = await asyncio.to_thread(
+            update_editable_ad_composition,
+            actor=actor,
+            project_id=project_id,
+            **{field: str(message.text or "")},
+        )
+    except (KeyError, LookupError, ValueError, TenantPermissionDenied):
+        await message.answer("Не удалось сохранить правку. Проверьте длину текста.")
+        return
+    await state.update_data(editable_source_revision=project.revision)
+    await state.set_state(GoalFirstAutopilotState.customizing)
+    await _show_editable_editor(
+        message,
+        actor=actor,
+        data=data,
+        project_id=project.id,
+        kind=project.kind,
+    )
+
+
+@router.message(GoalFirstAutopilotState.waiting_editable_headline)
+async def receive_editable_headline(message: Message, state: FSMContext) -> None:
+    await _receive_editable_field(message, state, field="headline")
+
+
+@router.message(GoalFirstAutopilotState.waiting_editable_body)
+async def receive_editable_body(message: Message, state: FSMContext) -> None:
+    await _receive_editable_field(message, state, field="body")
+
+
+@router.message(GoalFirstAutopilotState.waiting_editable_cta)
+async def receive_editable_cta(message: Message, state: FSMContext) -> None:
+    await _receive_editable_field(message, state, field="cta")
+
+
+@router.callback_query(F.data.startswith("cpo:editlayout:"))
+async def toggle_editable_layout(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    data = await state.get_data()
+    project_id = str(data.get("editable_ad_project_id") or "").strip()
+    if not project_id or not _state_matches(data, business_token):
+        await callback.answer("Редактируемый макет уже недоступен", show_alert=True)
+        return
+    try:
+        actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
+        current = await asyncio.to_thread(
+            get_editable_ad_project,
+            actor=actor,
+            project_id=project_id,
+        )
+        next_layout = "top_card" if current.layout == "lower_card" else "lower_card"
+        project = await asyncio.to_thread(
+            update_editable_ad_composition,
+            actor=actor,
+            project_id=project_id,
+            layout=next_layout,
+        )
+    except (KeyError, LookupError, ValueError, TenantPermissionDenied):
+        await callback.answer("Не удалось переместить текстовый блок", show_alert=True)
+        return
+    await state.update_data(editable_source_revision=project.revision)
+    await state.set_state(GoalFirstAutopilotState.customizing)
+    await callback.answer("Положение блока изменено")
+    await _show_editable_editor(
+        control._callback_message(callback),
+        actor=actor,
+        data=data,
+        project_id=project.id,
+        kind=project.kind,
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:editpreview:"))
+async def refresh_editable_preview(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    data = await state.get_data()
+    project_id = str(data.get("editable_ad_project_id") or "").strip()
+    if not project_id or not _state_matches(data, business_token):
+        await callback.answer("Редактируемый макет уже недоступен", show_alert=True)
+        return
+    try:
+        actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
+        project = await asyncio.to_thread(
+            get_editable_ad_project,
+            actor=actor,
+            project_id=project_id,
+        )
+    except (KeyError, LookupError, ValueError, TenantPermissionDenied):
+        await callback.answer("Редактируемый макет уже недоступен", show_alert=True)
+        return
+    await callback.answer("Обновляю превью…")
+    await _show_editable_editor(
+        control._callback_message(callback),
+        actor=actor,
+        data=data,
+        project_id=project.id,
+        kind=project.kind,
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:editdone:"))
+async def finish_editable_ad(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    data = await state.get_data()
+    project_id = str(data.get("editable_ad_project_id") or "").strip()
+    if not project_id or not _state_matches(data, business_token):
+        await callback.answer("Редактируемый макет уже недоступен", show_alert=True)
+        return
+    try:
+        actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
+        project, pack = await asyncio.to_thread(
+            render_editable_ad_project,
+            actor=actor,
+            project_id=project_id,
+            formats=(_editable_format(str(data.get("editable_ad_kind") or "image")),),
+        )
+        with tempfile.TemporaryDirectory(prefix="clientplatform-editable-final-") as directory:
+            path = await asyncio.to_thread(
+                download_render_asset,
+                pack,
+                _editable_format(project.kind),
+                output_dir=directory,
+            )
+            if project.kind == "video":
+                payload = await asyncio.to_thread(path.read_bytes)
+                await asyncio.to_thread(
+                    attach_video_bytes,
+                    actor=actor,
+                    publication_job_id=str(data["job_id"]),
+                    payload=payload,
+                    content_type="video/mp4",
+                    original_name=path.name or "editable-ad.mp4",
+                    duration_seconds=_GENERATED_VIDEO_DURATION_SECONDS,
+                    source=AdPublicationAssetSource.GENERATED,
+                )
+            else:
+                await asyncio.to_thread(
+                    attach_image_file,
+                    actor=actor,
+                    publication_job_id=str(data["job_id"]),
+                    path=path,
+                    source=AdPublicationAssetSource.GENERATED,
+                )
+        finished = await asyncio.to_thread(
+            finish_editable_ad_project,
+            actor=actor,
+            project_id=project.id,
+        )
+    except EditableAdvertisingSourceExpired:
+        await callback.answer()
+        await control._callback_message(callback).answer(
+            "AI-основа уже удалена из временного хранилища. Ваши правки сохранены; "
+            "новую AI-основу можно создать только отдельным подтверждением.",
+            reply_markup=_editable_source_keyboard(
+                str(data.get("editable_ad_kind") or "image"),
+                business_token,
+            ),
+        )
+        return
+    except AdPublicationAssetError as exc:
+        await callback.answer()
+        ambiguous = "ambiguous" in str(exc).lower()
+        text = (
+            "Яндекс мог принять файл, но подтверждение загрузки неоднозначно. "
+            "ClientPlatform не повторяет upload автоматически, чтобы не создать дубль."
+            if ambiguous
+            else "Не удалось подтвердить загрузку готового макета в рекламный provider."
+        )
+        await control._callback_message(callback).answer(
+            text,
+            reply_markup=_editable_keyboard(business_token),
+        )
+        return
+    except (
+        KeyError,
+        LookupError,
+        OSError,
+        ValueError,
+        EditableAdvertisingError,
+        VisualCreativeGatewayError,
+        TenantPermissionDenied,
+    ):
+        await callback.answer("Не удалось завершить редактирование", show_alert=True)
+        return
+
+    await state.update_data(
+        editable_ad_project_id="",
+        editable_ad_kind="",
+        editable_generation_active=False,
+        editable_source_revision=finished.revision,
+    )
+    await state.set_state(GoalFirstAutopilotState.customizing)
+    await callback.answer("Готово")
+    await control._callback_message(callback).answer(
+        "✅ Редактируемый рекламный макет передан в рекламный provider. "
+        "ClientPlatform хранит только проект и provider reference — постоянной "
+        "копии image/video bytes на сервере нет.",
+        reply_markup=_custom_keyboard(business_token),
+    )
+
+
 @router.callback_query(F.data.startswith("cpo:genstudio:"))
 async def open_generated_image_studio(callback: CallbackQuery, state: FSMContext) -> None:
     business_token = str(callback.data).split(":", 2)[2]
@@ -1033,6 +1611,10 @@ async def _generate_custom_visual(
     *,
     business_token: str,
     kind: str,
+    editable_project_id: str = "",
+    editable_revision: int = 0,
+    source_title: str | None = None,
+    source_body: str | None = None,
 ) -> None:
     visual_kind = "video" if str(kind or "").strip().lower() == "video" else "image"
     data = await state.get_data()
@@ -1059,20 +1641,35 @@ async def _generate_custom_visual(
             )
             await state.set_state(GoalFirstAutopilotState.customizing)
             return
+        source_title_value = (
+            str(data.get("creative_title") or "")
+            if source_title is None
+            else str(source_title)
+        )
+        source_body_value = (
+            str(data.get("creative_body") or "")
+            if source_body is None
+            else str(source_body)
+        )
         copy_digest = hashlib.sha256(
-            (
-                str(data.get("creative_title") or "")
-                + "\n"
-                + str(data.get("creative_body") or "")
-            ).encode("utf-8")
+            (source_title_value + "\n" + source_body_value).encode("utf-8")
         ).hexdigest()
+        if editable_project_id:
+            if editable_revision < 1:
+                raise ValueError("editable_ad_source_revision_missing")
+            identity = (
+                f"{business_id}|{publication_job_id}|editable|{editable_project_id}|"
+                f"{editable_revision}|{visual_kind}|{copy_digest}"
+            )
+        else:
+            identity = f"{business_id}|{publication_job_id}|{visual_kind}|{copy_digest}"
         idempotency_key = "clientplatform:" + hashlib.sha256(
-            f"{business_id}|{publication_job_id}|{visual_kind}|{copy_digest}".encode("utf-8")
+            identity.encode("utf-8")
         ).hexdigest()
         job = await asyncio.to_thread(
             create_ad_visual,
-            title=str(data.get("creative_title") or ""),
-            body=str(data.get("creative_body") or ""),
+            title=source_title_value,
+            body=source_body_value,
             kind=visual_kind,
             scope_id=business_id,
             idempotency_key=idempotency_key,
@@ -1087,7 +1684,16 @@ async def _generate_custom_visual(
         )
         await state.set_state(GoalFirstAutopilotState.customizing)
         return
-    if await _finish_generated_visual(
+    if editable_project_id and await _finish_editable_source_generation(
+        callback,
+        state,
+        job=job,
+        data=data,
+        kind=visual_kind,
+        project_id=editable_project_id,
+    ):
+        return
+    if not editable_project_id and await _finish_generated_visual(
         callback,
         state,
         job=job,
@@ -1096,6 +1702,20 @@ async def _generate_custom_visual(
     ):
         return
     if str(getattr(job, "status", "") or "").strip().lower() == "failed":
+        if editable_project_id:
+            try:
+                actor = await control._actor(
+                    int(callback.from_user.id),
+                    str(data["business_id"]),
+                )
+                await asyncio.to_thread(
+                    advance_failed_editable_ad_source,
+                    actor=actor,
+                    project_id=editable_project_id,
+                )
+            except (KeyError, LookupError, ValueError, TenantPermissionDenied):
+                pass
+            await state.update_data(editable_generation_active=False)
         await state.update_data(creative_job_id="", creative_generation_kind=visual_kind)
         await state.set_state(GoalFirstAutopilotState.customizing)
         await control._callback_message(callback).answer(
@@ -1114,6 +1734,11 @@ async def _generate_custom_visual(
     await state.update_data(
         creative_job_id=job_id,
         creative_generation_kind=visual_kind,
+        editable_generation_active=bool(editable_project_id),
+        editable_ad_project_id=editable_project_id
+        or str(data.get("editable_ad_project_id") or ""),
+        editable_source_revision=editable_revision
+        or int(data.get("editable_source_revision") or 0),
     )
     await state.set_state(GoalFirstAutopilotState.generation_pending)
     await control._callback_message(callback).answer(
@@ -1127,6 +1752,7 @@ async def _generate_custom_visual(
 @router.callback_query(F.data.startswith("cpo:gen:"))
 async def generate_custom_image(callback: CallbackQuery, state: FSMContext) -> None:
     business_token = str(callback.data).split(":", 2)[2]
+    await state.update_data(editable_generation_active=False)
     await _generate_custom_visual(
         callback,
         state,
@@ -1138,6 +1764,7 @@ async def generate_custom_image(callback: CallbackQuery, state: FSMContext) -> N
 @router.callback_query(F.data.startswith("cpo:genvideo:"))
 async def generate_custom_video(callback: CallbackQuery, state: FSMContext) -> None:
     business_token = str(callback.data).split(":", 2)[2]
+    await state.update_data(editable_generation_active=False)
     await _generate_custom_visual(
         callback,
         state,
@@ -1230,7 +1857,21 @@ async def check_generated_image(callback: CallbackQuery, state: FSMContext) -> N
         await callback.answer(f"Пока не удалось проверить {check_noun}", show_alert=True)
         return
     await callback.answer()
-    if await _finish_generated_visual(
+    editable_project_id = (
+        str(data.get("editable_ad_project_id") or "").strip()
+        if bool(data.get("editable_generation_active"))
+        else ""
+    )
+    if editable_project_id and await _finish_editable_source_generation(
+        callback,
+        state,
+        job=job,
+        data=data,
+        kind=visual_kind,
+        project_id=editable_project_id,
+    ):
+        return
+    if not editable_project_id and await _finish_generated_visual(
         callback,
         state,
         job=job,
@@ -1246,7 +1887,24 @@ async def check_generated_image(callback: CallbackQuery, state: FSMContext) -> N
             ),
         )
         return
-    await state.update_data(creative_job_id="", creative_generation_kind=visual_kind)
+    if editable_project_id:
+        try:
+            actor = await control._actor(
+                int(callback.from_user.id),
+                str(data["business_id"]),
+            )
+            await asyncio.to_thread(
+                advance_failed_editable_ad_source,
+                actor=actor,
+                project_id=editable_project_id,
+            )
+        except (KeyError, LookupError, ValueError, TenantPermissionDenied):
+            pass
+    await state.update_data(
+        creative_job_id="",
+        creative_generation_kind=visual_kind,
+        editable_generation_active=False,
+    )
     await state.set_state(GoalFirstAutopilotState.customizing)
     await control._callback_message(callback).answer(
         visual_failure_message(job)
