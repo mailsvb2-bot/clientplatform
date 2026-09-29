@@ -239,155 +239,58 @@ jobs:
           )
           PY
 
-          probe_ref="$(privileged docker exec -i "$provider_id" python - <<'PY'
+          privileged docker exec -i "$provider_id" python - <<'PY'
           from __future__ import annotations
 
+          import json
           import os
-          import re
           import sqlite3
-          import sys
 
           db_path = str(os.environ.get("VISUAL_GATEWAY_DB") or "/data/visual_gateway.sqlite3")
+          output_dir = str(os.environ.get("VISUAL_CREATIVE_OUTPUT_DIR") or "")
+          transient_required = str(
+              os.environ.get("VISUAL_TRANSIENT_OUTPUT_REQUIRED") or ""
+          ).strip().lower() in {"1", "true", "yes", "on"}
+
           with sqlite3.connect(db_path) as conn:
-              conn.row_factory = sqlite3.Row
-              row = conn.execute(
+              rows = conn.execute(
                   """
-                  SELECT id,scope_id
+                  SELECT kind,error_code
                   FROM visual_jobs
                   WHERE client_id='clientplatform'
-                    AND kind='image'
-                    AND status='succeeded'
-                    AND asset_path<>''
+                    AND status='failed'
                   ORDER BY updated_at DESC
-                  LIMIT 1
+                  LIMIT 20
                   """
-              ).fetchone()
-          if row is None:
-              raise SystemExit(31)
-          job_id = str(row["id"] or "").strip()
-          scope_id = str(row["scope_id"] or "").strip()
-          if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", job_id) is None:
-              raise SystemExit(32)
-          if re.fullmatch(r"[A-Za-z0-9_.:@/-]{1,160}", scope_id) is None:
-              raise SystemExit(33)
-          sys.stdout.write(job_id + "\n" + scope_id + "\n")
-          PY
-          )"
-          job_id="$(printf '%s\n' "$probe_ref" | sed -n '1p')"
-          scope_id="$(printf '%s\n' "$probe_ref" | sed -n '2p')"
-          if [[ ! "$job_id" =~ ^[A-Za-z0-9_-]{1,128}$ ]] || [[ ! "$scope_id" =~ ^[A-Za-z0-9_.:@/-]{1,160}$ ]]; then
-            echo "CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:latest_asset_reference_invalid"
-            exit 34
-          fi
+              ).fetchall()
 
-          privileged docker exec \
-            -e CLIENTPLATFORM_PROBE_JOB_ID="$job_id" \
-            -e CLIENTPLATFORM_PROBE_SCOPE_ID="$scope_id" \
-            -i "$provider_id" python - <<'PY'
-          from __future__ import annotations
-
-          import hashlib
-          import json
-          import os
-          import urllib.parse
-          import urllib.request
-
-          job_id = os.environ["CLIENTPLATFORM_PROBE_JOB_ID"]
-          scope_id = os.environ["CLIENTPLATFORM_PROBE_SCOPE_ID"]
-          token = str(os.environ.get("VISUAL_GATEWAY_UPSTREAM_TOKEN") or "")
-          query = urllib.parse.urlencode({"scope_id": scope_id})
-          request = urllib.request.Request(
-              f"http://127.0.0.1:8097/v1/creative/generations/{urllib.parse.quote(job_id, safe='')}/content?{query}",
-              headers={"Authorization": "Bearer " + token},
+          recent_403 = any(
+              str(error_code or "") == "visual_provider_submit_http_403"
+              for _kind, error_code in rows
           )
-          with urllib.request.urlopen(request, timeout=15) as response:
-              raw = response.read(32 * 1024 * 1024 + 1)
-              content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
-              status = int(response.status)
-          if len(raw) > 32 * 1024 * 1024:
-              raise SystemExit(35)
-          signature = (
-              "jpeg" if raw.startswith(b"\xff\xd8\xff")
-              else "png" if raw.startswith(b"\x89PNG\r\n\x1a\n")
-              else "webp" if len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP"
-              else "unknown"
-          )
+          safe = {
+              "transient_required": transient_required,
+              "output_dir_is_tmp": output_dir.startswith("/tmp/"),
+              "recent_provider_403": recent_403,
+          }
           print(
-              "CLIENTPLATFORM_PRODUCTION_VISUAL_PROVIDER_CONTENT_CHAIN "
-              + json.dumps(
-                  {
-                      "http_status": status,
-                      "bytes": len(raw),
-                      "content_type": content_type,
-                      "signature": signature,
-                      "sha256_recorded": bool(hashlib.sha256(raw).hexdigest()),
-                  },
-                  ensure_ascii=False,
-                  sort_keys=True,
-              )
+              "CLIENTPLATFORM_PRODUCTION_VISUAL_TRANSIENT_CONTRACT "
+              + json.dumps(safe, ensure_ascii=False, sort_keys=True)
           )
+          if not transient_required or not output_dir.startswith("/tmp/"):
+              print(
+                  "CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:"
+                  "transient_media_contract_broken"
+              )
+              raise SystemExit(38)
+          if recent_403:
+              print(
+                  "CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:"
+                  "yandex_access_forbidden"
+              )
+              raise SystemExit(39)
           PY
 
-          privileged docker exec \
-            -e CLIENTPLATFORM_PROBE_JOB_ID="$job_id" \
-            -e CLIENTPLATFORM_PROBE_SCOPE_ID="$scope_id" \
-            -i "$app_id" python - <<'PY'
-          from __future__ import annotations
-
-          import io
-          import json
-          import os
-          import urllib.parse
-          import urllib.request
-
-          from PIL import Image
-
-          job_id = os.environ["CLIENTPLATFORM_PROBE_JOB_ID"]
-          scope_id = os.environ["CLIENTPLATFORM_PROBE_SCOPE_ID"]
-          base = str(os.environ.get("VISUAL_GATEWAY_URL") or "").rstrip("/")
-          token = str(os.environ.get("VISUAL_GATEWAY_TOKEN") or "")
-          query = urllib.parse.urlencode({"scope_id": scope_id})
-          request = urllib.request.Request(
-              base + f"/v1/creative/generations/{urllib.parse.quote(job_id, safe='')}/content?{query}",
-              headers={"Authorization": "Bearer " + token},
-          )
-          with urllib.request.urlopen(request, timeout=15) as response:
-              raw = response.read(32 * 1024 * 1024 + 1)
-              content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
-              status = int(response.status)
-          if len(raw) > 32 * 1024 * 1024:
-              raise SystemExit(36)
-          decode_ok = False
-          image_format = ""
-          width = 0
-          height = 0
-          try:
-              with Image.open(io.BytesIO(raw)) as opened:
-                  image_format = str(opened.format or "").upper()
-                  width, height = map(int, opened.size)
-                  opened.verify()
-              decode_ok = True
-          except Exception:
-              decode_ok = False
-          print(
-              "CLIENTPLATFORM_PRODUCTION_VISUAL_APP_CONTENT_CHAIN "
-              + json.dumps(
-                  {
-                      "http_status": status,
-                      "bytes": len(raw),
-                      "content_type": content_type,
-                      "decode_ok": decode_ok,
-                      "image_format": image_format,
-                      "width": width,
-                      "height": height,
-                  },
-                  ensure_ascii=False,
-                  sort_keys=True,
-              )
-          )
-          if not decode_ok:
-              raise SystemExit(37)
-          PY
           REMOTE
           status=${PIPESTATUS[0]}
           set -e
@@ -398,131 +301,6 @@ jobs:
             echo "failure_marker=$marker" >> "$GITHUB_OUTPUT"
             exit "$status"
           fi
-
-      - name: Retrieve latest successful production image asset
-        if: steps.probe.outcome == 'success'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          key="$RUNNER_TEMP/clientplatform-production-ssh-key"
-          known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
-          asset="$RUNNER_TEMP/clientplatform-latest-production-image"
-          ssh \
-            -p "$SSH_PORT" \
-            -i "$key" \
-            -o BatchMode=yes \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$known_hosts" \
-            -o ConnectTimeout=10 \
-            "$SSH_USER@$SSH_HOST" 'bash -s' > "$asset" <<'REMOTE'
-          set -Eeuo pipefail
-          privileged() {
-            if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi
-          }
-          provider_id="$(privileged docker ps --filter name=clientplatform-production-visual-provider-gateway-1 --format '{{.ID}}' | head -n1)"
-          app_id="$(privileged docker ps --filter name=clientplatform-production-app-1 --format '{{.ID}}' | head -n1)"
-          [ -n "$provider_id" ] && [ -n "$app_id" ]
-          host_asset="$(mktemp /tmp/clientplatform-production-image.XXXXXX)"
-          validated_asset="$(mktemp /tmp/clientplatform-production-image-validated.XXXXXX)"
-          cleanup() {
-            rm -f -- "$host_asset" "$validated_asset"
-          }
-          trap cleanup EXIT
-
-          privileged docker exec -i "$provider_id" python - <<'PY' > "$host_asset"
-          from __future__ import annotations
-          import os
-          import sqlite3
-          import sys
-          from pathlib import Path
-
-          db_path = str(os.environ.get("VISUAL_GATEWAY_DB") or "/data/visual_gateway.sqlite3")
-          output_root = Path(os.environ.get("VISUAL_CREATIVE_OUTPUT_DIR") or "/data/output").expanduser().resolve()
-          with sqlite3.connect(db_path) as conn:
-              conn.row_factory = sqlite3.Row
-              row = conn.execute(
-                  """
-                  SELECT asset_path
-                  FROM visual_jobs
-                  WHERE client_id='clientplatform'
-                    AND kind='image'
-                    AND status='succeeded'
-                    AND asset_path<>''
-                  ORDER BY updated_at DESC
-                  LIMIT 1
-                  """
-              ).fetchone()
-          if row is None:
-              raise SystemExit(41)
-          path = Path(str(row["asset_path"] or "")).expanduser().resolve()
-          try:
-              path.relative_to(output_root)
-          except ValueError:
-              raise SystemExit(42)
-          if not path.is_file():
-              raise SystemExit(43)
-          raw = path.read_bytes()
-          if not raw or len(raw) > 32 * 1024 * 1024:
-              raise SystemExit(44)
-          sys.stdout.buffer.write(raw)
-          PY
-          test -s "$host_asset"
-          validator_code="$(cat <<'PY'
-          import io
-          import sys
-          from PIL import Image, UnidentifiedImageError
-
-          raw = sys.stdin.buffer.read(32 * 1024 * 1024 + 1)
-          if not raw or len(raw) > 32 * 1024 * 1024:
-              raise SystemExit(45)
-          try:
-              with Image.open(io.BytesIO(raw)) as opened:
-                  if str(opened.format or "").upper() not in {"JPEG", "PNG", "WEBP"}:
-                      raise SystemExit(46)
-                  width, height = map(int, opened.size)
-                  if width < 64 or height < 64:
-                      raise SystemExit(47)
-                  opened.verify()
-          except (OSError, UnidentifiedImageError):
-              raise SystemExit(48)
-          sys.stdout.buffer.write(raw)
-          PY
-          )"
-          privileged docker exec -i "$app_id" python -c "$validator_code" < "$host_asset" > "$validated_asset"
-          test -s "$validated_asset"
-          cmp -s "$host_asset" "$validated_asset"
-          cat "$validated_asset"
-          REMOTE
-          test -s "$asset"
-          python - "$asset" <<'PY'
-          from __future__ import annotations
-          import sys
-          from pathlib import Path
-
-          path = Path(sys.argv[1])
-          raw = path.read_bytes()
-          if raw.startswith(b"\xff\xd8\xff"):
-              fmt, suffix = "JPEG", ".jpg"
-          elif raw.startswith(b"\x89PNG\r\n\x1a\n"):
-              fmt, suffix = "PNG", ".png"
-          elif len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
-              fmt, suffix = "WEBP", ".webp"
-          else:
-              raise SystemExit(48)
-          target = path.with_suffix(suffix)
-          path.replace(target)
-          print(f"CLIENTPLATFORM_PRODUCTION_VISUAL_ASSET_EXPORTED bytes={target.stat().st_size} format={fmt}")
-          PY
-
-      - name: Upload latest production image asset
-        if: steps.probe.outcome == 'success'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: production-latest-image-asset
-          path: ${{ runner.temp }}/clientplatform-latest-production-image.*
-          if-no-files-found: error
-          retention-days: 1
 
       - name: Upload safe diagnostic log
         if: always()
