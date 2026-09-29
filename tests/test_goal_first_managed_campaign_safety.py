@@ -417,7 +417,8 @@ class GoalFirstInteractionSafetyTests(unittest.TestCase):
         self.assertIn("GoalFirstAutopilotState:", fake._SENSITIVE_STATE_PREFIXES)
         self.assertIn("cpo:launch:", fake._ONE_SHOT_PREFIXES)
         self.assertIn("cpo:genvideo:", fake._ONE_SHOT_PREFIXES)
-        self.assertIn("cpo:genvideoask:", fake._REPEATABLE_NAVIGATION_PREFIXES)
+        self.assertNotIn("cpo:genask:", fake._REPEATABLE_NAVIGATION_PREFIXES)
+        self.assertNotIn("cpo:genvideoask:", fake._REPEATABLE_NAVIGATION_PREFIXES)
         self.assertIn("cpo:gencheck:", fake._REPEATABLE_NAVIGATION_PREFIXES)
 
     def test_install_is_idempotent(self):

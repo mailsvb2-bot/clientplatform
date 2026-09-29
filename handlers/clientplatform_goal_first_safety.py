@@ -200,8 +200,6 @@ def install_goal_first_safety(safety: ModuleType) -> None:
         "cpo:custom-image:",
         "cpo:custom-video:",
         "cpo:custom-done:",
-        "cpo:genask:",
-        "cpo:genvideoask:",
         "cpo:gencheck:",
     )
 
