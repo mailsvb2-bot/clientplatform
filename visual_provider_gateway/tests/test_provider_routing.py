@@ -339,6 +339,71 @@ def test_yandexart_motion_waits_for_native_image_operation(monkeypatch):
     assert result.provider_payload["motion_duration_seconds"] == 5
 
 
+def test_yandexart_native_model_fallback_only_after_definitive_rejection(monkeypatch):
+    from visual_provider_gateway.providers import (
+        ProviderTransportError,
+        YandexArtProvider,
+    )
+
+    calls = []
+
+    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0):
+        calls.append(payload["modelUri"])
+        if len(calls) == 1:
+            raise ProviderTransportError("http_400")
+        return {"id": "operation-fallback", "done": False}
+
+    monkeypatch.setattr(providers, "_json_request", fake_json_request)
+    monkeypatch.setenv("YANDEX_API_KEY", "key")
+    provider = YandexArtProvider(
+        ProviderConfig(
+            name="yandexart",
+            base_url="https://ai.api.cloud.yandex.net:443",
+            api_key="key",
+            model_image="art://folder/aliceai-image-art-3.0",
+            folder_id="folder",
+        )
+    )
+
+    job = provider.submit(CreativeBrief(kind="image", prompt="product"))
+
+    assert job.external_id == "operation-fallback"
+    assert calls == [
+        "art://folder/aliceai-image-art-3.0",
+        "art://folder/yandex-art/latest",
+    ]
+
+
+def test_yandexart_does_not_retry_model_after_ambiguous_submit(monkeypatch):
+    from visual_provider_gateway.providers import (
+        ProviderTransportError,
+        YandexArtProvider,
+    )
+
+    calls = []
+
+    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0):
+        calls.append(payload["modelUri"])
+        raise ProviderTransportError("TimeoutError")
+
+    monkeypatch.setattr(providers, "_json_request", fake_json_request)
+    monkeypatch.setenv("YANDEX_API_KEY", "key")
+    provider = YandexArtProvider(
+        ProviderConfig(
+            name="yandexart",
+            base_url="https://ai.api.cloud.yandex.net:443",
+            api_key="key",
+            model_image="art://folder/aliceai-image-art-3.0",
+            folder_id="folder",
+        )
+    )
+
+    with pytest.raises(ProviderTransportError, match="TimeoutError"):
+        provider.submit(CreativeBrief(kind="image", prompt="product"))
+
+    assert calls == ["art://folder/aliceai-image-art-3.0"]
+
+
 def test_yandex_api_key_wins_over_stale_iam_token(monkeypatch):
     from visual_provider_gateway.engine import provider_configs
     from visual_provider_gateway.providers import YandexArtProvider
