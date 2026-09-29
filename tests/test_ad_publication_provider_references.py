@@ -129,6 +129,86 @@ def test_image_bytes_claim_before_provider_and_persist_only_reference(monkeypatc
     assert "storage_path" not in captured["begin"]
 
 
+
+def test_video_bytes_claim_before_provider_and_persist_only_reference(monkeypatch) -> None:
+    order: list[str] = []
+    actor = SimpleNamespace(business_id=str(uuid4()))
+    publication_job_id = str(uuid4())
+    job = SimpleNamespace(
+        id=publication_job_id,
+        business_id=actor.business_id,
+        connection_id=str(uuid4()),
+    )
+
+    class Provider:
+        def upload_video(self, *, access_token: str, payload: bytes, name: str) -> str:
+            order.append("provider")
+            assert payload == b"video-bytes"
+            assert name == "owner-video.mp4"
+            return "provider-video-id"
+
+    class Repository:
+        def __init__(self, _conn) -> None:
+            pass
+
+        def begin_upload(self, **_kwargs):
+            order.append("claim")
+            return AdMediaUploadReservation("claimed", claim_token="video-claim")
+
+        def complete_upload(self, **kwargs):
+            order.append("complete")
+            return AdPublicationAsset(
+                publication_job_id=publication_job_id,
+                business_id=actor.business_id,
+                kind=AdPublicationAssetKind.VIDEO,
+                source=AdPublicationAssetSource.UPLOAD,
+                content_type="video/mp4",
+                original_name="owner-video.mp4",
+                sha256=hashlib.sha256(b"video-bytes").hexdigest(),
+                size_bytes=len(b"video-bytes"),
+                duration_seconds=10,
+                provider_video_id=str(kwargs["provider_video_id"]),
+                created_by_member_id=str(uuid4()),
+                created_at="2026-09-29T00:00:00+00:00",
+                updated_at="2026-09-29T00:00:00+00:00",
+            )
+
+    @contextmanager
+    def fake_db():
+        yield object()
+
+    monkeypatch.setattr(assets, "_publication_job", lambda **_kwargs: job)
+    monkeypatch.setattr(assets, "get_db", fake_db)
+    monkeypatch.setattr(assets, "AdPublicationAssetRepository", Repository)
+    monkeypatch.setattr(
+        assets,
+        "load_bundle",
+        lambda **_kwargs: (
+            SimpleNamespace(),
+            SimpleNamespace(access_token="token", refresh_token=""),
+        ),
+    )
+    monkeypatch.setattr(
+        assets,
+        "with_access_token",
+        lambda *, operation, **_kwargs: operation("access-token"),
+    )
+
+    result = assets.attach_video_bytes(
+        actor=actor,
+        publication_job_id=publication_job_id,
+        payload=b"video-bytes",
+        content_type="video/mp4",
+        original_name="owner-video.mp4",
+        duration_seconds=10,
+        provider=Provider(),
+        vault=object(),
+    )
+
+    assert order == ["claim", "provider", "complete"]
+    assert result.provider_video_id == "provider-video-id"
+
+
 def test_ready_digest_reuses_provider_reference_without_second_upload(monkeypatch) -> None:
     actor = SimpleNamespace(business_id=str(uuid4()))
     publication_job_id = str(uuid4())
