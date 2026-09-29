@@ -182,6 +182,12 @@ def install_goal_first_safety(safety: ModuleType) -> None:
     if bool(getattr(safety, "_goal_first_safety_installed", False)):
         return
 
+    _extend_tuple(
+        safety,
+        "_CLIENTPLATFORM_CALLBACK_PREFIXES",
+        "cpo:genask:",
+        "cpo:genvideoask:",
+    )
     _extend_tuple(safety, "_SENSITIVE_STATE_PREFIXES", "GoalFirstAutopilotState:")
     _extend_tuple(
         safety,
