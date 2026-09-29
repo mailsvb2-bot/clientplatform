@@ -1071,8 +1071,6 @@ async def _finish_editable_source_generation(
 ) -> bool:
     if str(getattr(job, "status", "") or "").strip().lower() != "succeeded":
         return False
-    if not bool(getattr(job, "asset_ready", False)):
-        return False
     source_job_id = str(
         getattr(job, "id", "") or getattr(job, "job_id", "") or ""
     ).strip()
@@ -1635,6 +1633,8 @@ async def _generate_custom_visual(
             country_code=country_code,
         )
         if not ready:
+            if editable_project_id:
+                await state.update_data(editable_generation_active=False)
             await control._callback_message(callback).answer(
                 visual_provider_unavailable_message(visual_kind),
                 reply_markup=_custom_keyboard(business_token),
@@ -1677,6 +1677,8 @@ async def _generate_custom_visual(
             wait_seconds=20,
         )
     except (KeyError, ValueError, VisualCreativeError):
+        if editable_project_id:
+            await state.update_data(editable_generation_active=False)
         await control._callback_message(callback).answer(
             "Не удалось проверить или запустить генератор. "
             "Повторная платная генерация автоматически не запускается.",
@@ -1725,6 +1727,8 @@ async def _generate_custom_visual(
         return
     job_id = str(getattr(job, "job_id", "") or getattr(job, "id", "") or "")
     if not job_id:
+        if editable_project_id:
+            await state.update_data(editable_generation_active=False)
         await state.set_state(GoalFirstAutopilotState.customizing)
         await control._callback_message(callback).answer(
             f"Генератор не вернул результат. Можно продолжить без {without_noun}.",
