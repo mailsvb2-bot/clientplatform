@@ -246,22 +246,46 @@ jobs:
           import re
           import sqlite3
           import sys
+          import time
+          from pathlib import Path
 
           db_path = str(os.environ.get("VISUAL_GATEWAY_DB") or "/data/visual_gateway.sqlite3")
+          output_root = Path(os.environ.get("VISUAL_CREATIVE_OUTPUT_DIR") or "/data/output").expanduser().resolve()
+          try:
+              ttl = int(str(os.environ.get("VISUAL_TRANSIENT_ASSET_TTL_SECONDS") or "21600"))
+          except ValueError:
+              ttl = 21600
+          ttl = max(300, min(ttl, 86400))
+          cutoff = time.time() - ttl
           with sqlite3.connect(db_path) as conn:
               conn.row_factory = sqlite3.Row
-              row = conn.execute(
+              rows = conn.execute(
                   """
-                  SELECT id,scope_id
+                  SELECT id,scope_id,asset_path
                   FROM visual_jobs
                   WHERE client_id='clientplatform'
                     AND kind='image'
                     AND status='succeeded'
                     AND asset_path<>''
                   ORDER BY updated_at DESC
-                  LIMIT 1
+                  LIMIT 20
                   """
-              ).fetchone()
+              ).fetchall()
+          row = None
+          for candidate_row in rows:
+              path = Path(str(candidate_row["asset_path"] or "")).expanduser().resolve()
+              try:
+                  path.relative_to(output_root)
+              except ValueError:
+                  continue
+              try:
+                  stat = path.stat()
+              except OSError:
+                  continue
+              if not path.is_file() or stat.st_mtime <= cutoff:
+                  continue
+              row = candidate_row
+              break
           if row is None:
               raise SystemExit(31)
           job_id = str(row["id"] or "").strip()
