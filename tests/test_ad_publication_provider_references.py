@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import hashlib
 from contextlib import contextmanager
 from io import BytesIO
@@ -11,8 +13,11 @@ import pytest
 from PIL import Image
 
 from clientplatform.application import ad_goal_publication
+from clientplatform.application import ad_provider_session
 from clientplatform.application import ad_publication_assets as assets
+from clientplatform.runtime import ad_media_monitor
 from clientplatform.infrastructure.ad_publication_asset_repository import AdMediaUploadReservation
+from clientplatform.integrations.yandex_direct import YandexDirectError, YandexTokenBundle
 from clientplatform.domain.ad_publication_assets import (
     AdPublicationAsset,
     AdPublicationAssetKind,
@@ -598,3 +603,167 @@ def test_reuse_image_reference_copies_only_provider_receipt(monkeypatch) -> None
     assert len(inserted) == 1
     assert inserted[0][9] == "provider-hash-reuse"
     assert all(not isinstance(value, bytes) for value in inserted[0])
+
+
+def test_yandex_provider_requires_enabled_and_configured(monkeypatch) -> None:
+    monkeypatch.delenv("CLIENTPLATFORM_AD_CONNECTIONS_ENABLED", raising=False)
+    with pytest.raises(RuntimeError, match="connections are disabled"):
+        ad_provider_session.yandex_provider()
+
+    monkeypatch.setenv("CLIENTPLATFORM_AD_CONNECTIONS_ENABLED", "1")
+    monkeypatch.delenv("CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_ID", raising=False)
+    monkeypatch.delenv("CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI", raising=False)
+    with pytest.raises(RuntimeError, match="not configured"):
+        ad_provider_session.yandex_provider()
+
+    monkeypatch.setenv("CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_ID", "client-id")
+    monkeypatch.setenv(
+        "CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI",
+        "https://example.test/oauth",
+    )
+    provider = ad_provider_session.yandex_provider()
+    assert provider is not None
+
+
+def test_with_access_token_refreshes_once_for_auth_error(monkeypatch) -> None:
+    job = SimpleNamespace(business_id=str(uuid4()), connection_id=str(uuid4()))
+    connection = SimpleNamespace()
+    bundle = YandexTokenBundle(
+        access_token="old-token",
+        token_type="bearer",
+        expires_in=3600,
+        refresh_token="refresh-token",
+        scope=(),
+    )
+    refreshed = YandexTokenBundle(
+        access_token="new-token",
+        token_type="bearer",
+        expires_in=3600,
+        refresh_token="refresh-token",
+        scope=(),
+    )
+    seen: list[str] = []
+
+    class Provider:
+        pass
+
+    def operation(token: str):
+        seen.append(token)
+        if token == "old-token":
+            raise YandexDirectError("provider_http_401")
+        return "ok"
+
+    monkeypatch.setattr(
+        ad_provider_session,
+        "refresh_bundle",
+        lambda **_kwargs: refreshed,
+    )
+    result = ad_provider_session.with_access_token(
+        job=job,
+        operation=operation,
+        provider=Provider(),
+        vault=object(),
+        connection=connection,
+        bundle=bundle,
+    )
+
+    assert result == "ok"
+    assert seen == ["old-token", "new-token"]
+
+
+def test_with_access_token_does_not_refresh_non_auth_or_missing_refresh_token(monkeypatch) -> None:
+    job = SimpleNamespace(business_id=str(uuid4()), connection_id=str(uuid4()))
+    connection = SimpleNamespace()
+    provider = object()
+    vault = object()
+
+    for code, refresh_token in [
+        ("provider_transport_unavailable", "refresh-token"),
+        ("provider_http_401", None),
+    ]:
+        bundle = YandexTokenBundle(
+            access_token="token",
+            token_type="bearer",
+            expires_in=3600,
+            refresh_token=refresh_token,
+            scope=(),
+        )
+        with pytest.raises(YandexDirectError):
+            ad_provider_session.with_access_token(
+                job=job,
+                operation=lambda _token, error=code: (_ for _ in ()).throw(
+                    YandexDirectError(error)
+                ),
+                provider=provider,
+                vault=vault,
+                connection=connection,
+                bundle=bundle,
+            )
+
+
+@pytest.mark.asyncio
+async def test_ad_media_monitor_start_is_idempotent_and_stop_cancels(monkeypatch) -> None:
+    class FakeTask:
+        def __init__(self) -> None:
+            self.cancelled = False
+
+        def done(self) -> bool:
+            return False
+
+        def cancel(self) -> None:
+            self.cancelled = True
+
+        def __await__(self):
+            async def _cancelled():
+                raise asyncio.CancelledError
+            return _cancelled().__await__()
+
+    task = FakeTask()
+    created: list[object] = []
+
+    class Manager:
+        def create(self, coro, *, name=None):
+            created.append((coro, name))
+            coro.close()
+            return task
+
+    monkeypatch.setattr(ad_media_monitor, "_task_manager", Manager())
+    monkeypatch.setattr(ad_media_monitor, "_task", None)
+
+    await ad_media_monitor.start_ad_media_monitor(object())
+    await ad_media_monitor.start_ad_media_monitor(object())
+    assert len(created) == 1
+    assert created[0][1] == "clientplatform-ad-media-monitor"
+
+    await ad_media_monitor.stop_ad_media_monitor(object())
+    assert task.cancelled is True
+    assert ad_media_monitor._task is None
+
+
+@pytest.mark.asyncio
+async def test_ad_media_monitor_loop_drains_batch_and_sleeps(monkeypatch) -> None:
+    calls = 0
+    sleeps: list[int] = []
+
+    def process() -> bool:
+        nonlocal calls
+        calls += 1
+        return calls < 3
+
+    async def fake_to_thread(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    async def fake_sleep(seconds: int):
+        sleeps.append(seconds)
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(ad_media_monitor, "process_one_pending_video_asset", process)
+    monkeypatch.setattr(ad_media_monitor.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(ad_media_monitor.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(ad_media_monitor, "_interval_seconds", lambda: 45)
+
+    with pytest.raises(asyncio.CancelledError):
+        await ad_media_monitor._loop()
+
+    assert calls == 3
+    assert sleeps == [45]
