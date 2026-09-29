@@ -352,6 +352,63 @@ class YandexArtProvider:
         job.error_code = ""
         return _store_asset(self.config, job, raw)
 
+    def _submit_compat(self, brief: CreativeBrief) -> CreativeJob:
+        last_error: BaseException | None = None
+        for model_uri in _yandex_image_model_candidates(self.config):
+            try:
+                data = _json_request(
+                    "POST",
+                    self.config.base_url.rstrip("/") + "/v1/images/generations",
+                    headers={
+                        "Authorization": self._authorization(),
+                        "OpenAI-Project": self.config.folder_id,
+                    },
+                    payload={
+                        "model": model_uri,
+                        "prompt": brief.prompt,
+                        "size": _openai_image_size(brief.aspect_ratio),
+                    },
+                    timeout=self.config.timeout_seconds,
+                    max_bytes=self.config.max_json_bytes,
+                )
+            except ProviderTransportError as exc:
+                last_error = exc
+                if _definitive_model_rejection(exc):
+                    continue
+                raise
+
+            rows = data.get("data") if isinstance(data.get("data"), list) else []
+            row = rows[0] if rows and isinstance(rows[0], dict) else {}
+            encoded = str(row.get("b64_json") or "")
+            job = CreativeJob(
+                provider="yandexart",
+                kind="image",
+                status="succeeded",
+                external_id=uuid.uuid4().hex,
+                model=model_uri,
+                mime_type="image/png",
+                provider_payload={"transport": "openai_compat"},
+            )
+            if encoded:
+                try:
+                    raw = base64.b64decode(encoded, validate=True)
+                except (binascii.Error, ValueError, TypeError):
+                    job.status = "failed"
+                    job.error_code = "invalid_image_encoding"
+                    return job
+                return _store_asset(self.config, job, raw)
+            url = str(row.get("url") or "").strip()
+            if url:
+                job.media_url = url
+                return _download_asset(self.config, job, url)
+            job.status = "failed"
+            job.error_code = "missing_image"
+            return job
+
+        if last_error is not None:
+            raise last_error
+        raise ProviderTransportError("provider_not_configured")
+
     def submit(self, brief: CreativeBrief) -> CreativeJob:
         if not self.configured(brief.kind):
             raise ProviderTransportError("provider_not_configured")
@@ -404,6 +461,8 @@ class YandexArtProvider:
             )
             return self._materialize_operation(job, operation)
 
+        if last_error is not None and _definitive_model_rejection(last_error):
+            return self._submit_compat(brief)
         if last_error is not None:
             raise last_error
         raise ProviderTransportError("provider_not_configured")
