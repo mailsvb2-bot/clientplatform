@@ -502,8 +502,8 @@ async def receive_custom_image(message: Message, state: FSMContext) -> None:
     await state.set_state(GoalFirstAutopilotState.customizing)
     await message.answer(
         "✅ Картинка уже загружена в Яндекс Директ и привязана к этому "
-        "рекламному черновику через provider reference. Постоянную копию файла "
-        "ClientPlatform не хранит.",
+        "рекламному черновику через provider reference — загружать её в Яндекс "
+        "вручную не понадобится. Постоянную копию файла ClientPlatform не хранит.",
         reply_markup=_custom_keyboard(str(data["business_token"])),
     )
 
