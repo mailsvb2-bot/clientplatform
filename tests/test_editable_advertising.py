@@ -461,6 +461,10 @@ def test_goal_first_safety_allows_editor_callbacks_without_weakening_other_state
         "cpo:editgen:image:business-token",
     )
     assert interaction_safety._state_local_callback_allowed(
+        "GoalFirstAutopilotState:customizing",
+        "cpo:editgen:image:business-token",
+    )
+    assert interaction_safety._state_local_callback_allowed(
         "GoalFirstAutopilotState:waiting_editable_headline",
         "cpo:custom:business-token",
     )
