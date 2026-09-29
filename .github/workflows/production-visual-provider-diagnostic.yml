@@ -244,34 +244,20 @@ jobs:
 
           import json
           import os
-          import sqlite3
+          import time
+          from pathlib import Path
 
-          db_path = str(os.environ.get("VISUAL_GATEWAY_DB") or "/data/visual_gateway.sqlite3")
+          from visual_provider_gateway.engine import build_provider
+          from visual_provider_gateway.models import CreativeBrief
+          from visual_provider_gateway.providers import ProviderTransportError
+
           output_dir = str(os.environ.get("VISUAL_CREATIVE_OUTPUT_DIR") or "")
           transient_required = str(
               os.environ.get("VISUAL_TRANSIENT_OUTPUT_REQUIRED") or ""
           ).strip().lower() in {"1", "true", "yes", "on"}
-
-          with sqlite3.connect(db_path) as conn:
-              rows = conn.execute(
-                  """
-                  SELECT kind,error_code
-                  FROM visual_jobs
-                  WHERE client_id='clientplatform'
-                    AND status='failed'
-                  ORDER BY updated_at DESC
-                  LIMIT 20
-                  """
-              ).fetchall()
-
-          recent_403 = any(
-              str(error_code or "") == "visual_provider_submit_http_403"
-              for _kind, error_code in rows
-          )
           safe = {
               "transient_required": transient_required,
               "output_dir_is_tmp": output_dir.startswith("/tmp/"),
-              "recent_provider_403": recent_403,
           }
           print(
               "CLIENTPLATFORM_PRODUCTION_VISUAL_TRANSIENT_CONTRACT "
@@ -283,12 +269,130 @@ jobs:
                   "transient_media_contract_broken"
               )
               raise SystemExit(38)
-          if recent_403:
-              print(
-                  "CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:"
-                  "yandex_access_forbidden"
+
+          def safe_transport_marker(exc: BaseException) -> str:
+              raw = str(exc or "").strip()
+              allowed = {
+                  "http_400",
+                  "http_401",
+                  "http_403",
+                  "http_404",
+                  "http_410",
+                  "http_422",
+                  "http_429",
+                  "http_500",
+                  "http_502",
+                  "http_503",
+                  "http_504",
+                  "TimeoutError",
+                  "URLError",
+                  "connect_unreachable",
+                  "response_too_large",
+                  "invalid_json_response",
+                  "yandex_missing_operation_id",
+              }
+              return raw if raw in allowed else "provider_transport_failed"
+
+          def run_smoke(kind: str):
+              provider_name = "yandexart" if kind == "image" else "yandexart_motion"
+              provider = build_provider(provider_name)
+              brief = CreativeBrief(
+                  kind=kind,
+                  prompt=(
+                      "Minimal neutral advertising visual: a clean white ceramic cup "
+                      "on a plain light background, no text, no logos."
+                  ),
+                  country_code="RU",
+                  aspect_ratio="1:1" if kind == "image" else "9:16",
+                  duration_seconds=8 if kind == "video" else 5,
+                  seed=20260929,
               )
-              raise SystemExit(39)
+              try:
+                  job = provider.submit(brief)
+                  deadline = time.monotonic() + 120
+                  while not job.done and time.monotonic() < deadline:
+                      time.sleep(2)
+                      job = provider.poll(job)
+              except ProviderTransportError as exc:
+                  marker = safe_transport_marker(exc)
+                  print(
+                      "CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:"
+                      f"{kind}_submit_{marker}"
+                  )
+                  raise SystemExit(41 if kind == "image" else 42)
+              except Exception:
+                  print(
+                      "CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:"
+                      f"{kind}_unexpected_failure"
+                  )
+                  raise SystemExit(43 if kind == "image" else 44)
+
+              if not job.done:
+                  print(
+                      "CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:"
+                      f"{kind}_operation_timeout"
+                  )
+                  raise SystemExit(45 if kind == "image" else 46)
+              if not job.ok:
+                  error = str(job.error_code or "").strip()
+                  if not error or not error.replace("_", "").isalnum():
+                      error = "provider_job_failed"
+                  print(
+                      "CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:"
+                      f"{kind}_{error[:96]}"
+                  )
+                  raise SystemExit(47 if kind == "image" else 48)
+
+              asset = Path(str(job.asset_path or "")).expanduser().resolve()
+              root = Path(output_dir).expanduser().resolve()
+              try:
+                  asset.relative_to(root)
+              except ValueError:
+                  print(
+                      "CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:"
+                      f"{kind}_asset_outside_transient_root"
+                  )
+                  raise SystemExit(49 if kind == "image" else 50)
+              if not asset.is_file():
+                  print(
+                      "CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:"
+                      f"{kind}_asset_missing"
+                  )
+                  raise SystemExit(51 if kind == "image" else 52)
+
+              size = asset.stat().st_size
+              if size <= 0 or size > 256 * 1024 * 1024:
+                  asset.unlink(missing_ok=True)
+                  print(
+                      "CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:"
+                      f"{kind}_asset_size_invalid"
+                  )
+                  raise SystemExit(53 if kind == "image" else 54)
+
+              result = {
+                  "kind": kind,
+                  "provider": job.provider,
+                  "status": job.status,
+                  "mime_type": job.mime_type,
+                  "bytes": size,
+                  "model_recorded": bool(str(job.model or "").strip()),
+                  "transient_asset": True,
+              }
+              asset.unlink(missing_ok=True)
+              if asset.exists():
+                  print(
+                      "CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:"
+                      f"{kind}_transient_cleanup_failed"
+                  )
+                  raise SystemExit(55 if kind == "image" else 56)
+              print(
+                  "CLIENTPLATFORM_PRODUCTION_VISUAL_LIVE_SMOKE "
+                  + json.dumps(result, ensure_ascii=False, sort_keys=True)
+              )
+
+          run_smoke("image")
+          run_smoke("video")
+          print("CLIENTPLATFORM_PRODUCTION_VISUAL_LIVE_SMOKE_OK")
           PY
 
           REMOTE
