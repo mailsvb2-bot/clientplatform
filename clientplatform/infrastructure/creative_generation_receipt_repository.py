@@ -313,9 +313,9 @@ class CreativeGenerationReceiptRepository:
         )
         if int(getattr(cursor, "rowcount", 0) or 0) != 1:
             raise ValueError("creative generation delivery state changed")
-        # DELIVERED is intentionally durable but non-active. Keeping the minimal
-        # receipt identity/source-job link makes the explicit post-delivery
-        # download callback resolvable without retaining any generated media bytes.
+        # DELIVERED is intentionally durable but non-active. Keeping the receipt
+        # addressable makes the explicit post-delivery download callback resolvable;
+        # generated image/video bytes remain transient and are not stored here.
         return self.get(actor=current, receipt_id=receipt.id)
 
 
