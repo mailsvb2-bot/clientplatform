@@ -17,6 +17,7 @@ from io import BytesIO
 from types import ModuleType
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, FSInputFile, Message
@@ -1293,6 +1294,24 @@ async def finish_editable_ad(callback: CallbackQuery, state: FSMContext) -> None
                     path=path,
                     source=AdPublicationAssetSource.GENERATED,
                 )
+            # Provider attachment is the commit boundary. Owner delivery is a
+            # best-effort copy of the exact committed render and must not turn a
+            # successful provider upload into a retryable provider operation.
+            try:
+                target = control._callback_message(callback)
+                if project.kind == "video":
+                    await target.answer_video(
+                        FSInputFile(path),
+                        caption="✅ Редактируемое рекламное видео готово",
+                        supports_streaming=True,
+                    )
+                else:
+                    await target.answer_photo(
+                        FSInputFile(path),
+                        caption="✅ Редактируемая рекламная картинка готова",
+                    )
+            except TelegramAPIError:
+                pass
         finished = await asyncio.to_thread(
             finish_editable_ad_project,
             actor=actor,
