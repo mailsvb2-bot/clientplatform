@@ -37,6 +37,33 @@ class VisualGatewayService:
         self.engine = engine or VisualCreativeEngine()
 
     @staticmethod
+    def _provider_state_json(value: object) -> str:
+        if not isinstance(value, dict) or not value:
+            return ""
+        encoded = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        if len(encoded.encode("utf-8")) > 8192:
+            raise ValueError("visual_provider_state_too_large")
+        return encoded
+
+    @staticmethod
+    def _provider_state(value: object) -> dict[str, Any]:
+        raw = str(value or "").strip()
+        if not raw:
+            return {}
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError("invalid_visual_provider_state") from exc
+        if not isinstance(decoded, dict):
+            raise ValueError("invalid_visual_provider_state")
+        return decoded
+
+    @staticmethod
     def _output_root() -> Path:
         return Path(
             os.getenv("VISUAL_CREATIVE_OUTPUT_DIR", "data/visual_creatives")
@@ -311,6 +338,7 @@ class VisualGatewayService:
             mime_type=job.mime_type,
             asset_path=job.asset_path,
             error_code=job.error_code,
+            provider_state_json=self._provider_state_json(job.provider_payload),
         )
         return self._response(stored)
 
@@ -341,6 +369,7 @@ class VisualGatewayService:
                 external_id=stored.provider_job_id,
                 model=stored.model,
                 mime_type=stored.mime_type,
+                provider_payload=self._provider_state(stored.provider_state_json),
             )
         )
         updated = self.store.update(
@@ -355,6 +384,9 @@ class VisualGatewayService:
             mime_type=refreshed.mime_type,
             asset_path=refreshed.asset_path,
             error_code=refreshed.error_code,
+            provider_state_json=self._provider_state_json(
+                refreshed.provider_payload
+            ),
         )
         return self._response(updated)
 

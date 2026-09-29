@@ -27,6 +27,7 @@ def test_fresh_provider_store_applies_explicit_schema_assets(tmp_path):
         "scope_id",
         "idempotency_key",
         "request_fingerprint",
+        "provider_state_json",
     } <= columns
     assert "ux_visual_jobs_client_scope_idempotency" in indexes
     assert "ix_visual_jobs_client_created" in indexes
@@ -55,6 +56,7 @@ def test_recovered_legacy_provider_database_is_forward_migrated_without_data_los
     assert row["scope_id"] == "global"
     assert row["idempotency_key"] == ""
     assert row["request_fingerprint"] == ""
+    assert row["provider_state_json"] == ""
     assert {
         "client_id",
         "scope_id",

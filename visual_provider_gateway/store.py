@@ -33,6 +33,7 @@ class StoredJob:
     mime_type: str
     asset_path: str
     error_code: str
+    provider_state_json: str
     created_at: int
     updated_at: int
 
@@ -162,7 +163,7 @@ class JobStore:
                 """
                 UPDATE visual_jobs
                 SET provider='', status='running', provider_job_id='', model='',
-                    mime_type='', asset_path='', error_code='', updated_at=?
+                    mime_type='', asset_path='', error_code='', provider_state_json='', updated_at=?
                 WHERE id=? AND client_id=? AND scope_id=? AND status='failed'
                 """,
                 (now, token, client, scope),
@@ -184,6 +185,7 @@ class JobStore:
         mime_type: str = "",
         asset_path: str = "",
         error_code: str = "",
+        provider_state_json: str = "",
     ) -> StoredJob:
         token = _job_id(gateway_id)
         client = _client(client_id)
@@ -193,10 +195,10 @@ class JobStore:
             cur = conn.execute(
                 """
                 UPDATE visual_jobs
-                SET provider=?, kind=?, status=?, provider_job_id=?, model=?, mime_type=?, asset_path=?, error_code=?, updated_at=?
+                SET provider=?, kind=?, status=?, provider_job_id=?, model=?, mime_type=?, asset_path=?, error_code=?, provider_state_json=?, updated_at=?
                 WHERE id=? AND client_id=? AND scope_id=?
                 """,
-                (provider, kind, status, provider_job_id, model, mime_type, asset_path, error_code, now, token, client, scope),
+                (provider, kind, status, provider_job_id, model, mime_type, asset_path, error_code, provider_state_json, now, token, client, scope),
             )
             if cur.rowcount != 1:
                 raise KeyError(token)
