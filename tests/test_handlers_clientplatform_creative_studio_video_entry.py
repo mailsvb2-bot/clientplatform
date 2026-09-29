@@ -426,3 +426,138 @@ def test_download_creative_file_reports_expired_asset(monkeypatch) -> None:
         "Файл уже недоступен. Создайте визуал заново.",
         show_alert=True,
     )
+
+
+def test_stale_succeeded_receipt_is_retired_only_after_authoritative_asset_loss(
+    monkeypatch,
+) -> None:
+    actor = SimpleNamespace(business_id="business-id")
+    receipt = SimpleNamespace(
+        id="receipt-id",
+        status=CreativeGenerationReceiptStatus.SUCCEEDED,
+        source_job_id="job-123",
+    )
+    job = SimpleNamespace(status="succeeded", asset_ready=False)
+    abandon = Mock(return_value=True)
+    monkeypatch.setattr(studio, "poll_ad_visual", lambda **_kwargs: job)
+    monkeypatch.setattr(studio, "abandon_creative_generation", abandon)
+
+    retired = asyncio.run(
+        studio._retire_unavailable_completed_receipt(actor, receipt)
+    )
+
+    assert retired is True
+    abandon.assert_called_once_with(actor=actor, receipt_id="receipt-id")
+
+
+def test_stale_succeeded_receipt_is_preserved_when_provider_state_is_ambiguous(
+    monkeypatch,
+) -> None:
+    actor = SimpleNamespace(business_id="business-id")
+    receipt = SimpleNamespace(
+        id="receipt-id",
+        status=CreativeGenerationReceiptStatus.SUCCEEDED,
+        source_job_id="job-123",
+    )
+    abandon = Mock()
+
+    def unavailable_poll(**_kwargs):
+        raise studio.VisualCreativeError("temporary provider failure")
+
+    monkeypatch.setattr(studio, "poll_ad_visual", unavailable_poll)
+    monkeypatch.setattr(studio, "abandon_creative_generation", abandon)
+
+    retired = asyncio.run(
+        studio._retire_unavailable_completed_receipt(actor, receipt)
+    )
+
+    assert retired is False
+    abandon.assert_not_called()
+
+
+def test_video_button_recovers_from_stale_completed_image_and_keeps_video_flow(
+    monkeypatch,
+) -> None:
+    target = SimpleNamespace(answer=AsyncMock())
+    callback = SimpleNamespace(
+        data="cpc:video:business-token",
+        answer=AsyncMock(),
+        from_user=SimpleNamespace(id=101),
+        message=target,
+    )
+    state = SimpleNamespace(set_state=AsyncMock(), set_data=AsyncMock())
+    actor = SimpleNamespace(business_id="business-id")
+    stale = SimpleNamespace(
+        id="receipt-id",
+        status=CreativeGenerationReceiptStatus.SUCCEEDED,
+        source_job_id="job-123",
+    )
+    gone = SimpleNamespace(status="succeeded", asset_ready=False)
+    abandon = Mock(return_value=True)
+
+    monkeypatch.setattr(
+        studio,
+        "_actor_for_callback",
+        AsyncMock(return_value=actor),
+    )
+    monkeypatch.setattr(studio, "_active", AsyncMock(side_effect=[stale, None]))
+    monkeypatch.setattr(studio, "poll_ad_visual", lambda **_kwargs: gone)
+    monkeypatch.setattr(studio, "abandon_creative_generation", abandon)
+    monkeypatch.setattr(
+        studio,
+        "visual_video_generation_mode",
+        lambda **_kwargs: "motion",
+    )
+    monkeypatch.setattr(studio.control, "_callback_message", lambda _callback: target)
+    monkeypatch.setattr(studio.control, "_keyboard", lambda rows: rows)
+
+    asyncio.run(studio._ask_creative_prompt(callback, state, kind="video"))
+
+    abandon.assert_called_once_with(actor=actor, receipt_id="receipt-id")
+    state.set_state.assert_awaited_once()
+    state.set_data.assert_awaited_once()
+    callback.answer.assert_awaited_once_with()
+    assert "Какое видео создать?" in target.answer.await_args.args[0]
+    assert "AI-кадр" in target.answer.await_args.args[0]
+
+
+def test_checking_expired_completed_asset_ends_deadlock_and_restores_both_entries(
+    monkeypatch,
+) -> None:
+    target = SimpleNamespace(answer=AsyncMock())
+    callback = SimpleNamespace(message=target)
+    actor = SimpleNamespace(business_id="business-id")
+    receipt = SimpleNamespace(
+        id="receipt-id",
+        status=CreativeGenerationReceiptStatus.SUCCEEDED,
+        source_job_id="job-123",
+        delivery_claimed_at=None,
+    )
+    job = SimpleNamespace(status="succeeded", asset_ready=False)
+
+    monkeypatch.setattr(
+        studio,
+        "_poll_existing",
+        AsyncMock(return_value=(receipt, job)),
+    )
+    monkeypatch.setattr(
+        studio,
+        "_retire_unavailable_completed_receipt",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(studio.control, "_callback_message", lambda _callback: target)
+    monkeypatch.setattr(studio.control, "_uuid_token", lambda _value: "business-token")
+
+    asyncio.run(
+        studio._continue_generation(
+            callback,
+            actor=actor,
+            receipt=receipt,
+        )
+    )
+
+    text = target.answer.await_args.args[0]
+    rows = _labels_and_callbacks(target.answer.await_args.kwargs["reply_markup"])
+    assert "Старый результат завершён" in text
+    assert ("✨ Создать ещё картинку", "cpc:new:business-token") in rows
+    assert ("🎬 Создать видео", "cpc:video:business-token") in rows
