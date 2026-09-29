@@ -10,6 +10,7 @@ image or video. Paid generation and real advertising spend remain explicit.
 import asyncio
 import hashlib
 import os
+import secrets
 import tempfile
 from decimal import Decimal
 from io import BytesIO
@@ -453,8 +454,10 @@ async def choose_reusable_image(callback: CallbackQuery, state: FSMContext) -> N
             reply_markup=_custom_keyboard(business_token),
         )
         return
+    reuse_token = secrets.token_hex(3)
     await state.update_data(
         reusable_image_job_ids=[item.publication_job_id for item in reusable],
+        reusable_image_token=reuse_token,
     )
     rows = []
     for index, item in enumerate(reusable):
@@ -464,7 +467,7 @@ async def choose_reusable_image(callback: CallbackQuery, state: FSMContext) -> N
         if len(name) > 20:
             name = name[:17] + "..."
         rows.append(
-            [(f"🖼 {origin} · {date} · {name}", f"cpo:reusepick:{index}:{business_token}")]
+            [(f"🖼 {origin} · {date} · {name}", f"cpo:reusepick:{reuse_token}:{index}:{business_token}")]
         )
     rows.append([("↩️ Назад", f"cpo:custom:{business_token}")])
     await callback.answer()
@@ -477,13 +480,18 @@ async def choose_reusable_image(callback: CallbackQuery, state: FSMContext) -> N
 
 @router.callback_query(F.data.startswith("cpo:reusepick:"))
 async def apply_reusable_image(callback: CallbackQuery, state: FSMContext) -> None:
-    parts = str(callback.data).split(":", 3)
-    if len(parts) != 4:
+    parts = str(callback.data).split(":", 4)
+    if len(parts) != 5:
         await callback.answer("Картинка больше не доступна", show_alert=True)
         return
-    _, _, raw_index, business_token = parts
+    _, _, callback_token, raw_index, business_token = parts
     data = await state.get_data()
     if not _state_matches(data, business_token):
+        await callback.answer("Этот черновик уже устарел", show_alert=True)
+        return
+    if callback_token != str(data.get("reusable_image_token") or ""):
+        await callback.answer("Список картинок устарел. Откройте его заново.", show_alert=True)
+        return
         await callback.answer("Этот черновик уже устарел", show_alert=True)
         return
     try:
@@ -506,7 +514,7 @@ async def apply_reusable_image(callback: CallbackQuery, state: FSMContext) -> No
     except (AdPublicationAssetError, TenantPermissionDenied):
         await callback.answer("Картинка больше не доступна", show_alert=True)
         return
-    await state.update_data(reusable_image_job_ids=[])
+    await state.update_data(reusable_image_job_ids=[], reusable_image_token="")
     await state.set_state(GoalFirstAutopilotState.customizing)
     await callback.answer("Картинка выбрана")
     await control._callback_message(callback).answer(
