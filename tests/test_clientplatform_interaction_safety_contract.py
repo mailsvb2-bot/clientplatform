@@ -51,10 +51,22 @@ class ClientPlatformInteractionSafetyContractTests(unittest.TestCase):
 
         self.assertNotIn('"cpo:genask:"', repeatable_block)
         self.assertNotIn('"cpo:genvideoask:"', repeatable_block)
-        self.assertIn(
-            '("cpo:custom:", "cpo:genask:", "cpo:genvideoask:", "cpo:launch:")',
-            text,
-        )
+        self.assertIn('"cpo:editask:"', text)
+        ready_block = text.split(
+            'if current_state.startswith("GoalFirstAutopilotState:ready"):',
+            1,
+        )[1].split(
+            'if current_state.startswith("GoalFirstAutopilotState:customizing"):',
+            1,
+        )[0]
+        for prefix in (
+            '"cpo:custom:"',
+            '"cpo:genask:"',
+            '"cpo:genvideoask:"',
+            '"cpo:editask:"',
+            '"cpo:launch:"',
+        ):
+            self.assertIn(prefix, ready_block)
 
     def test_safety_source_has_single_flight_and_stale_keyboard_contracts(self) -> None:
         text = SAFETY.read_text(encoding="utf-8")
