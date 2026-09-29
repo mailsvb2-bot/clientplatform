@@ -125,7 +125,11 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("provider reference", target.answer.await_args.args[0])
 
     async def test_advanced_reuse_picker_attaches_reference_without_upload(self) -> None:
-        data = {**base_state(), "reusable_image_job_ids": ["old-job"]}
+        data = {
+            **base_state(),
+            "reusable_image_job_ids": ["old-job"],
+            "reusable_image_token": "abc123",
+        }
         cb = callback("cpa:media:reusepick:abc123:0")
         st = state(data)
         target = target_message()
@@ -175,7 +179,7 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_advanced_reuse_apply_rejects_stale_index(self) -> None:
-        cb = callback("cpa:media:reusepick:9")
+        cb = callback("cpa:media:reusepick:abc123:9")
         st = state({**base_state(), "reusable_image_job_ids": ["old-job"], "reusable_image_token": "abc123"})
         with patch.object(ui, "reuse_image_reference") as reuse:
             await ui.apply_previous_ad_image(cb, st)
@@ -201,8 +205,12 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_advanced_reuse_apply_recoverable_provider_reference_error(self) -> None:
-        cb = callback("cpa:media:reusepick:0")
-        st = state({**base_state(), "reusable_image_job_ids": ["old-job"]})
+        cb = callback("cpa:media:reusepick:abc123:0")
+        st = state({
+            **base_state(),
+            "reusable_image_job_ids": ["old-job"],
+            "reusable_image_token": "abc123",
+        })
         with (
             patch.object(ui.control, "_actor", new=AsyncMock(return_value="actor")),
             patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
