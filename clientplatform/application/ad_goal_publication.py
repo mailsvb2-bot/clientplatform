@@ -40,6 +40,18 @@ from clientplatform.integrations.yandex_direct_media import (
 from services.db import get_db, get_db_ro
 
 
+class GoalPublicationBusy(AdConnectionError):
+    """The exact idempotent draft is already being processed."""
+
+
+@dataclass(frozen=True, slots=True)
+class GoalPublicationResult:
+    job: AdPublicationJob
+    media_attached: bool
+    media_pending: bool
+    media_failed: bool = False
+
+
 def _publish_text(
     *,
     provider: MediaAwareYandexDirectProvider,
