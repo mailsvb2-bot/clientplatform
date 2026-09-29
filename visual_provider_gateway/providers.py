@@ -241,6 +241,10 @@ def _yandex_image_model_candidates(config: ProviderConfig) -> tuple[str, ...]:
     candidates.extend(part.strip() for part in raw.split(",") if part.strip())
     if config.folder_id:
         candidates.append(f"art://{config.folder_id}/aliceai-image-art-3.0")
+        # Keep the native API's documented alias as a compatibility fallback.
+        # It is attempted only after the configured/current model is rejected
+        # definitively before acceptance.
+        candidates.append(f"art://{config.folder_id}/yandex-art/latest")
     return tuple(dict.fromkeys(item for item in candidates if item))
 
 
