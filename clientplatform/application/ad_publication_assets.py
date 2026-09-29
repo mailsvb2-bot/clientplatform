@@ -435,7 +435,11 @@ def reuse_image_reference(
                 source_publication_job_id=source_publication_job_id,
                 target_publication_job_id=target_publication_job_id,
             )
-    except (LookupError, sqlite3.Error, RuntimeError, ValueError) as exc:
+    except (LookupError, sqlite3.Error, ValueError) as exc:
+        raise AdPublicationAssetError(
+            "advertising image provider reference could not be reused"
+        ) from exc
+    except RuntimeError as exc:
         raise AdPublicationAssetError(
             "advertising image provider reference could not be reused"
         ) from exc
