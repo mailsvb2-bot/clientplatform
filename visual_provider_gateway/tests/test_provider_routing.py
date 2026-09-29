@@ -374,6 +374,48 @@ def test_yandexart_native_model_fallback_only_after_definitive_rejection(monkeyp
     ]
 
 
+def test_yandexart_falls_back_to_compat_api_after_native_authorization_rejection(tmp_path, monkeypatch):
+    from visual_provider_gateway.providers import (
+        ProviderTransportError,
+        YandexArtProvider,
+    )
+
+    calls = []
+    encoded = base64.b64encode(b"compat-image").decode("ascii")
+
+    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0):
+        calls.append((method, url, headers, payload))
+        if url.endswith("/foundationModels/v1/imageGenerationAsync"):
+            raise ProviderTransportError("http_403")
+        assert url.endswith("/v1/images/generations")
+        return {"data": [{"b64_json": encoded}]}
+
+    monkeypatch.setattr(providers, "_json_request", fake_json_request)
+    monkeypatch.setenv("YANDEX_API_KEY", "durable-api-key")
+    monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    provider = YandexArtProvider(
+        ProviderConfig(
+            name="yandexart",
+            base_url="https://ai.api.cloud.yandex.net:443",
+            api_key="durable-api-key",
+            model_image="art://folder/aliceai-image-art-3.0",
+            folder_id="folder",
+            output_dir=str(tmp_path / "visual"),
+        )
+    )
+
+    job = provider.submit(CreativeBrief(kind="image", prompt="product"))
+
+    assert job.status == "succeeded"
+    assert Path(job.asset_path).read_bytes() == b"compat-image"
+    assert job.provider_payload["transport"] == "openai_compat"
+    compat_calls = [call for call in calls if call[1].endswith("/v1/images/generations")]
+    assert len(compat_calls) == 1
+    assert compat_calls[0][2]["Authorization"] == "Api-Key durable-api-key"
+    assert compat_calls[0][2]["OpenAI-Project"] == "folder"
+
+
 def test_yandexart_does_not_retry_model_after_ambiguous_submit(monkeypatch):
     from visual_provider_gateway.providers import (
         ProviderTransportError,
