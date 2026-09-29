@@ -56,7 +56,7 @@ class VisualProviderGatewayProductionContractTests(unittest.TestCase):
             deploy,
         )
 
-    def test_production_visual_diagnostic_is_transient_and_reports_yandex_403(self) -> None:
+    def test_production_visual_diagnostic_runs_bounded_transient_live_smoke(self) -> None:
         root = Path(__file__).resolve().parents[1]
         workflow = (
             root / ".github/workflows/production-visual-provider-diagnostic.yml"
@@ -66,8 +66,14 @@ class VisualProviderGatewayProductionContractTests(unittest.TestCase):
         self.assertIn("VISUAL_TRANSIENT_OUTPUT_REQUIRED", workflow)
         self.assertIn('output_dir.startswith("/tmp/")', workflow)
         self.assertIn("CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:", workflow)
-        self.assertIn("yandex_access_forbidden", workflow)
         self.assertIn("transient_media_contract_broken", workflow)
+        self.assertIn('build_provider("yandexart")', workflow)
+        self.assertIn('"yandexart_motion"', workflow)
+        self.assertIn('run_smoke("image")', workflow)
+        self.assertIn('run_smoke("video")', workflow)
+        self.assertIn("time.monotonic() + 120", workflow)
+        self.assertIn("CLIENTPLATFORM_PRODUCTION_VISUAL_LIVE_SMOKE_OK", workflow)
+        self.assertIn("asset.unlink(missing_ok=True)", workflow)
         self.assertNotIn("Retrieve latest successful production image asset", workflow)
         self.assertNotIn("Upload latest production image asset", workflow)
         self.assertNotIn("asset_path<>''", workflow)
