@@ -110,6 +110,38 @@ def test_creative_menu_shows_unavailable_generation_truthfully() -> None:
     assert ("🎬 Создать AI-видео", "cpc:video:business-token") not in rows
     assert ("🎞 Оживить картинку", "cpc:video:business-token") not in rows
 
+def test_new_visual_button_surfaces_actionable_active_generation(monkeypatch) -> None:
+    target = SimpleNamespace(answer=AsyncMock())
+    callback = SimpleNamespace(
+        data="cpc:new:business-token",
+        answer=AsyncMock(),
+        from_user=SimpleNamespace(id=101),
+        message=target,
+    )
+    state = SimpleNamespace(set_state=AsyncMock(), set_data=AsyncMock())
+    active = SimpleNamespace(
+        id="receipt-id",
+        status=CreativeGenerationReceiptStatus.RUNNING,
+        delivery_claimed_at=None,
+    )
+    monkeypatch.setattr(
+        studio,
+        "_actor_for_callback",
+        AsyncMock(return_value=SimpleNamespace(business_id="business-id")),
+    )
+    monkeypatch.setattr(studio, "_active", AsyncMock(return_value=active))
+    monkeypatch.setattr(studio.control, "_callback_message", lambda _callback: target)
+    monkeypatch.setattr(studio, "_menu_rows", lambda token, receipt: [["continue", token, receipt]])
+
+    asyncio.run(studio._ask_creative_prompt(callback, state, kind="image"))
+
+    callback.answer.assert_awaited_once_with()
+    state.set_state.assert_not_awaited()
+    state.set_data.assert_not_awaited()
+    assert "незавершённая генерация" in target.answer.await_args.args[0]
+    assert target.answer.await_args.kwargs["reply_markup"] == [["continue", "business-token", active]]
+
+
 def test_stale_video_callback_fails_closed_when_provider_is_unavailable(monkeypatch) -> None:
     callback = SimpleNamespace(
         data="cpc:video:business-token",
