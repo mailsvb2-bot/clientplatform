@@ -56,38 +56,6 @@ class VisualProviderGatewayProductionContractTests(unittest.TestCase):
             deploy,
         )
 
-    def test_visual_provider_diagnostic_matches_transient_media_contract(self) -> None:
-        root = Path(__file__).resolve().parents[1]
-        workflow = (
-            root / ".github/workflows/production-visual-provider-diagnostic.yml"
-        ).read_text(encoding="utf-8")
-
-        self.assertIn("VISUAL_TRANSIENT_OUTPUT_REQUIRED", workflow)
-        self.assertIn('output_dir.startswith("/tmp/")', workflow)
-        self.assertIn(
-            "CLIENTPLATFORM_PRODUCTION_VISUAL_TRANSIENT_CONTRACT",
-            workflow,
-        )
-        self.assertIn(
-            "CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:"
-            "yandex_access_forbidden",
-            workflow,
-        )
-        self.assertIn(
-            "CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:"
-            "transient_media_contract_broken",
-            workflow,
-        )
-        self.assertNotIn(
-            "Retrieve latest successful production image asset",
-            workflow,
-        )
-        self.assertNotIn(
-            "Upload latest production image asset",
-            workflow,
-        )
-        self.assertNotIn("asset_path<>''", workflow)
-
     def test_production_visual_diagnostic_is_transient_and_reports_yandex_403(self) -> None:
         root = Path(__file__).resolve().parents[1]
         workflow = (
