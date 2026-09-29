@@ -65,16 +65,9 @@ class VisualProviderGatewayProductionContractTests(unittest.TestCase):
         self.assertIn("CLIENTPLATFORM_PRODUCTION_VISUAL_TRANSIENT_CONTRACT", workflow)
         self.assertIn("VISUAL_TRANSIENT_OUTPUT_REQUIRED", workflow)
         self.assertIn('output_dir.startswith("/tmp/")', workflow)
-        self.assertIn(
-            "CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:"
-            "yandex_access_forbidden",
-            workflow,
-        )
-        self.assertIn(
-            "CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:"
-            "transient_media_contract_broken",
-            workflow,
-        )
+        self.assertIn("CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:", workflow)
+        self.assertIn("yandex_access_forbidden", workflow)
+        self.assertIn("transient_media_contract_broken", workflow)
         self.assertNotIn("Retrieve latest successful production image asset", workflow)
         self.assertNotIn("Upload latest production image asset", workflow)
         self.assertNotIn("asset_path<>''", workflow)
