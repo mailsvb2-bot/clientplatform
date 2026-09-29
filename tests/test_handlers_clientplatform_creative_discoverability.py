@@ -857,18 +857,24 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
         finish.assert_awaited_once()
         target.answer.assert_not_awaited()
 
-    async def test_succeeded_job_without_ready_asset_offers_retry_or_abandon(self) -> None:
+    async def test_succeeded_job_without_ready_asset_retires_stale_receipt(self) -> None:
         target = outbound()
         succeeded = receipt(
             status=CreativeGenerationReceiptStatus.SUCCEEDED,
             source_job_id="provider-job-1",
         )
+        stale_job = job(status="succeeded", asset_ready=False)
         with (
             patch.object(
                 creative,
                 "_poll_existing",
-                new=AsyncMock(return_value=(succeeded, job(status="succeeded", asset_ready=False))),
+                new=AsyncMock(return_value=(succeeded, stale_job)),
             ),
+            patch.object(
+                creative,
+                "_retire_unavailable_completed_receipt",
+                new=AsyncMock(return_value=True),
+            ) as retire,
             patch.object(creative.control, "_callback_message", return_value=target),
             patch.object(creative.control, "_uuid_token", return_value=_TOKEN),
         ):
@@ -877,11 +883,12 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
                 actor=actor(),
                 receipt=succeeded,
             )
-        self.assertIn("готовый файл пока недоступен", target.answer.await_args.args[0])
+        retire.assert_awaited_once_with(actor(), succeeded, job=stale_job)
+        self.assertIn("Старый результат завершён", target.answer.await_args.args[0])
         recovery = target.answer.await_args.kwargs["reply_markup"]
         recovery_labels = [b.text for row in recovery.inline_keyboard for b in row]
-        self.assertIn("🔄 Проверить файл ещё раз", recovery_labels)
-        self.assertIn("🗑 Завершить и создать новую", recovery_labels)
+        self.assertIn("✨ Создать ещё картинку", recovery_labels)
+        self.assertIn("🎬 Создать видео", recovery_labels)
 
     async def test_generate_and_check_callbacks_bind_exact_receipt_and_resume_safely(self) -> None:
         current = receipt(status=CreativeGenerationReceiptStatus.PREPARED)
