@@ -369,6 +369,7 @@ class ManagedGoalFirstSafetyTests(unittest.IsolatedAsyncioTestCase):
 class GoalFirstInteractionSafetyTests(unittest.TestCase):
     def _fake_safety(self) -> ModuleType:
         fake = ModuleType("fake_interaction_safety")
+        fake._CLIENTPLATFORM_CALLBACK_PREFIXES = ()
         fake._SENSITIVE_STATE_PREFIXES = ()
         fake._ONE_SHOT_PREFIXES = ()
         fake._REPEATABLE_NAVIGATION_PREFIXES = ()
@@ -414,6 +415,8 @@ class GoalFirstInteractionSafetyTests(unittest.TestCase):
         self.assertTrue(escape("GoalFirstAutopilotState:ready", "cpo:start:business-1"))
         self.assertFalse(escape("OtherState:ready", "cpj:home:business-1"))
 
+        self.assertIn("cpo:genask:", fake._CLIENTPLATFORM_CALLBACK_PREFIXES)
+        self.assertIn("cpo:genvideoask:", fake._CLIENTPLATFORM_CALLBACK_PREFIXES)
         self.assertIn("GoalFirstAutopilotState:", fake._SENSITIVE_STATE_PREFIXES)
         self.assertIn("cpo:launch:", fake._ONE_SHOT_PREFIXES)
         self.assertIn("cpo:genvideo:", fake._ONE_SHOT_PREFIXES)
