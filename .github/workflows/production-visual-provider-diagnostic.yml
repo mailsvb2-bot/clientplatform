@@ -276,8 +276,8 @@ jobs:
           job_id="$(printf '%s\n' "$probe_ref" | sed -n '1p')"
           scope_id="$(printf '%s\n' "$probe_ref" | sed -n '2p')"
           if [[ ! "$job_id" =~ ^[A-Za-z0-9_-]{1,128}$ ]] || [[ ! "$scope_id" =~ ^[A-Za-z0-9_.:@/-]{1,160}$ ]]; then
-            echo "CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:latest_asset_reference_invalid"
-            exit 34
+            echo "CLIENTPLATFORM_PRODUCTION_VISUAL_CONTENT_CHAIN state=no_retained_asset"
+            exit 0
           fi
 
           privileged docker exec \
@@ -398,9 +398,14 @@ jobs:
             echo "failure_marker=$marker" >> "$GITHUB_OUTPUT"
             exit "$status"
           fi
+          if grep -q '^CLIENTPLATFORM_PRODUCTION_VISUAL_CONTENT_CHAIN state=no_retained_asset$' "$output"; then
+            echo "asset_available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "asset_available=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Retrieve latest successful production image asset
-        if: steps.probe.outcome == 'success'
+        if: steps.probe.outcome == 'success' && steps.probe.outputs.asset_available == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -516,7 +521,7 @@ jobs:
           PY
 
       - name: Upload latest production image asset
-        if: steps.probe.outcome == 'success'
+        if: steps.probe.outcome == 'success' && steps.probe.outputs.asset_available == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: production-latest-image-asset
