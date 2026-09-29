@@ -200,6 +200,61 @@ async def _active(actor) -> CreativeGenerationReceipt | None:
     return await asyncio.to_thread(get_active_creative_generation, actor=actor)
 
 
+async def _retire_unavailable_completed_receipt(
+    actor,
+    receipt: CreativeGenerationReceipt | None,
+    *,
+    job=None,
+) -> bool:
+    """Retire a completed receipt only when its transient bytes are definitively gone.
+
+    Generated media is intentionally stored only in transient storage. A provider or
+    gateway restart can therefore leave durable SUCCEEDED metadata after the bytes
+    have disappeared. Keeping that receipt active deadlocks the studio: every new
+    image/video request is redirected back to an unrecoverable result.
+
+    We only retire after an authoritative poll says the exact paid job succeeded but
+    no asset is available. Transport/poll failures remain ambiguous and are preserved
+    so a retry can never silently create another paid generation.
+    """
+
+    if (
+        receipt is None
+        or receipt.status != CreativeGenerationReceiptStatus.SUCCEEDED
+        or not receipt.source_job_id
+    ):
+        return False
+
+    current_job = job
+    if current_job is None:
+        try:
+            current_job = await asyncio.to_thread(
+                poll_ad_visual,
+                job_id=receipt.source_job_id,
+                scope_id=actor.business_id,
+            )
+        except (VisualCreativeError, ValueError):
+            return False
+
+    if (
+        str(getattr(current_job, "status", "") or "") != "succeeded"
+        or bool(getattr(current_job, "asset_ready", False))
+    ):
+        return False
+
+    try:
+        return bool(
+            await asyncio.to_thread(
+                abandon_creative_generation,
+                actor=actor,
+                receipt_id=receipt.id,
+            )
+        )
+    except LookupError:
+        # A concurrent completion/cleanup already made the stale receipt terminal.
+        return True
+
+
 def _receipt_callback(
     action: str, token: str, receipt: CreativeGenerationReceipt
 ) -> str:
@@ -229,6 +284,8 @@ async def send_creative_studio_menu(
     actor = await control._actor(user_id, business_id)
     actor.assert_can_manage_promotions()
     active = await _active(actor)
+    if await _retire_unavailable_completed_receipt(actor, active):
+        active = await _active(actor)
     token = control._uuid_token(business_id)
     country_code = os.getenv("VISUAL_DEPLOYMENT_COUNTRY", "")
     try:
@@ -377,6 +434,8 @@ async def _ask_creative_prompt(
     try:
         actor = await _actor_for_callback(callback, token)
         active = await _active(actor)
+        if await _retire_unavailable_completed_receipt(actor, active):
+            active = await _active(actor)
     except (TypeError, ValueError, TenantPermissionDenied):
         await callback.answer(
             "Создание визуалов недоступно для Вашей роли", show_alert=True
@@ -843,6 +902,15 @@ async def _continue_generation(
             "Состояние генерации изменилось. Откройте «Картинки и креативы» заново."
         )
         return
+
+    if await _retire_unavailable_completed_receipt(actor, current, job=job):
+        await control._callback_message(callback).answer(
+            "Готовый файл прошлой генерации уже недоступен во временном хранилище. "
+            "Старый результат завершён — можно сразу создать новую картинку или видео.",
+            reply_markup=_result_rows(token),
+        )
+        return
+
     if current.status == CreativeGenerationReceiptStatus.FAILED:
         await control._callback_message(callback).answer(
             visual_failure_message(job),
