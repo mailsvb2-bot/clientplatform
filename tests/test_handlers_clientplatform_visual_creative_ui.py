@@ -604,5 +604,265 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("DRAFT", message.answer.await_args.args[0])
 
 
+    async def test_generated_image_attach_resolves_actor_and_provider_reference(self) -> None:
+        cb = callback()
+        data = base_state()
+        with (
+            patch.object(ui.control, "_actor", new=AsyncMock(return_value="actor")) as actor,
+            patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+            patch.object(ui, "attach_image_file") as attach,
+        ):
+            await ui._attach_generated_image(
+                callback=cb,
+                data=data,
+                path=Path("/tmp/generated.jpg"),
+            )
+        actor.assert_awaited_once_with(101, "business-id")
+        attach.assert_called_once()
+        self.assertEqual(attach.call_args.kwargs["actor"], "actor")
+        self.assertEqual(attach.call_args.kwargs["publication_job_id"], "ad-job")
+        self.assertEqual(attach.call_args.kwargs["source"], ui.AdPublicationAssetSource.GENERATED)
+
+    async def test_request_and_cancel_image_upload_preserve_draft(self) -> None:
+        cb = callback("cpa:media:upload")
+        st = state(base_state())
+        target = target_message()
+        with (
+            patch.object(ui, "_message", return_value=target),
+            patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
+        ):
+            await ui.request_ad_image_upload(cb, st)
+        st.set_state.assert_awaited_with(ui.AdConnectionState.waiting_image_upload)
+        self.assertIn("только в памяти", target.answer.await_args.args[0])
+
+        st.set_state.reset_mock()
+        target.answer.reset_mock()
+        cb.data = "cpa:media:cancel"
+        with (
+            patch.object(ui, "_message", return_value=target),
+            patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
+        ):
+            await ui.cancel_ad_image_upload(cb, st)
+        st.set_state.assert_awaited_with(ui.AdConnectionState.confirming_publication)
+        self.assertIn("Выберите картинку", target.answer.await_args.args[0])
+
+    async def test_receive_image_rejects_non_image_without_download(self) -> None:
+        message = SimpleNamespace(
+            photo=[],
+            document=SimpleNamespace(mime_type="application/pdf", file_name="x.pdf"),
+            answer=AsyncMock(),
+            bot=SimpleNamespace(download=AsyncMock()),
+        )
+        st = state(base_state())
+        with patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows):
+            await ui.receive_ad_image_upload(message, st)
+        message.bot.download.assert_not_awaited()
+        self.assertIn("именно изображение", message.answer.await_args.args[0])
+
+    async def test_receive_image_rejects_oversize_before_download(self) -> None:
+        media = SimpleNamespace(file_size=ui._MAX_AD_IMAGE_BYTES + 1)
+        message = SimpleNamespace(
+            photo=[media],
+            document=None,
+            answer=AsyncMock(),
+            bot=SimpleNamespace(download=AsyncMock()),
+        )
+        st = state(base_state())
+        with patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows):
+            await ui.receive_ad_image_upload(message, st)
+        message.bot.download.assert_not_awaited()
+        self.assertIn("слишком большая", message.answer.await_args.args[0])
+
+    async def test_receive_image_uploads_bytes_directly_to_provider_reference(self) -> None:
+        media = SimpleNamespace(file_size=4)
+        bot = SimpleNamespace(download=AsyncMock())
+        async def download(_media, destination):
+            destination.write(b"jpeg")
+        bot.download.side_effect = download
+        message = SimpleNamespace(
+            photo=[media],
+            document=None,
+            from_user=SimpleNamespace(id=101),
+            answer=AsyncMock(),
+            bot=bot,
+        )
+        st = state(base_state())
+        with (
+            patch.object(ui.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+            patch.object(ui, "attach_image_bytes") as attach,
+            patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
+        ):
+            await ui.receive_ad_image_upload(message, st)
+        attach.assert_called_once()
+        self.assertEqual(attach.call_args.kwargs["payload"], b"jpeg")
+        self.assertEqual(attach.call_args.kwargs["publication_job_id"], "ad-job")
+        self.assertEqual(attach.call_args.kwargs["source"], ui.AdPublicationAssetSource.UPLOAD)
+        st.set_state.assert_awaited_with(ui.AdConnectionState.confirming_publication)
+        self.assertIn("самого файла на сервере нет", message.answer.await_args.args[0])
+
+    async def test_receive_image_provider_failure_is_recoverable(self) -> None:
+        media = SimpleNamespace(file_size=4)
+        bot = SimpleNamespace(download=AsyncMock())
+        async def download(_media, destination):
+            destination.write(b"jpeg")
+        bot.download.side_effect = download
+        message = SimpleNamespace(
+            photo=[media],
+            document=None,
+            from_user=SimpleNamespace(id=101),
+            answer=AsyncMock(),
+            bot=bot,
+        )
+        st = state(base_state())
+        with (
+            patch.object(ui.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+            patch.object(
+                ui,
+                "attach_image_bytes",
+                side_effect=ui.AdPublicationAssetError("provider unavailable"),
+            ),
+            patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
+        ):
+            await ui.receive_ad_image_upload(message, st)
+        st.set_state.assert_not_awaited()
+        self.assertIn("попробуйте ещё раз", message.answer.await_args.args[0])
+
+    async def test_render_ready_image_provider_attach_failure_reuses_same_generation(self) -> None:
+        cb = callback()
+        st = state(base_state())
+        target = target_message()
+        with tempfile.TemporaryDirectory() as directory:
+            asset = Path(directory) / "creative.png"
+            asset.write_bytes(b"png")
+            with (
+                patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+                patch.object(
+                    ui,
+                    "create_ad_visual",
+                    return_value=visual_job(status="succeeded", ready=True),
+                ),
+                patch.object(ui, "materialize_ad_visual", return_value=asset),
+                patch.object(
+                    ui,
+                    "_attach_generated_image",
+                    new=AsyncMock(side_effect=ui.AdPublicationAssetError("provider")),
+                ),
+                patch.object(ui, "_message", return_value=target),
+                patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
+            ):
+                await ui._render_ad_visual(cb, st, kind="image")
+        st.update_data.assert_awaited_with(creative_job_id="gateway-job-1")
+        target.answer_photo.assert_awaited_once()
+        self.assertIn("не запускает новый платный запрос", target.answer.await_args.args[0])
+
+    async def test_render_ready_image_runtime_provider_failure_is_retryable(self) -> None:
+        cb = callback()
+        st = state(base_state())
+        target = target_message()
+        with tempfile.TemporaryDirectory() as directory:
+            asset = Path(directory) / "creative.png"
+            asset.write_bytes(b"png")
+            with (
+                patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+                patch.object(
+                    ui,
+                    "create_ad_visual",
+                    return_value=visual_job(status="succeeded", ready=True),
+                ),
+                patch.object(ui, "materialize_ad_visual", return_value=asset),
+                patch.object(
+                    ui,
+                    "_attach_generated_image",
+                    new=AsyncMock(side_effect=RuntimeError("provider config")),
+                ),
+                patch.object(ui, "_message", return_value=target),
+                patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
+            ):
+                await ui._render_ad_visual(cb, st, kind="image")
+        st.update_data.assert_awaited_with(creative_job_id="gateway-job-1")
+        target.answer_photo.assert_awaited_once()
+        self.assertIn("повторить прикрепление", target.answer.await_args.args[0])
+
+    async def test_refresh_ready_materialization_failure_clears_pending_state(self) -> None:
+        cb = callback("cpa:creative:refresh")
+        st = state({**base_state(), "creative_job_id": "gateway-job-1"})
+        target = target_message()
+        with (
+            patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+            patch.object(
+                ui,
+                "poll_ad_visual",
+                return_value=visual_job(status="succeeded", ready=True),
+            ),
+            patch.object(
+                ui,
+                "materialize_ad_visual",
+                side_effect=VisualCreativeError("download"),
+            ),
+            patch.object(ui, "_message", return_value=target),
+            patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
+        ):
+            await ui.refresh_ad_visual(cb, st)
+        st.update_data.assert_awaited_with(creative_job_id="")
+        self.assertIn("файл получить не удалось", target.answer.await_args.args[0])
+
+    async def test_refresh_ready_provider_attach_failure_preserves_same_generation(self) -> None:
+        cb = callback("cpa:creative:refresh")
+        st = state({**base_state(), "creative_job_id": "gateway-job-1"})
+        target = target_message()
+        with tempfile.TemporaryDirectory() as directory:
+            asset = Path(directory) / "creative.png"
+            asset.write_bytes(b"png")
+            with (
+                patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+                patch.object(
+                    ui,
+                    "poll_ad_visual",
+                    return_value=visual_job(status="succeeded", ready=True),
+                ),
+                patch.object(ui, "materialize_ad_visual", return_value=asset),
+                patch.object(
+                    ui,
+                    "_attach_generated_image",
+                    new=AsyncMock(side_effect=ui.AdPublicationAssetError("provider")),
+                ),
+                patch.object(ui, "_message", return_value=target),
+                patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
+            ):
+                await ui.refresh_ad_visual(cb, st)
+        st.update_data.assert_awaited_with(creative_job_id="gateway-job-1")
+        target.answer_photo.assert_awaited_once()
+        self.assertIn("повторить прикрепление", target.answer.await_args.args[0])
+
+    async def test_refresh_ready_runtime_provider_failure_is_retryable(self) -> None:
+        cb = callback("cpa:creative:refresh")
+        st = state({**base_state(), "creative_job_id": "gateway-job-1"})
+        target = target_message()
+        with tempfile.TemporaryDirectory() as directory:
+            asset = Path(directory) / "creative.png"
+            asset.write_bytes(b"png")
+            with (
+                patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+                patch.object(
+                    ui,
+                    "poll_ad_visual",
+                    return_value=visual_job(status="succeeded", ready=True),
+                ),
+                patch.object(ui, "materialize_ad_visual", return_value=asset),
+                patch.object(
+                    ui,
+                    "_attach_generated_image",
+                    new=AsyncMock(side_effect=RuntimeError("provider config")),
+                ),
+                patch.object(ui, "_message", return_value=target),
+                patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
+            ):
+                await ui.refresh_ad_visual(cb, st)
+        st.update_data.assert_awaited_with(creative_job_id="gateway-job-1")
+        target.answer_photo.assert_awaited_once()
+        self.assertIn("рекламный провайдер", target.answer.await_args.args[0])
+
 if __name__ == "__main__":
     unittest.main()
