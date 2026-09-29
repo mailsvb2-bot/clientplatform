@@ -302,7 +302,7 @@ def test_owner_delivery_survives_secondary_event_asset_failure(monkeypatch, tmp_
     assert result is True
     target.answer_photo.assert_awaited_once()
     mark.assert_called_once()
-    assert "Скачать файл" in [
+    assert "📥 Скачать файл" in [
         button.text
         for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
         for button in row
