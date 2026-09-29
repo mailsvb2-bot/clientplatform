@@ -499,35 +499,20 @@ class YandexArtMotionVideoProvider(YandexArtProvider):
             self.config.api_key and (self.config.folder_id or self.config.model_image)
         )
 
-    def submit(self, brief: CreativeBrief) -> CreativeJob:
-        if not self.configured(brief.kind):
-            raise ProviderTransportError("provider_not_configured")
-        image_job = YandexArtProvider(self.config).submit(
-            CreativeBrief(
-                kind="image",
-                prompt=brief.prompt,
-                country_code=brief.country_code,
-                aspect_ratio=brief.aspect_ratio,
-                negative_prompt=brief.negative_prompt,
-                reference_url=brief.reference_url,
-                brand_context=brief.brand_context,
-                seed=brief.seed,
-                metadata=dict(brief.metadata or {}),
-            )
-        )
-        if image_job.status != "succeeded":
-            image_job.provider = "yandexart_motion"
-            image_job.kind = "video"
-            return image_job
+    def _render_ready_image(
+        self,
+        image_job: CreativeJob,
+        *,
+        duration_seconds: int,
+        aspect_ratio: str,
+    ) -> CreativeJob:
         image_path = image_job.asset_path
-        duration = max(2, min(int(brief.duration_seconds or 5), 15))
-        aspect_ratio = str(brief.aspect_ratio or "1:1")
         try:
             video_path = _render_motion_video(
                 self.config,
                 image_path=image_path,
                 operation_id=image_job.external_id,
-                duration_seconds=duration,
+                duration_seconds=duration_seconds,
                 aspect_ratio=aspect_ratio,
             )
         except ProviderTransportError:
@@ -541,6 +526,7 @@ class YandexArtMotionVideoProvider(YandexArtProvider):
         finally:
             if image_path:
                 Path(image_path).unlink(missing_ok=True)
+
         image_job.kind = "video"
         image_job.provider = "yandexart_motion"
         image_job.model = f"{image_job.model}+motion"
@@ -550,8 +536,68 @@ class YandexArtMotionVideoProvider(YandexArtProvider):
         image_job.status = "succeeded"
         return image_job
 
+    def submit(self, brief: CreativeBrief) -> CreativeJob:
+        if not self.configured(brief.kind):
+            raise ProviderTransportError("provider_not_configured")
+        image_provider = YandexArtProvider(self.config)
+        image_job = image_provider.submit(
+            CreativeBrief(
+                kind="image",
+                prompt=brief.prompt,
+                country_code=brief.country_code,
+                aspect_ratio=brief.aspect_ratio,
+                duration_seconds=brief.duration_seconds,
+                negative_prompt=brief.negative_prompt,
+                reference_url=brief.reference_url,
+                brand_context=brief.brand_context,
+                seed=brief.seed,
+                metadata=dict(brief.metadata or {}),
+            )
+        )
+        image_job.provider_payload["motion_duration_seconds"] = max(
+            2, min(int(brief.duration_seconds or 5), 15)
+        )
+        image_job.provider_payload["motion_aspect_ratio"] = str(
+            brief.aspect_ratio or "1:1"
+        )
+        if image_job.status != "succeeded":
+            image_job.provider = "yandexart_motion"
+            image_job.kind = "video"
+            return image_job
+        return self._render_ready_image(
+            image_job,
+            duration_seconds=int(
+                image_job.provider_payload["motion_duration_seconds"]
+            ),
+            aspect_ratio=str(image_job.provider_payload["motion_aspect_ratio"]),
+        )
+
     def poll(self, job: CreativeJob) -> CreativeJob:
-        return job
+        if job.done:
+            return job
+        image_job = CreativeJob(
+            provider="yandexart",
+            kind="image",
+            status=job.status,
+            external_id=job.external_id,
+            model=job.model.removesuffix("+motion"),
+            mime_type="image/jpeg",
+            provider_payload=dict(job.provider_payload or {}),
+        )
+        image_job = YandexArtProvider(self.config).poll(image_job)
+        if image_job.status != "succeeded":
+            image_job.provider = "yandexart_motion"
+            image_job.kind = "video"
+            return image_job
+        return self._render_ready_image(
+            image_job,
+            duration_seconds=int(
+                job.provider_payload.get("motion_duration_seconds") or 5
+            ),
+            aspect_ratio=str(
+                job.provider_payload.get("motion_aspect_ratio") or "1:1"
+            ),
+        )
 
 
 class GigaChatImageProvider:
