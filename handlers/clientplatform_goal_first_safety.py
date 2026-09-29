@@ -242,6 +242,7 @@ def install_goal_first_safety(safety: ModuleType) -> None:
                     "cpo:genvideoask:",
                     "cpo:editask:",
                     "cpo:editfield:",
+                    "cpo:editgen:",
                     "cpo:editlayout:",
                     "cpo:editpreview:",
                     "cpo:editdone:",
