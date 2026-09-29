@@ -251,7 +251,13 @@ def _yandex_image_model_candidates(config: ProviderConfig) -> tuple[str, ...]:
 def _definitive_model_rejection(exc: BaseException) -> bool:
     if not isinstance(exc, ProviderTransportError):
         return False
-    return str(exc or "").strip() in {"http_403", "http_404", "http_410"}
+    return str(exc or "").strip() in {
+        "http_400",
+        "http_403",
+        "http_404",
+        "http_410",
+        "http_422",
+    }
 
 
 class YandexArtProvider:
