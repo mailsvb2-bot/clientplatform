@@ -168,6 +168,7 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
         message = SimpleNamespace(
             photo=[media],
             document=None,
+            from_user=SimpleNamespace(id=101),
             answer=AsyncMock(),
             bot=bot,
         )
@@ -195,6 +196,7 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
         message = SimpleNamespace(
             photo=[media],
             document=None,
+            from_user=SimpleNamespace(id=101),
             answer=AsyncMock(),
             bot=bot,
         )
