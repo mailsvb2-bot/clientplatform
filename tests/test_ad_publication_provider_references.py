@@ -375,3 +375,130 @@ def test_advertising_asset_application_has_no_persistent_storage_primitives() ->
     assert "_write_asset" not in source
     assert "/var/lib/clientplatform/ad-assets" not in source
     assert "storage_path" not in source
+
+
+def test_reusable_images_are_scoped_to_same_connection(monkeypatch) -> None:
+    actor = SimpleNamespace(
+        user_id=101,
+        business_id=str(uuid4()),
+        membership_id=str(uuid4()),
+    )
+    connection_id = str(uuid4())
+    excluded_job_id = str(uuid4())
+    source_job_id = str(uuid4())
+    row = (
+        source_job_id,
+        actor.business_id,
+        "image",
+        "generated",
+        "image/jpeg",
+        "generated.jpg",
+        "b" * 64,
+        456,
+        None,
+        "provider-hash-old",
+        None,
+        None,
+        None,
+        "ready",
+        actor.membership_id,
+        "2026-09-29T00:00:00+00:00",
+        "2026-09-29T00:01:00+00:00",
+    )
+    captured: dict[str, object] = {}
+
+    class Result:
+        def fetchall(self):
+            return [row]
+
+    class Conn:
+        def execute(self, sql, params):
+            captured["sql"] = sql
+            captured["params"] = params
+            return Result()
+
+    monkeypatch.setattr(
+        assets.AdPublicationAssetRepository,
+        "_actor",
+        lambda self, _actor: actor,
+    )
+    repository = assets.AdPublicationAssetRepository(Conn())
+    result = repository.list_reusable_images(
+        actor=actor,
+        connection_id=connection_id,
+        limit=8,
+        exclude_publication_job_id=excluded_job_id,
+    )
+
+    assert [item.provider_image_hash for item in result] == ["provider-hash-old"]
+    assert "j.connection_id=?" in str(captured["sql"])
+    assert captured["params"] == (
+        actor.business_id,
+        connection_id,
+        excluded_job_id,
+        8,
+    )
+
+
+def test_reuse_image_reference_rejects_other_connection(monkeypatch) -> None:
+    actor = SimpleNamespace(
+        user_id=101,
+        business_id=str(uuid4()),
+        membership_id=str(uuid4()),
+    )
+    source_job_id = str(uuid4())
+    target_job_id = str(uuid4())
+    row = (
+        source_job_id,
+        actor.business_id,
+        "image",
+        "upload",
+        "image/jpeg",
+        "owner.jpg",
+        "c" * 64,
+        789,
+        None,
+        "provider-hash-old",
+        None,
+        None,
+        None,
+        "ready",
+        actor.membership_id,
+        "2026-09-29T00:00:00+00:00",
+        "2026-09-29T00:01:00+00:00",
+        str(uuid4()),
+        str(uuid4()),
+    )
+    writes: list[str] = []
+
+    class Result:
+        rowcount = 1
+
+        def fetchone(self):
+            return row
+
+    class Conn:
+        def execute(self, sql, params):
+            if str(sql).lstrip().startswith("INSERT"):
+                writes.append(str(sql))
+            return Result()
+
+    monkeypatch.setattr(
+        assets.AdPublicationAssetRepository,
+        "_actor",
+        lambda self, _actor: actor,
+    )
+    monkeypatch.setattr(
+        assets.AdPublicationAssetRepository,
+        "_assert_editable_job",
+        lambda self, **_kwargs: None,
+    )
+    repository = assets.AdPublicationAssetRepository(Conn())
+
+    with pytest.raises(ValueError, match="another connection"):
+        repository.reuse_image_reference(
+            actor=actor,
+            source_publication_job_id=source_job_id,
+            target_publication_job_id=target_job_id,
+        )
+    assert writes == []
