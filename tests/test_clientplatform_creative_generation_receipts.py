@@ -199,7 +199,7 @@ class CreativeGenerationReceiptRepositoryTests(unittest.TestCase):
             self.repo.get(actor=self.actor, receipt_id=prepared.id)
         self.assertIsNone(self.repo.get_active(actor=self.actor))
 
-    def test_delivered_receipt_is_erased_after_successful_delivery(self) -> None:
+    def test_delivered_receipt_remains_addressable_but_is_not_active(self) -> None:
         prepared = self.prepare()
         self.repo.begin_submission(actor=self.actor, receipt_id=prepared.id)
         succeeded = self.repo.remember_job(
@@ -223,8 +223,9 @@ class CreativeGenerationReceiptRepositoryTests(unittest.TestCase):
             now="2026-09-10T06:02:00+00:00",
         )
         self.assertEqual(delivered.status, CreativeGenerationReceiptStatus.DELIVERED)
-        with self.assertRaises(LookupError):
-            self.repo.get(actor=self.actor, receipt_id=prepared.id)
+        persisted = self.repo.get(actor=self.actor, receipt_id=prepared.id)
+        self.assertEqual(persisted.status, CreativeGenerationReceiptStatus.DELIVERED)
+        self.assertEqual(persisted.source_job_id, "provider-job-1")
         self.assertIsNone(self.repo.get_active(actor=self.actor))
 
     def test_delivery_claim_is_atomic_and_required_before_delete(self) -> None:
