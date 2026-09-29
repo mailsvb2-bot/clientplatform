@@ -238,6 +238,41 @@ class EditableAdProjectRepository:
             raise ValueError("editable_ad_source_state_changed")
         return self.get(actor=current, project_id=value.id)
 
+    def advance_failed_source_revision(
+        self,
+        *,
+        actor: TenantContext,
+        project_id: str,
+        now: str | None = None,
+    ) -> EditableAdProject:
+        """Rotate only after a definitive failed provider job.
+
+        Ambiguous submit/poll failures must keep the same revision so the next
+        explicit retry reuses the same generation idempotency key.
+        """
+
+        current = self._actor(actor)
+        value = self.get(actor=current, project_id=project_id)
+        if value.status != EditableAdProjectStatus.DRAFT or value.source_job_id:
+            return value
+        cursor = self._conn.execute(
+            """
+            UPDATE editable_ad_projects
+            SET revision=revision+1, updated_at=?
+            WHERE id=? AND business_id=? AND status='draft' AND source_job_id=''
+              AND revision=?
+            """,
+            (
+                str(now or _iso_now()),
+                value.id,
+                current.business_id,
+                value.revision,
+            ),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) not in {0, 1}:
+            raise RuntimeError("editable advertising source revision transition failed")
+        return self.get(actor=current, project_id=value.id)
+
     def bind_source(
         self,
         *,
