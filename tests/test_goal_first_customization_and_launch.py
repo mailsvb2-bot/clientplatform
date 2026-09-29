@@ -136,6 +136,177 @@ class GoalFirstCustomizationAndLaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.state, goal.GoalFirstAutopilotState.customizing)
         self.assertIn("в Яндекс вручную не понадобится", message.answer.await_args.args[0])
 
+    async def test_reusable_image_picker_lists_previous_provider_references(self) -> None:
+        state = FakeState(base_data())
+        out = target()
+        cb = callback("cpo:reuse-image:business-token", out)
+        reusable = [
+            SimpleNamespace(
+                publication_job_id="44444444-4444-4444-8444-444444444444",
+                source=goal.AdPublicationAssetSource.GENERATED,
+                updated_at="2026-09-28T12:00:00+00:00",
+                original_name="generated.jpg",
+            )
+        ]
+        with (
+            patch.object(goal.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(goal.control, "_callback_message", return_value=out),
+            patch.object(goal, "list_reusable_images", return_value=reusable) as listing,
+            patch.object(goal.asyncio, "to_thread", new=direct),
+        ):
+            await goal.choose_reusable_image(cb, state)
+
+        listing.assert_called_once()
+        self.assertEqual(
+            state.data["reusable_image_job_ids"],
+            ["44444444-4444-4444-8444-444444444444"],
+        )
+        self.assertEqual(len(state.data["reusable_image_token"]), 6)
+        labels = [
+            button.text
+            for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertTrue(any("AI" in label for label in labels))
+        self.assertIn("provider reference", out.answer.await_args.args[0])
+
+    async def test_reusable_image_picker_attaches_existing_reference_without_upload(self) -> None:
+        data = base_data()
+        data["reusable_image_job_ids"] = [
+            "44444444-4444-4444-8444-444444444444"
+        ]
+        data["reusable_image_token"] = "abc123"
+        state = FakeState(data)
+        out = target()
+        cb = callback("cpo:reusepick:abc123:0:business-token", out)
+        reuse = Mock()
+        with (
+            patch.object(goal.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(goal.control, "_callback_message", return_value=out),
+            patch.object(goal, "reuse_image_reference", new=reuse),
+            patch.object(goal.asyncio, "to_thread", new=direct),
+        ):
+            await goal.apply_reusable_image(cb, state)
+
+        reuse.assert_called_once_with(
+            actor="actor",
+            source_publication_job_id="44444444-4444-4444-8444-444444444444",
+            target_publication_job_id="22222222-2222-4222-8222-222222222222",
+        )
+        self.assertEqual(state.data["reusable_image_job_ids"], [])
+        self.assertEqual(state.data["reusable_image_token"], "")
+        self.assertEqual(state.state, goal.GoalFirstAutopilotState.customizing)
+        self.assertIn("повторно не загружался", out.answer.await_args.args[0])
+
+    async def test_reusable_image_picker_rejects_stale_draft(self) -> None:
+        state = FakeState(base_data())
+        out = target()
+        cb = callback("cpo:reuse-image:other-token", out)
+        with patch.object(goal, "list_reusable_images") as listing:
+            await goal.choose_reusable_image(cb, state)
+        listing.assert_not_called()
+        cb.answer.assert_awaited_once_with(
+            "Этот черновик уже устарел",
+            show_alert=True,
+        )
+
+    async def test_reusable_image_picker_empty_list_keeps_customizing_flow(self) -> None:
+        state = FakeState(base_data())
+        out = target()
+        cb = callback("cpo:reuse-image:business-token", out)
+        with (
+            patch.object(goal.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(goal.control, "_callback_message", return_value=out),
+            patch.object(goal, "list_reusable_images", return_value=[]),
+            patch.object(goal.asyncio, "to_thread", new=direct),
+        ):
+            await goal.choose_reusable_image(cb, state)
+        self.assertIn("пока нет", out.answer.await_args.args[0])
+        self.assertIn("AI-картинку", out.answer.await_args.args[0])
+
+    async def test_reusable_image_picker_permission_failure_is_recoverable(self) -> None:
+        state = FakeState(base_data())
+        out = target()
+        cb = callback("cpo:reuse-image:business-token", out)
+        with patch.object(
+            goal.control,
+            "_actor",
+            new=AsyncMock(side_effect=goal.TenantPermissionDenied("denied")),
+        ):
+            await goal.choose_reusable_image(cb, state)
+        cb.answer.assert_awaited_once_with(
+            "Не удалось открыть прошлые картинки",
+            show_alert=True,
+        )
+
+    async def test_reusable_image_apply_rejects_malformed_callback(self) -> None:
+        state = FakeState(base_data())
+        cb = callback("cpo:reusepick:bad")
+        await goal.apply_reusable_image(cb, state)
+        cb.answer.assert_awaited_once_with(
+            "Картинка больше не доступна",
+            show_alert=True,
+        )
+
+    async def test_reusable_image_apply_rejects_stale_draft(self) -> None:
+        data = base_data()
+        data["reusable_image_job_ids"] = ["old-job"]
+        data["reusable_image_token"] = "abc123"
+        state = FakeState(data)
+        cb = callback("cpo:reusepick:abc123:0:other-token")
+        with patch.object(goal, "reuse_image_reference") as reuse:
+            await goal.apply_reusable_image(cb, state)
+        reuse.assert_not_called()
+        cb.answer.assert_awaited_once_with(
+            "Этот черновик уже устарел",
+            show_alert=True,
+        )
+
+    async def test_reusable_image_apply_rejects_stale_index(self) -> None:
+        data = base_data()
+        data["reusable_image_job_ids"] = ["old-job"]
+        data["reusable_image_token"] = "abc123"
+        state = FakeState(data)
+        cb = callback("cpo:reusepick:abc123:8:business-token")
+        with patch.object(goal, "reuse_image_reference") as reuse:
+            await goal.apply_reusable_image(cb, state)
+        reuse.assert_not_called()
+        cb.answer.assert_awaited_once_with(
+            "Картинка больше не доступна",
+            show_alert=True,
+        )
+
+    async def test_reusable_image_apply_rejects_stale_list_token(self) -> None:
+        data = base_data()
+        data["reusable_image_job_ids"] = ["old-job"]
+        data["reusable_image_token"] = "new123"
+        state = FakeState(data)
+        cb = callback("cpo:reusepick:old999:0:business-token")
+        with patch.object(goal, "reuse_image_reference") as reuse:
+            await goal.apply_reusable_image(cb, state)
+        reuse.assert_not_called()
+        cb.answer.assert_awaited_once_with(
+            "Список картинок устарел. Откройте его заново.",
+            show_alert=True,
+        )
+
+    async def test_reusable_image_apply_permission_failure_is_recoverable(self) -> None:
+        data = base_data()
+        data["reusable_image_job_ids"] = ["old-job"]
+        data["reusable_image_token"] = "abc123"
+        state = FakeState(data)
+        cb = callback("cpo:reusepick:abc123:0:business-token")
+        with patch.object(
+            goal.control,
+            "_actor",
+            new=AsyncMock(side_effect=goal.TenantPermissionDenied("denied")),
+        ):
+            await goal.apply_reusable_image(cb, state)
+        cb.answer.assert_awaited_once_with(
+            "Картинка больше не доступна",
+            show_alert=True,
+        )
+
     async def test_own_video_is_attached_and_waiting_is_hidden_from_owner(self) -> None:
         state = FakeState(base_data())
         message = SimpleNamespace(

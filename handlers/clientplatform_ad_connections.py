@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import secrets
 from io import BytesIO
 
 from aiogram import F
@@ -21,6 +22,8 @@ from clientplatform.application.ad_channel_directory import advertising_channel
 from clientplatform.application.ad_publication_assets import (
     attach_image_bytes,
     attach_image_file,
+    list_reusable_images,
+    reuse_image_reference,
 )
 from clientplatform.application.ad_connections import (
     ad_connections_enabled,
@@ -705,6 +708,7 @@ async def prepare_ad_publication(message: Message, state: FSMContext) -> None:
             [
                 [("✨ Сгенерировать картинку", "cpa:creative:image")],
                 [("📎 Добавить свою картинку", "cpa:media:upload")],
+                [("🗂 Ранее использованная картинка", "cpa:media:reuse")],
                 [("🎬 Создать видео", "cpa:creative:video")],
                 [(_CONFIRM_DRAFT_LABEL, "cpa:confirm")],
                 [("Отмена", f"cpa:home:{data['business_token']}")],
@@ -910,6 +914,112 @@ async def _render_ad_visual(
         "можно повторить попытку позже или продолжить без визуала.",
         reply_markup=control._keyboard(
             _owner_navigation_rows(str(data["business_token"]))
+        ),
+    )
+
+
+@simple.router.callback_query(
+    AdConnectionState.confirming_publication,
+    F.data == "cpa:media:reuse",
+)
+async def choose_previous_ad_image(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    try:
+        actor = await control._actor(
+            int(callback.from_user.id),
+            str(data["business_id"]),
+        )
+        reusable = await asyncio.to_thread(
+            list_reusable_images,
+            actor=actor,
+            publication_job_id=str(data["job_id"]),
+            limit=6,
+        )
+    except (KeyError, AdPublicationAssetError):
+        await callback.answer("Не удалось открыть прошлые картинки", show_alert=True)
+        return
+    if not reusable:
+        await callback.answer()
+        await _message(callback).answer(
+            "Для этого рекламного кабинета ещё нет ранее использованных картинок. "
+            "Можно загрузить свою или создать новую.",
+            reply_markup=control._keyboard(
+                [
+                    [("📎 Добавить свою картинку", "cpa:media:upload")],
+                    [("✨ Сгенерировать картинку", "cpa:creative:image")],
+                    [(_CONFIRM_DRAFT_LABEL, "cpa:confirm")],
+                    *_owner_navigation_rows(str(data["business_token"])),
+                ]
+            ),
+        )
+        return
+    reuse_token = secrets.token_hex(3)
+    await state.update_data(
+        reusable_image_job_ids=[item.publication_job_id for item in reusable],
+        reusable_image_token=reuse_token,
+    )
+    rows = []
+    for index, item in enumerate(reusable):
+        origin = "AI" if item.source == AdPublicationAssetSource.GENERATED else "своя"
+        date = str(item.updated_at or "")[:10]
+        name = str(item.original_name or "картинка").strip()
+        if len(name) > 20:
+            name = name[:17] + "..."
+        rows.append(
+            [(f"🖼 {origin} · {date} · {name}", f"cpa:media:reusepick:{reuse_token}:{index}")]
+        )
+    rows.append([("↩️ Назад", "cpa:media:cancel")])
+    await callback.answer()
+    await _message(callback).answer(
+        "Выберите ранее использованную картинку. Будет переиспользован только "
+        "provider reference — без повторной загрузки файла.",
+        reply_markup=control._keyboard(rows),
+    )
+
+
+@simple.router.callback_query(
+    AdConnectionState.confirming_publication,
+    F.data.startswith("cpa:media:reusepick:"),
+)
+async def apply_previous_ad_image(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    try:
+        parts = str(callback.data).split(":")
+        if len(parts) != 5:
+            raise ValueError("stale reusable image callback")
+        callback_token = parts[3]
+        index = int(parts[4])
+        if callback_token != str(data.get("reusable_image_token") or ""):
+            await callback.answer("Список картинок устарел. Откройте его заново.", show_alert=True)
+            return
+        source_job_id = str(list(data.get("reusable_image_job_ids") or [])[index])
+        actor = await control._actor(
+            int(callback.from_user.id),
+            str(data["business_id"]),
+        )
+        await asyncio.to_thread(
+            reuse_image_reference,
+            actor=actor,
+            source_publication_job_id=source_job_id,
+            target_publication_job_id=str(data["job_id"]),
+        )
+    except (IndexError, KeyError, ValueError):
+        await callback.answer("Картинка больше не доступна", show_alert=True)
+        return
+    except AdPublicationAssetError:
+        await callback.answer("Картинка больше не доступна", show_alert=True)
+        return
+    await state.update_data(reusable_image_job_ids=[], reusable_image_token="")
+    await callback.answer("Картинка выбрана")
+    await _message(callback).answer(
+        "✅ Ранее использованная картинка привязана к текущему черновику через "
+        "существующий provider reference. Файл повторно не загружался.",
+        reply_markup=control._keyboard(
+            [
+                [(_CONFIRM_DRAFT_LABEL, "cpa:confirm")],
+                [("🗂 Выбрать другую прошлую картинку", "cpa:media:reuse")],
+                *_owner_navigation_rows(str(data["business_token"])),
+            ]
         ),
     )
 

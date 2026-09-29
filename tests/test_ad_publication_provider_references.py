@@ -382,6 +382,229 @@ def test_advertising_asset_application_has_no_persistent_storage_primitives() ->
     assert "storage_path" not in source
 
 
+def test_reusable_images_are_scoped_to_same_connection(monkeypatch) -> None:
+    actor = SimpleNamespace(
+        user_id=101,
+        business_id=str(uuid4()),
+        membership_id=str(uuid4()),
+    )
+    connection_id = str(uuid4())
+    excluded_job_id = str(uuid4())
+    source_job_id = str(uuid4())
+    row = (
+        source_job_id,
+        actor.business_id,
+        "image",
+        "generated",
+        "image/jpeg",
+        "generated.jpg",
+        "b" * 64,
+        456,
+        None,
+        "provider-hash-old",
+        None,
+        None,
+        None,
+        "ready",
+        actor.membership_id,
+        "2026-09-29T00:00:00+00:00",
+        "2026-09-29T00:01:00+00:00",
+    )
+    captured: dict[str, object] = {}
+
+    class Result:
+        def fetchall(self):
+            return [row]
+
+    class Conn:
+        def execute(self, sql, params):
+            captured["sql"] = sql
+            captured["params"] = params
+            return Result()
+
+    monkeypatch.setattr(
+        assets.AdPublicationAssetRepository,
+        "_actor",
+        lambda self, _actor: actor,
+    )
+    repository = assets.AdPublicationAssetRepository(Conn())
+    result = repository.list_reusable_images(
+        actor=actor,
+        connection_id=connection_id,
+        limit=8,
+        exclude_publication_job_id=excluded_job_id,
+    )
+
+    assert [item.provider_image_hash for item in result] == ["provider-hash-old"]
+    assert "j.connection_id=?" in str(captured["sql"])
+    assert captured["params"] == (
+        actor.business_id,
+        connection_id,
+        excluded_job_id,
+        8,
+    )
+
+
+def test_reuse_image_reference_rejects_other_connection(monkeypatch) -> None:
+    actor = SimpleNamespace(
+        user_id=101,
+        business_id=str(uuid4()),
+        membership_id=str(uuid4()),
+    )
+    source_job_id = str(uuid4())
+    target_job_id = str(uuid4())
+    row = (
+        source_job_id,
+        actor.business_id,
+        "image",
+        "upload",
+        "image/jpeg",
+        "owner.jpg",
+        "c" * 64,
+        789,
+        None,
+        "provider-hash-old",
+        None,
+        None,
+        None,
+        "ready",
+        actor.membership_id,
+        "2026-09-29T00:00:00+00:00",
+        "2026-09-29T00:01:00+00:00",
+        str(uuid4()),
+        str(uuid4()),
+    )
+    writes: list[str] = []
+
+    class Result:
+        rowcount = 1
+
+        def fetchone(self):
+            return row
+
+    class Conn:
+        def execute(self, sql, params):
+            if str(sql).lstrip().startswith("INSERT"):
+                writes.append(str(sql))
+            return Result()
+
+    monkeypatch.setattr(
+        assets.AdPublicationAssetRepository,
+        "_actor",
+        lambda self, _actor: actor,
+    )
+    monkeypatch.setattr(
+        assets.AdPublicationAssetRepository,
+        "_assert_editable_job",
+        lambda self, **_kwargs: None,
+    )
+    repository = assets.AdPublicationAssetRepository(Conn())
+
+    with pytest.raises(ValueError, match="another connection"):
+        repository.reuse_image_reference(
+            actor=actor,
+            source_publication_job_id=source_job_id,
+            target_publication_job_id=target_job_id,
+        )
+    assert writes == []
+
+
+def test_reuse_image_reference_copies_only_provider_receipt(monkeypatch) -> None:
+    actor = SimpleNamespace(
+        user_id=101,
+        business_id=str(uuid4()),
+        membership_id=str(uuid4()),
+    )
+    connection_id = str(uuid4())
+    source_job_id = str(uuid4())
+    target_job_id = str(uuid4())
+    source_row = (
+        source_job_id,
+        actor.business_id,
+        "image",
+        "generated",
+        "image/jpeg",
+        "generated.jpg",
+        "d" * 64,
+        321,
+        None,
+        "provider-hash-reuse",
+        None,
+        None,
+        None,
+        "ready",
+        actor.membership_id,
+        "2026-09-28T00:00:00+00:00",
+        "2026-09-28T00:01:00+00:00",
+        connection_id,
+        connection_id,
+    )
+    target_row = (
+        target_job_id,
+        actor.business_id,
+        "image",
+        "generated",
+        "image/jpeg",
+        "generated.jpg",
+        "d" * 64,
+        321,
+        None,
+        "provider-hash-reuse",
+        None,
+        None,
+        None,
+        "ready",
+        actor.membership_id,
+        "2026-09-29T00:00:00+00:00",
+        "2026-09-29T00:00:00+00:00",
+    )
+    inserted: list[tuple[object, ...]] = []
+
+    class Result:
+        rowcount = 1
+
+        def __init__(self, row=None):
+            self._row = row
+
+        def fetchone(self):
+            return self._row
+
+    class Conn:
+        def execute(self, sql, params):
+            rendered = str(sql)
+            if "JOIN ad_publication_jobs AS source_job" in rendered:
+                return Result(source_row)
+            if rendered.lstrip().startswith("INSERT INTO ad_publication_assets"):
+                inserted.append(tuple(params))
+                return Result()
+            if "FROM ad_publication_assets" in rendered:
+                return Result(target_row)
+            raise AssertionError(f"unexpected SQL: {rendered}")
+
+    monkeypatch.setattr(
+        assets.AdPublicationAssetRepository,
+        "_actor",
+        lambda self, _actor: actor,
+    )
+    monkeypatch.setattr(
+        assets.AdPublicationAssetRepository,
+        "_assert_editable_job",
+        lambda self, **_kwargs: None,
+    )
+    repository = assets.AdPublicationAssetRepository(Conn())
+    result = repository.reuse_image_reference(
+        actor=actor,
+        source_publication_job_id=source_job_id,
+        target_publication_job_id=target_job_id,
+    )
+
+    assert result.publication_job_id == target_job_id
+    assert result.provider_image_hash == "provider-hash-reuse"
+    assert len(inserted) == 1
+    assert inserted[0][9] == "provider-hash-reuse"
+    assert all(not isinstance(value, bytes) for value in inserted[0])
+
+
 def test_yandex_provider_requires_enabled_and_configured(monkeypatch) -> None:
     monkeypatch.delenv("CLIENTPLATFORM_AD_CONNECTIONS_ENABLED", raising=False)
     with pytest.raises(RuntimeError, match="connections are disabled"):
@@ -544,3 +767,179 @@ async def test_ad_media_monitor_loop_drains_batch_and_sleeps(monkeypatch) -> Non
 
     assert calls == 3
     assert sleeps == [45]
+
+
+def test_reuse_image_reference_does_not_overwrite_inflight_or_ambiguous_target(
+    monkeypatch,
+) -> None:
+    actor = SimpleNamespace(
+        user_id=101,
+        business_id=str(uuid4()),
+        membership_id=str(uuid4()),
+    )
+    connection_id = str(uuid4())
+    source_job_id = str(uuid4())
+    target_job_id = str(uuid4())
+    source_row = (
+        source_job_id,
+        actor.business_id,
+        "image",
+        "upload",
+        "image/jpeg",
+        "owner.jpg",
+        "e" * 64,
+        222,
+        None,
+        "provider-hash-reuse",
+        None,
+        None,
+        None,
+        "ready",
+        actor.membership_id,
+        "2026-09-29T00:00:00+00:00",
+        "2026-09-29T00:01:00+00:00",
+        connection_id,
+        connection_id,
+    )
+    upserts: list[str] = []
+
+    class Result:
+        def __init__(self, *, row=None, rowcount=1):
+            self._row = row
+            self.rowcount = rowcount
+
+        def fetchone(self):
+            return self._row
+
+    class Conn:
+        def execute(self, sql, params):
+            rendered = str(sql)
+            if "JOIN ad_publication_jobs AS source_job" in rendered:
+                return Result(row=source_row)
+            if rendered.lstrip().startswith("INSERT INTO ad_publication_assets"):
+                upserts.append(rendered)
+                return Result(rowcount=0)
+            raise AssertionError(f"unexpected SQL: {rendered}")
+
+    monkeypatch.setattr(
+        assets.AdPublicationAssetRepository,
+        "_actor",
+        lambda self, _actor: actor,
+    )
+    monkeypatch.setattr(
+        assets.AdPublicationAssetRepository,
+        "_assert_editable_job",
+        lambda self, **_kwargs: None,
+    )
+    repository = assets.AdPublicationAssetRepository(Conn())
+
+    with pytest.raises(ValueError, match="in-flight or ambiguous"):
+        repository.reuse_image_reference(
+            actor=actor,
+            source_publication_job_id=source_job_id,
+            target_publication_job_id=target_job_id,
+        )
+
+    assert len(upserts) == 1
+    assert "NOT IN ('uploading', 'ambiguous')" in upserts[0]
+
+
+def test_reuse_image_reference_is_idempotent_for_repeat_delivery(monkeypatch) -> None:
+    actor = SimpleNamespace(
+        user_id=101,
+        business_id=str(uuid4()),
+        membership_id=str(uuid4()),
+    )
+    connection_id = str(uuid4())
+    source_job_id = str(uuid4())
+    target_job_id = str(uuid4())
+    source_row = (
+        source_job_id,
+        actor.business_id,
+        "image",
+        "generated",
+        "image/jpeg",
+        "generated.jpg",
+        "f" * 64,
+        333,
+        None,
+        "provider-hash-stable",
+        None,
+        None,
+        None,
+        "ready",
+        actor.membership_id,
+        "2026-09-29T00:00:00+00:00",
+        "2026-09-29T00:01:00+00:00",
+        connection_id,
+        connection_id,
+    )
+    target_row = (
+        target_job_id,
+        actor.business_id,
+        "image",
+        "generated",
+        "image/jpeg",
+        "generated.jpg",
+        "f" * 64,
+        333,
+        None,
+        "provider-hash-stable",
+        None,
+        None,
+        None,
+        "ready",
+        actor.membership_id,
+        "2026-09-29T00:02:00+00:00",
+        "2026-09-29T00:02:00+00:00",
+    )
+    upserts: list[tuple[object, ...]] = []
+
+    class Result:
+        rowcount = 1
+
+        def __init__(self, row=None):
+            self._row = row
+
+        def fetchone(self):
+            return self._row
+
+    class Conn:
+        def execute(self, sql, params):
+            rendered = str(sql)
+            if "JOIN ad_publication_jobs AS source_job" in rendered:
+                return Result(source_row)
+            if rendered.lstrip().startswith("INSERT INTO ad_publication_assets"):
+                upserts.append(tuple(params))
+                return Result()
+            if "FROM ad_publication_assets" in rendered:
+                return Result(target_row)
+            raise AssertionError(f"unexpected SQL: {rendered}")
+
+    monkeypatch.setattr(
+        assets.AdPublicationAssetRepository,
+        "_actor",
+        lambda self, _actor: actor,
+    )
+    monkeypatch.setattr(
+        assets.AdPublicationAssetRepository,
+        "_assert_editable_job",
+        lambda self, **_kwargs: None,
+    )
+    repository = assets.AdPublicationAssetRepository(Conn())
+
+    first = repository.reuse_image_reference(
+        actor=actor,
+        source_publication_job_id=source_job_id,
+        target_publication_job_id=target_job_id,
+    )
+    second = repository.reuse_image_reference(
+        actor=actor,
+        source_publication_job_id=source_job_id,
+        target_publication_job_id=target_job_id,
+    )
+
+    assert first.provider_image_hash == second.provider_image_hash == "provider-hash-stable"
+    assert len(upserts) == 2
+    assert upserts[0][9] == upserts[1][9] == "provider-hash-stable"
+    assert all(not isinstance(value, bytes) for params in upserts for value in params)

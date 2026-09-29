@@ -410,6 +410,155 @@ class AdPublicationAssetRepository:
         ).fetchone()
         return None if row is None else _asset(row)
 
+    def list_reusable_images(
+        self,
+        *,
+        actor: TenantContext,
+        connection_id: str,
+        limit: int = 8,
+        exclude_publication_job_id: str | None = None,
+    ) -> list[AdPublicationAsset]:
+        current = self._actor(actor)
+        connection = normalize_uuid(connection_id, field_name="connection_id")
+        bounded_limit = max(1, min(int(limit), 20))
+        params: list[object] = [current.business_id, connection]
+        exclusion = ""
+        if exclude_publication_job_id is not None:
+            excluded = normalize_uuid(
+                exclude_publication_job_id,
+                field_name="exclude_publication_job_id",
+            )
+            exclusion = " AND a.publication_job_id<>?"
+            params.append(excluded)
+        params.append(bounded_limit)
+        rows = self._conn.execute(
+            """
+            SELECT a.publication_job_id, a.business_id, a.kind, a.source,
+                   a.content_type, a.original_name, a.sha256, a.size_bytes,
+                   a.duration_seconds, a.provider_image_hash, a.provider_video_id,
+                   a.provider_creative_id, a.provider_error_code,
+                   a.provider_upload_status, a.created_by_member_id,
+                   a.created_at, a.updated_at
+            FROM ad_publication_assets AS a
+            JOIN ad_publication_jobs AS j
+              ON j.id=a.publication_job_id AND j.business_id=a.business_id
+            WHERE a.business_id=? AND j.connection_id=?
+              AND a.kind='image' AND a.provider_upload_status='ready'
+              AND a.provider_image_hash IS NOT NULL
+            """ + exclusion + """
+            ORDER BY a.updated_at DESC, a.publication_job_id DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+        return [_asset(row) for row in rows]
+
+    def reuse_image_reference(
+        self,
+        *,
+        actor: TenantContext,
+        source_publication_job_id: str,
+        target_publication_job_id: str,
+    ) -> AdPublicationAsset:
+        current = self._actor(actor)
+        source_id = normalize_uuid(
+            source_publication_job_id,
+            field_name="source_publication_job_id",
+        )
+        target_id = normalize_uuid(
+            target_publication_job_id,
+            field_name="target_publication_job_id",
+        )
+        if source_id == target_id:
+            raise ValueError("source and target advertising drafts must differ")
+        self._assert_editable_job(
+            business_id=current.business_id,
+            job_id=target_id,
+        )
+        source_row = self._conn.execute(
+            """
+            SELECT a.publication_job_id, a.business_id, a.kind, a.source,
+                   a.content_type, a.original_name, a.sha256, a.size_bytes,
+                   a.duration_seconds, a.provider_image_hash, a.provider_video_id,
+                   a.provider_creative_id, a.provider_error_code,
+                   a.provider_upload_status, a.created_by_member_id,
+                   a.created_at, a.updated_at,
+                   source_job.connection_id AS source_connection_id,
+                   target_job.connection_id AS target_connection_id
+            FROM ad_publication_assets AS a
+            JOIN ad_publication_jobs AS source_job
+              ON source_job.id=a.publication_job_id
+             AND source_job.business_id=a.business_id
+            JOIN ad_publication_jobs AS target_job
+              ON target_job.id=? AND target_job.business_id=a.business_id
+            WHERE a.publication_job_id=? AND a.business_id=?
+              AND a.kind='image' AND a.provider_upload_status='ready'
+              AND a.provider_image_hash IS NOT NULL
+            LIMIT 1
+            """,
+            (target_id, source_id, current.business_id),
+        ).fetchone()
+        if source_row is None:
+            raise LookupError("reusable advertising image was not found")
+        source_connection = str(_value(source_row, "source_connection_id", 17))
+        target_connection = str(_value(source_row, "target_connection_id", 18))
+        if source_connection != target_connection:
+            raise ValueError(
+                "advertising image provider reference belongs to another connection"
+            )
+        source = _asset(source_row)
+        now = _iso_now()
+        cursor = self._conn.execute(
+            """
+            INSERT INTO ad_publication_assets(
+                publication_job_id, business_id, kind, source,
+                content_type, original_name, sha256, size_bytes, duration_seconds,
+                provider_image_hash, provider_video_id, provider_creative_id,
+                provider_error_code, provider_upload_status,
+                provider_upload_claim_token, created_by_member_id,
+                created_at, updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,'ready','',?,?,?)
+            ON CONFLICT(publication_job_id, business_id) DO UPDATE SET
+                kind=excluded.kind,
+                source=excluded.source,
+                content_type=excluded.content_type,
+                original_name=excluded.original_name,
+                sha256=excluded.sha256,
+                size_bytes=excluded.size_bytes,
+                duration_seconds=excluded.duration_seconds,
+                provider_image_hash=excluded.provider_image_hash,
+                provider_video_id=NULL,
+                provider_creative_id=NULL,
+                provider_error_code=NULL,
+                provider_upload_status='ready',
+                provider_upload_claim_token='',
+                created_by_member_id=excluded.created_by_member_id,
+                updated_at=excluded.updated_at
+            WHERE ad_publication_assets.provider_upload_status
+                  NOT IN ('uploading', 'ambiguous')
+            """,
+            (
+                target_id,
+                current.business_id,
+                AdPublicationAssetKind.IMAGE.value,
+                source.source.value,
+                source.content_type,
+                source.original_name,
+                source.sha256,
+                source.size_bytes,
+                None,
+                source.provider_image_hash,
+                current.membership_id,
+                now,
+                now,
+            ),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            raise ValueError(
+                "advertising image cannot replace an in-flight or ambiguous upload"
+            )
+        return self.get(actor=current, publication_job_id=target_id)
+
     def remove(
         self,
         *,

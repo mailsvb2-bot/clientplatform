@@ -10,6 +10,7 @@ image or video. Paid generation and real advertising spend remain explicit.
 import asyncio
 import hashlib
 import os
+import secrets
 import tempfile
 from decimal import Decimal
 from io import BytesIO
@@ -25,7 +26,9 @@ from clientplatform.application.ad_publication_assets import (
     attach_image_bytes,
     attach_image_file,
     attach_video_bytes,
+    list_reusable_images,
     remove_asset,
+    reuse_image_reference,
 )
 from clientplatform.application.ad_publication_customization import (
     update_ad_publication_copy,
@@ -145,6 +148,7 @@ def _custom_keyboard(business_token: str):
                 ("🖼 Своя картинка", f"cpo:custom-image:{business_token}"),
                 ("🎬 Своё видео", f"cpo:custom-video:{business_token}"),
             ],
+            [("🗂 Ранее использованная картинка", f"cpo:reuse-image:{business_token}")],
             [
                 ("✨ AI-картинка", f"cpo:genask:{business_token}"),
                 ("🎬 AI-видео", f"cpo:genvideoask:{business_token}"),
@@ -418,6 +422,104 @@ async def receive_custom_text(message: Message, state: FSMContext) -> None:
     await message.answer(
         "✅ Свой текст поставил. Больше ничего делать с ним не нужно.",
         reply_markup=_custom_keyboard(str(data["business_token"])),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:reuse-image:"))
+async def choose_reusable_image(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    data = await state.get_data()
+    if not _state_matches(data, business_token) or not data.get("job_id"):
+        await callback.answer("Этот черновик уже устарел", show_alert=True)
+        return
+    try:
+        actor = await control._actor(
+            int(callback.from_user.id),
+            str(data["business_id"]),
+        )
+        reusable = await asyncio.to_thread(
+            list_reusable_images,
+            actor=actor,
+            publication_job_id=str(data["job_id"]),
+            limit=6,
+        )
+    except (KeyError, AdPublicationAssetError, TenantPermissionDenied):
+        await callback.answer("Не удалось открыть прошлые картинки", show_alert=True)
+        return
+    if not reusable:
+        await callback.answer()
+        await control._callback_message(callback).answer(
+            "Ранее загруженных картинок для этого рекламного кабинета пока нет. "
+            "Можно добавить свою или создать новую AI-картинку.",
+            reply_markup=_custom_keyboard(business_token),
+        )
+        return
+    reuse_token = secrets.token_hex(3)
+    await state.update_data(
+        reusable_image_job_ids=[item.publication_job_id for item in reusable],
+        reusable_image_token=reuse_token,
+    )
+    rows = []
+    for index, item in enumerate(reusable):
+        origin = "AI" if item.source == AdPublicationAssetSource.GENERATED else "своя"
+        date = str(item.updated_at or "")[:10]
+        name = str(item.original_name or "картинка").strip()
+        if len(name) > 20:
+            name = name[:17] + "..."
+        rows.append(
+            [(f"🖼 {origin} · {date} · {name}", f"cpo:reusepick:{reuse_token}:{index}:{business_token}")]
+        )
+    rows.append([("↩️ Назад", f"cpo:custom:{business_token}")])
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "Выберите ранее использованную картинку. ClientPlatform возьмёт уже "
+        "существующий provider reference — повторной загрузки и хранения файла не будет.",
+        reply_markup=control._keyboard(rows),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:reusepick:"))
+async def apply_reusable_image(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = str(callback.data).split(":", 4)
+    if len(parts) != 5:
+        await callback.answer("Картинка больше не доступна", show_alert=True)
+        return
+    _, _, callback_token, raw_index, business_token = parts
+    data = await state.get_data()
+    if not _state_matches(data, business_token):
+        await callback.answer("Этот черновик уже устарел", show_alert=True)
+        return
+    if callback_token != str(data.get("reusable_image_token") or ""):
+        await callback.answer("Список картинок устарел. Откройте его заново.", show_alert=True)
+        return
+    try:
+        index = int(raw_index)
+        reusable_ids = list(data.get("reusable_image_job_ids") or [])
+        source_job_id = str(reusable_ids[index])
+        actor = await control._actor(
+            int(callback.from_user.id),
+            str(data["business_id"]),
+        )
+        await asyncio.to_thread(
+            reuse_image_reference,
+            actor=actor,
+            source_publication_job_id=source_job_id,
+            target_publication_job_id=str(data["job_id"]),
+        )
+    except (IndexError, KeyError, ValueError):
+        await callback.answer("Картинка больше не доступна", show_alert=True)
+        return
+    except (AdPublicationAssetError, TenantPermissionDenied):
+        await callback.answer("Картинка больше не доступна", show_alert=True)
+        return
+    await state.update_data(reusable_image_job_ids=[], reusable_image_token="")
+    await state.set_state(GoalFirstAutopilotState.customizing)
+    await callback.answer("Картинка выбрана")
+    await control._callback_message(callback).answer(
+        "✅ Ранее использованная картинка привязана к новому рекламному черновику "
+        "через существующий provider reference. Файл повторно не загружался и на "
+        "сервере ClientPlatform не сохранялся.",
+        reply_markup=_custom_keyboard(business_token),
     )
 
 

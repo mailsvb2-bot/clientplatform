@@ -401,6 +401,50 @@ def attach_video_bytes(
     )
 
 
+def list_reusable_images(
+    *,
+    actor: TenantContext,
+    publication_job_id: str,
+    limit: int = 8,
+) -> list[AdPublicationAsset]:
+    job = _publication_job(actor=actor, publication_job_id=publication_job_id)
+    try:
+        with get_db_ro() as conn:
+            return AdPublicationAssetRepository(conn).list_reusable_images(
+                actor=actor,
+                connection_id=job.connection_id,
+                limit=limit,
+                exclude_publication_job_id=job.id,
+            )
+    except (sqlite3.Error, RuntimeError, ValueError) as exc:
+        raise AdPublicationAssetError(
+            "reusable advertising images are unavailable"
+        ) from exc
+
+
+def reuse_image_reference(
+    *,
+    actor: TenantContext,
+    source_publication_job_id: str,
+    target_publication_job_id: str,
+) -> AdPublicationAsset:
+    try:
+        with get_db() as conn:
+            return AdPublicationAssetRepository(conn).reuse_image_reference(
+                actor=actor,
+                source_publication_job_id=source_publication_job_id,
+                target_publication_job_id=target_publication_job_id,
+            )
+    except (LookupError, sqlite3.Error, ValueError) as exc:
+        raise AdPublicationAssetError(
+            "advertising image provider reference could not be reused"
+        ) from exc
+    except RuntimeError as exc:
+        raise AdPublicationAssetError(
+            "advertising image provider reference could not be reused"
+        ) from exc
+
+
 def remove_asset(*, actor: TenantContext, publication_job_id: str) -> bool:
     with get_db() as conn:
         return AdPublicationAssetRepository(conn).remove(
