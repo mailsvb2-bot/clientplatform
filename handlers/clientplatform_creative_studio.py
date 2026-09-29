@@ -1007,9 +1007,19 @@ async def download_creative_file(callback: CallbackQuery, state: FSMContext) -> 
             )
     except TenantPermissionDenied:
         await callback.answer("Создание визуалов недоступно для Вашей роли", show_alert=True)
-    except (LookupError, TypeError, ValueError, VisualCreativeError, TelegramAPIError):
+    except (LookupError, TypeError, ValueError):
         await callback.answer(
             "Файл уже недоступен. Создайте визуал заново.",
+            show_alert=True,
+        )
+    except VisualCreativeError:
+        await callback.answer(
+            "Файл уже недоступен. Создайте визуал заново.",
+            show_alert=True,
+        )
+    except TelegramAPIError:
+        await callback.answer(
+            "Telegram не смог отправить файл. Попробуйте ещё раз.",
             show_alert=True,
         )
 
