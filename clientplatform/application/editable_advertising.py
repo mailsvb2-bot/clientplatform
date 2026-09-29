@@ -96,6 +96,18 @@ def update_editable_ad_composition(
         )
 
 
+def advance_failed_editable_ad_source(
+    *,
+    actor: TenantContext,
+    project_id: str,
+) -> EditableAdProject:
+    with get_db() as conn:
+        return EditableAdProjectRepository(conn).advance_failed_source_revision(
+            actor=actor,
+            project_id=project_id,
+        )
+
+
 def bind_editable_ad_source(
     *,
     actor: TenantContext,
@@ -201,6 +213,7 @@ def render_editable_ad_project(
 __all__ = [
     "EditableAdvertisingError",
     "EditableAdvertisingSourceExpired",
+    "advance_failed_editable_ad_source",
     "bind_editable_ad_source",
     "create_editable_ad_project",
     "finish_editable_ad_project",
