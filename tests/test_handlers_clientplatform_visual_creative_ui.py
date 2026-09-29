@@ -90,6 +90,129 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"VISUAL_TELEGRAM_WAIT_SECONDS": "999"}):
             self.assertEqual(ui._visual_wait_seconds(), 60)
 
+    async def test_generated_image_attach_resolves_actor_and_provider_reference(self) -> None:
+        cb = callback()
+        data = base_state()
+        with (
+            patch.object(ui.control, "_actor", new=AsyncMock(return_value="actor")) as actor,
+            patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+            patch.object(ui, "attach_image_file") as attach,
+        ):
+            await ui._attach_generated_image(
+                callback=cb,
+                data=data,
+                path=Path("/tmp/generated.jpg"),
+            )
+        actor.assert_awaited_once_with(101, "business-id")
+        attach.assert_called_once()
+        self.assertEqual(attach.call_args.kwargs["actor"], "actor")
+        self.assertEqual(attach.call_args.kwargs["publication_job_id"], "ad-job")
+        self.assertEqual(attach.call_args.kwargs["source"], ui.AdPublicationAssetSource.GENERATED)
+
+    async def test_request_and_cancel_image_upload_preserve_draft(self) -> None:
+        cb = callback("cpa:media:upload")
+        st = state(base_state())
+        target = target_message()
+        with (
+            patch.object(ui, "_message", return_value=target),
+            patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
+        ):
+            await ui.request_ad_image_upload(cb, st)
+        st.set_state.assert_awaited_with(ui.AdConnectionState.waiting_image_upload)
+        self.assertIn("только в памяти", target.answer.await_args.args[0])
+
+        st.set_state.reset_mock()
+        target.answer.reset_mock()
+        cb.data = "cpa:media:cancel"
+        with (
+            patch.object(ui, "_message", return_value=target),
+            patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
+        ):
+            await ui.cancel_ad_image_upload(cb, st)
+        st.set_state.assert_awaited_with(ui.AdConnectionState.confirming_publication)
+        self.assertIn("Выберите картинку", target.answer.await_args.args[0])
+
+    async def test_receive_image_rejects_non_image_without_download(self) -> None:
+        message = SimpleNamespace(
+            photo=[],
+            document=SimpleNamespace(mime_type="application/pdf", file_name="x.pdf"),
+            answer=AsyncMock(),
+            bot=SimpleNamespace(download=AsyncMock()),
+        )
+        st = state(base_state())
+        with patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows):
+            await ui.receive_ad_image_upload(message, st)
+        message.bot.download.assert_not_awaited()
+        self.assertIn("именно изображение", message.answer.await_args.args[0])
+
+    async def test_receive_image_rejects_oversize_before_download(self) -> None:
+        media = SimpleNamespace(file_size=ui._MAX_AD_IMAGE_BYTES + 1)
+        message = SimpleNamespace(
+            photo=[media],
+            document=None,
+            answer=AsyncMock(),
+            bot=SimpleNamespace(download=AsyncMock()),
+        )
+        st = state(base_state())
+        with patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows):
+            await ui.receive_ad_image_upload(message, st)
+        message.bot.download.assert_not_awaited()
+        self.assertIn("слишком большая", message.answer.await_args.args[0])
+
+    async def test_receive_image_uploads_bytes_directly_to_provider_reference(self) -> None:
+        media = SimpleNamespace(file_size=4)
+        bot = SimpleNamespace(download=AsyncMock())
+        async def download(_media, destination):
+            destination.write(b"jpeg")
+        bot.download.side_effect = download
+        message = SimpleNamespace(
+            photo=[media],
+            document=None,
+            answer=AsyncMock(),
+            bot=bot,
+        )
+        st = state(base_state())
+        with (
+            patch.object(ui.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+            patch.object(ui, "attach_image_bytes") as attach,
+            patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
+        ):
+            await ui.receive_ad_image_upload(message, st)
+        attach.assert_called_once()
+        self.assertEqual(attach.call_args.kwargs["payload"], b"jpeg")
+        self.assertEqual(attach.call_args.kwargs["publication_job_id"], "ad-job")
+        self.assertEqual(attach.call_args.kwargs["source"], ui.AdPublicationAssetSource.UPLOAD)
+        st.set_state.assert_awaited_with(ui.AdConnectionState.confirming_publication)
+        self.assertIn("самого файла на сервере нет", message.answer.await_args.args[0])
+
+    async def test_receive_image_provider_failure_is_recoverable(self) -> None:
+        media = SimpleNamespace(file_size=4)
+        bot = SimpleNamespace(download=AsyncMock())
+        async def download(_media, destination):
+            destination.write(b"jpeg")
+        bot.download.side_effect = download
+        message = SimpleNamespace(
+            photo=[media],
+            document=None,
+            answer=AsyncMock(),
+            bot=bot,
+        )
+        st = state(base_state())
+        with (
+            patch.object(ui.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+            patch.object(
+                ui,
+                "attach_image_bytes",
+                side_effect=ui.AdPublicationAssetError("provider unavailable"),
+            ),
+            patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
+        ):
+            await ui.receive_ad_image_upload(message, st)
+        st.set_state.assert_not_awaited()
+        self.assertIn("попробуйте ещё раз", message.answer.await_args.args[0])
+
     async def test_render_pending_is_tenant_scoped_and_idempotent(self) -> None:
         cb = callback()
         st = state(base_state())
