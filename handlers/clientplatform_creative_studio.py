@@ -3,6 +3,7 @@ from __future__ import annotations
 """Discoverable owner image/video creation over the canonical visual gateway."""
 
 import asyncio
+import logging
 import os
 import tempfile
 from types import ModuleType
@@ -58,6 +59,9 @@ from clientplatform.presentation.visual_generation import (
 )
 
 from . import clientplatform_control as control
+
+
+logger = logging.getLogger(__name__)
 
 
 router = Router(name="clientplatform_creative_studio")
@@ -675,10 +679,13 @@ async def _finish_visual(
                         ),
                         source_ref=receipt.id,
                     )
-                except EventContentAssetError:
+                except EventContentAssetError as exc:
                     # Delivery to the owner is the primary contract. A secondary
                     # campaign attachment failure must never hide a valid result.
-                    pass
+                    logger.warning(
+                        "creative event-content attachment failed after owner delivery: %s",
+                        exc,
+                    )
     except (VisualCreativeError, ValueError):
         await target.answer(
             "Генератор завершил визуал, но файл сейчас не удалось получить. "
