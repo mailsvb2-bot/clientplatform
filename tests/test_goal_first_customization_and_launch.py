@@ -161,6 +161,7 @@ class GoalFirstCustomizationAndLaunchTests(unittest.IsolatedAsyncioTestCase):
             state.data["reusable_image_job_ids"],
             ["44444444-4444-4444-8444-444444444444"],
         )
+        self.assertEqual(len(state.data["reusable_image_token"]), 6)
         labels = [
             button.text
             for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
@@ -174,9 +175,10 @@ class GoalFirstCustomizationAndLaunchTests(unittest.IsolatedAsyncioTestCase):
         data["reusable_image_job_ids"] = [
             "44444444-4444-4444-8444-444444444444"
         ]
+        data["reusable_image_token"] = "abc123"
         state = FakeState(data)
         out = target()
-        cb = callback("cpo:reusepick:0:business-token", out)
+        cb = callback("cpo:reusepick:abc123:0:business-token", out)
         reuse = Mock()
         with (
             patch.object(goal.control, "_actor", new=AsyncMock(return_value="actor")),
@@ -192,6 +194,7 @@ class GoalFirstCustomizationAndLaunchTests(unittest.IsolatedAsyncioTestCase):
             target_publication_job_id="22222222-2222-4222-8222-222222222222",
         )
         self.assertEqual(state.data["reusable_image_job_ids"], [])
+        self.assertEqual(state.data["reusable_image_token"], "")
         self.assertEqual(state.state, goal.GoalFirstAutopilotState.customizing)
         self.assertIn("повторно не загружался", out.answer.await_args.args[0])
 
@@ -248,8 +251,9 @@ class GoalFirstCustomizationAndLaunchTests(unittest.IsolatedAsyncioTestCase):
     async def test_reusable_image_apply_rejects_stale_draft(self) -> None:
         data = base_data()
         data["reusable_image_job_ids"] = ["old-job"]
+        data["reusable_image_token"] = "abc123"
         state = FakeState(data)
-        cb = callback("cpo:reusepick:0:other-token")
+        cb = callback("cpo:reusepick:abc123:0:other-token")
         with patch.object(goal, "reuse_image_reference") as reuse:
             await goal.apply_reusable_image(cb, state)
         reuse.assert_not_called()
@@ -261,13 +265,28 @@ class GoalFirstCustomizationAndLaunchTests(unittest.IsolatedAsyncioTestCase):
     async def test_reusable_image_apply_rejects_stale_index(self) -> None:
         data = base_data()
         data["reusable_image_job_ids"] = ["old-job"]
+        data["reusable_image_token"] = "abc123"
         state = FakeState(data)
-        cb = callback("cpo:reusepick:8:business-token")
+        cb = callback("cpo:reusepick:abc123:8:business-token")
         with patch.object(goal, "reuse_image_reference") as reuse:
             await goal.apply_reusable_image(cb, state)
         reuse.assert_not_called()
         cb.answer.assert_awaited_once_with(
             "Картинка больше не доступна",
+            show_alert=True,
+        )
+
+    async def test_reusable_image_apply_rejects_stale_list_token(self) -> None:
+        data = base_data()
+        data["reusable_image_job_ids"] = ["old-job"]
+        data["reusable_image_token"] = "new123"
+        state = FakeState(data)
+        cb = callback("cpo:reusepick:old999:0:business-token")
+        with patch.object(goal, "reuse_image_reference") as reuse:
+            await goal.apply_reusable_image(cb, state)
+        reuse.assert_not_called()
+        cb.answer.assert_awaited_once_with(
+            "Список картинок устарел. Откройте его заново.",
             show_alert=True,
         )
 
