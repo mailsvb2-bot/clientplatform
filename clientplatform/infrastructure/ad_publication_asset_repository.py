@@ -508,7 +508,7 @@ class AdPublicationAssetRepository:
             )
         source = _asset(source_row)
         now = _iso_now()
-        self._conn.execute(
+        cursor = self._conn.execute(
             """
             INSERT INTO ad_publication_assets(
                 publication_job_id, business_id, kind, source,
@@ -534,6 +534,8 @@ class AdPublicationAssetRepository:
                 provider_upload_claim_token='',
                 created_by_member_id=excluded.created_by_member_id,
                 updated_at=excluded.updated_at
+            WHERE ad_publication_assets.provider_upload_status
+                  NOT IN ('uploading', 'ambiguous')
             """,
             (
                 target_id,
@@ -551,6 +553,10 @@ class AdPublicationAssetRepository:
                 now,
             ),
         )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            raise ValueError(
+                "advertising image cannot replace an in-flight or ambiguous upload"
+            )
         return self.get(actor=current, publication_job_id=target_id)
 
     def remove(
