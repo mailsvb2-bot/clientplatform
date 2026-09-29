@@ -10,6 +10,7 @@ image or video. Paid generation and real advertising spend remain explicit.
 import asyncio
 import hashlib
 import os
+import tempfile
 from decimal import Decimal
 from io import BytesIO
 from types import ModuleType
@@ -37,6 +38,7 @@ from clientplatform.application.creative_studio_publication import (
     goal_variant_labels,
     load_goal_visual_brand,
     poll_goal_image_variant,
+    render_format_for_placement,
     selected_goal_variant,
     start_goal_image_variant,
 )
@@ -56,6 +58,7 @@ from clientplatform.domain.ad_spend import AdSpendError
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.integrations.yandex_direct import YandexDirectError
+from services.visual_creative_gateway import VisualCreativeGatewayError, download_render_asset
 from clientplatform.presentation.visual_generation import (
     visual_failure_message,
     visual_provider_unavailable_message,
@@ -487,6 +490,9 @@ async def receive_custom_image(message: Message, state: FSMContext) -> None:
         OSError,
         asyncio.TimeoutError,
         AdPublicationAssetError,
+        AdConnectionError,
+        YandexDirectError,
+        RuntimeError,
         TenantPermissionDenied,
     ):
         await message.answer(
@@ -495,8 +501,9 @@ async def receive_custom_image(message: Message, state: FSMContext) -> None:
         return
     await state.set_state(GoalFirstAutopilotState.customizing)
     await message.answer(
-        "✅ Картинку добавил. Я сама подготовлю и прикреплю её к объявлению — "
-        "скачивать или загружать её в Яндекс вручную не понадобится.",
+        "✅ Картинка уже загружена в Яндекс Директ и привязана к этому "
+        "рекламному черновику через provider reference — загружать её в Яндекс "
+        "вручную не понадобится. Постоянную копию файла ClientPlatform не хранит.",
         reply_markup=_custom_keyboard(str(data["business_token"])),
     )
 
@@ -556,8 +563,9 @@ async def receive_custom_video(message: Message, state: FSMContext) -> None:
         return
     await state.set_state(GoalFirstAutopilotState.customizing)
     await message.answer(
-        "✅ Видео добавил. Дальше всё автоматически: ClientPlatform загрузит его "
-        "в Яндекс, дождётся конвертации и прикрепит к объявлению.",
+        "✅ Видео уже передано в Яндекс. ClientPlatform хранит только provider "
+        "reference, дождётся конвертации и прикрепит ролик к объявлению без "
+        "постоянной серверной копии.",
         reply_markup=_custom_keyboard(str(data["business_token"])),
     )
 
@@ -729,13 +737,31 @@ async def _finish_generated_visual(
             creative_variant_id=result.binding.variant_id,
         )
         await state.set_state(GoalFirstAutopilotState.customizing)
-        await control._callback_message(event).answer_photo(
-            FSInputFile(result.asset.storage_path),
-            caption="✅ Картинка готова и уже сохранена как рекламный asset ClientPlatform.",
+        preview_available = False
+        if result.render is not None:
+            try:
+                with tempfile.TemporaryDirectory(prefix="clientplatform-preview-") as directory:
+                    preview = await asyncio.to_thread(
+                        download_render_asset,
+                        result.render,
+                        render_format_for_placement("yandex_direct"),
+                        output_dir=directory,
+                    )
+                    await control._callback_message(event).answer_photo(
+                        FSInputFile(preview),
+                        caption="✅ Картинка готова и загружена в рекламный provider.",
+                    )
+                    preview_available = True
+            except (OSError, VisualCreativeGatewayError):
+                preview_available = False
+        preview_note = (
+            ""
+            if preview_available
+            else " Превью сейчас не удалось повторно получить, но рекламный provider уже подтвердил картинку."
         )
         await control._callback_message(event).answer(
-            "Квадратный формат будет прикреплён к Yandex DRAFT существующим "
-            "restart-safe media-контуром; остальные форматы остаются в render-pack.",
+            "Квадратный формат уже передан в Yandex Direct по provider reference. "
+            "Постоянную копию картинки ClientPlatform не хранит." + preview_note,
             reply_markup=_custom_keyboard(str(data["business_token"])),
         )
         return True
@@ -780,15 +806,15 @@ async def _finish_generated_visual(
     if visual_kind == "video":
         await control._callback_message(event).answer_video(
             FSInputFile(path),
-            caption="✅ Видео готово и уже привязано к рекламному черновику ClientPlatform.",
+            caption="✅ Видео готово и передано в рекламный provider.",
         )
-        follow_up = "В Яндекс вручную его загружать не нужно."
+        follow_up = "В Яндекс вручную его загружать не нужно; локальной постоянной копии нет."
     else:
         await control._callback_message(event).answer_photo(
             FSInputFile(path),
-            caption="✅ Картинка готова и уже привязана к рекламному черновику ClientPlatform.",
+            caption="✅ Картинка готова и загружена в рекламный provider.",
         )
-        follow_up = "В Яндекс вручную её загружать не нужно."
+        follow_up = "В Яндекс вручную её загружать не нужно; локальной постоянной копии нет."
     await control._callback_message(event).answer(
         follow_up,
         reply_markup=_custom_keyboard(str(data["business_token"])),

@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+from io import BytesIO
 
 from aiogram import F
+from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -16,6 +18,10 @@ from aiogram.types import (
 )
 
 from clientplatform.application.ad_channel_directory import advertising_channel
+from clientplatform.application.ad_publication_assets import (
+    attach_image_bytes,
+    attach_image_file,
+)
 from clientplatform.application.ad_connections import (
     ad_connections_enabled,
     confirm_ad_publication,
@@ -38,6 +44,10 @@ from clientplatform.application.visual_creatives import (
     poll_ad_visual,
     visual_generation_ready,
     visual_video_generation_mode,
+)
+from clientplatform.domain.ad_publication_assets import (
+    AdPublicationAssetError,
+    AdPublicationAssetSource,
 )
 from clientplatform.domain.ad_connections import (
     AdConnectionError,
@@ -65,6 +75,7 @@ class AdConnectionState(StatesGroup):
     selecting_campaign = State()
     waiting_regions = State()
     confirming_publication = State()
+    waiting_image_upload = State()
 
 
 _STATUS_LABELS = {
@@ -84,6 +95,7 @@ _JOB_LABELS = {
     AdPublicationStatus.CANCELLED: "отменено",
 }
 _CONFIRM_DRAFT_LABEL = "✅ Создать черновик в Яндекс Директе"
+_MAX_AD_IMAGE_BYTES = 20_000_000
 
 
 def _message(callback: CallbackQuery) -> Message:
@@ -691,13 +703,33 @@ async def prepare_ad_publication(message: Message, state: FSMContext) -> None:
         "DRAFT в Вашем кабинете. Показов, модерации и расходов автоматически не будет.",
         reply_markup=control._keyboard(
             [
-                [("🖼 Создать картинку", "cpa:creative:image")],
+                [("✨ Сгенерировать картинку", "cpa:creative:image")],
+                [("📎 Добавить свою картинку", "cpa:media:upload")],
                 [("🎬 Создать видео", "cpa:creative:video")],
                 [(_CONFIRM_DRAFT_LABEL, "cpa:confirm")],
                 [("Отмена", f"cpa:home:{data['business_token']}")],
                 *_owner_navigation_rows(str(data["business_token"])),
             ]
         ),
+    )
+
+
+async def _attach_generated_image(
+    *,
+    callback: CallbackQuery,
+    data: dict,
+    path,
+) -> None:
+    actor = await control._actor(
+        int(callback.from_user.id),
+        str(data["business_id"]),
+    )
+    await asyncio.to_thread(
+        attach_image_file,
+        actor=actor,
+        publication_job_id=str(data["job_id"]),
+        path=path,
+        source=AdPublicationAssetSource.GENERATED,
     )
 
 
@@ -787,7 +819,6 @@ async def _render_ad_visual(
                 ),
             )
             return
-        await state.update_data(creative_job_id="")
         caption = (
             (
                 "Оживлённая рекламная AI-картинка"
@@ -798,12 +829,58 @@ async def _render_ad_visual(
             else "Готовое рекламное изображение"
         )
         if job.kind == "video":
+            await state.update_data(creative_job_id="")
             await target.answer_video(FSInputFile(path), caption=caption)
-        else:
+            await target.answer(
+                "Видео готово и отправлено Вам. Для рекламного объявления сейчас "
+                "используйте картинку; видео-контур будет подключён отдельно без "
+                "долговременного хранения файла.",
+                reply_markup=control._keyboard(
+                    [
+                        [(_CONFIRM_DRAFT_LABEL, "cpa:confirm")],
+                        *_owner_navigation_rows(str(data["business_token"])),
+                    ]
+                ),
+            )
+            return
+        try:
+            await _attach_generated_image(callback=callback, data=data, path=path)
+        except (AdPublicationAssetError, AdConnectionError, YandexDirectError):
+            await state.update_data(creative_job_id=job.id)
             await target.answer_photo(FSInputFile(path), caption=caption)
+            await target.answer(
+                "Картинка готова и отправлена Вам, но Яндекс Директ временно не "
+                "подтвердил её загрузку. Повторная проверка использует эту же "
+                "генерацию и не запускает новый платный запрос.",
+                reply_markup=control._keyboard(
+                    [
+                        [("🔄 Прикрепить эту картинку ещё раз", "cpa:creative:refresh")],
+                        [("➡️ Продолжить без картинки", "cpa:creative:skip")],
+                        *_owner_navigation_rows(str(data["business_token"])),
+                    ]
+                ),
+            )
+            return
+        except RuntimeError:
+            await state.update_data(creative_job_id=job.id)
+            await target.answer_photo(FSInputFile(path), caption=caption)
+            await target.answer(
+                "Картинка готова, но рекламный провайдер сейчас недоступен. "
+                "Можно повторить прикрепление той же картинки без новой генерации.",
+                reply_markup=control._keyboard(
+                    [
+                        [("🔄 Прикрепить эту картинку ещё раз", "cpa:creative:refresh")],
+                        [("➡️ Продолжить без картинки", "cpa:creative:skip")],
+                        *_owner_navigation_rows(str(data["business_token"])),
+                    ]
+                ),
+            )
+            return
+        await state.update_data(creative_job_id="")
+        await target.answer_photo(FSInputFile(path), caption=caption)
         await target.answer(
-            "Визуал готов. Текущий Yandex Direct-контур создаёт текстовый DRAFT; "
-            "файл визуала пока остаётся отдельным материалом для владельца.",
+            "✅ Картинка загружена в Яндекс Директ. ClientPlatform хранит только "
+            "provider reference, а не файл изображения.",
             reply_markup=control._keyboard(
                 [
                     [(_CONFIRM_DRAFT_LABEL, "cpa:confirm")],
@@ -833,6 +910,131 @@ async def _render_ad_visual(
         "можно повторить попытку позже или продолжить без визуала.",
         reply_markup=control._keyboard(
             _owner_navigation_rows(str(data["business_token"]))
+        ),
+    )
+
+
+@simple.router.callback_query(
+    AdConnectionState.confirming_publication,
+    F.data == "cpa:media:upload",
+)
+async def request_ad_image_upload(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    await state.set_state(AdConnectionState.waiting_image_upload)
+    await callback.answer()
+    await _message(callback).answer(
+        "📎 Отправьте картинку одним сообщением. ClientPlatform обработает её "
+        "только в памяти и сразу загрузит в Яндекс Директ; постоянная копия на "
+        "сервере ClientPlatform не создаётся.",
+        reply_markup=control._keyboard(
+            _owner_navigation_rows(
+                str(data["business_token"]),
+                back_callback="cpa:media:cancel",
+                back_label="Отмена",
+            )
+        ),
+    )
+
+
+@simple.router.callback_query(
+    AdConnectionState.waiting_image_upload,
+    F.data == "cpa:media:cancel",
+)
+async def cancel_ad_image_upload(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    await state.set_state(AdConnectionState.confirming_publication)
+    await callback.answer("Загрузка отменена")
+    await _message(callback).answer(
+        "Выберите картинку для рекламного черновика.",
+        reply_markup=control._keyboard(
+            [
+                [("✨ Сгенерировать картинку", "cpa:creative:image")],
+                [("📎 Добавить свою картинку", "cpa:media:upload")],
+                [(_CONFIRM_DRAFT_LABEL, "cpa:confirm")],
+                *_owner_navigation_rows(str(data["business_token"])),
+            ]
+        ),
+    )
+
+
+@simple.router.message(AdConnectionState.waiting_image_upload)
+async def receive_ad_image_upload(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    media = None
+    original_name = "telegram-image.jpg"
+    if message.photo:
+        media = message.photo[-1]
+    elif (
+        message.document is not None
+        and str(message.document.mime_type or "").strip().lower().startswith("image/")
+    ):
+        media = message.document
+        original_name = str(message.document.file_name or "telegram-image.jpg")
+    if media is None:
+        await message.answer(
+            "Пришлите именно изображение — как фото или графический файл. "
+            "Другой файл не был сохранён.",
+            reply_markup=control._keyboard(
+                _owner_navigation_rows(str(data["business_token"]))
+            ),
+        )
+        return
+    reported_size = int(getattr(media, "file_size", 0) or 0)
+    if reported_size > _MAX_AD_IMAGE_BYTES:
+        await message.answer(
+            "Картинка слишком большая. Пришлите изображение размером до 20 МБ; "
+            "файл не скачивался и не сохранялся.",
+            reply_markup=control._keyboard(
+                _owner_navigation_rows(str(data["business_token"]))
+            ),
+        )
+        return
+    try:
+        actor = await control._actor(
+            control._user_id(message),
+            str(data["business_id"]),
+        )
+        buffer = BytesIO()
+        await message.bot.download(media, destination=buffer)
+        payload = buffer.getvalue()
+        if not payload or len(payload) > _MAX_AD_IMAGE_BYTES:
+            raise AdPublicationAssetError("advertising image download is invalid")
+        await asyncio.to_thread(
+            attach_image_bytes,
+            actor=actor,
+            publication_job_id=str(data["job_id"]),
+            payload=payload,
+            source=AdPublicationAssetSource.UPLOAD,
+            original_name=original_name,
+        )
+    except (
+        KeyError,
+        IndexError,
+        OSError,
+        TelegramAPIError,
+        AdPublicationAssetError,
+        AdConnectionError,
+        RuntimeError,
+        YandexDirectError,
+    ):
+        await message.answer(
+            "Не удалось безопасно загрузить эту картинку в Яндекс Директ. "
+            "Файл на сервере ClientPlatform не сохранялся; попробуйте ещё раз.",
+            reply_markup=control._keyboard(
+                _owner_navigation_rows(str(data.get("business_token") or ""))
+            ),
+        )
+        return
+    await state.set_state(AdConnectionState.confirming_publication)
+    await message.answer(
+        "✅ Картинка добавлена в рекламный черновик. ClientPlatform сохранил "
+        "только provider reference Яндекс Директа — самого файла на сервере нет.",
+        reply_markup=control._keyboard(
+            [
+                [(_CONFIRM_DRAFT_LABEL, "cpa:confirm")],
+                [("🔄 Заменить картинку", "cpa:media:upload")],
+                *_owner_navigation_rows(str(data["business_token"])),
+            ]
         ),
     )
 
@@ -889,7 +1091,6 @@ async def refresh_ad_visual(callback: CallbackQuery, state: FSMContext) -> None:
                 ),
             )
             return
-        await state.update_data(creative_job_id="")
         caption = (
             (
                 "Оживлённая рекламная AI-картинка"
@@ -900,12 +1101,56 @@ async def refresh_ad_visual(callback: CallbackQuery, state: FSMContext) -> None:
             else "Готовое рекламное изображение"
         )
         if job.kind == "video":
+            await state.update_data(creative_job_id="")
             await target.answer_video(FSInputFile(path), caption=caption)
-        else:
+            await target.answer(
+                "Видео готово и отправлено Вам. Для текущего рекламного черновика "
+                "можно продолжить без видео.",
+                reply_markup=control._keyboard(
+                    [
+                        [(_CONFIRM_DRAFT_LABEL, "cpa:confirm")],
+                        *_owner_navigation_rows(str(data["business_token"])),
+                    ]
+                ),
+            )
+            return
+        try:
+            await _attach_generated_image(callback=callback, data=data, path=path)
+        except (AdPublicationAssetError, AdConnectionError, YandexDirectError):
+            await state.update_data(creative_job_id=job.id)
             await target.answer_photo(FSInputFile(path), caption=caption)
+            await target.answer(
+                "Картинка готова, но загрузка в Яндекс пока не подтверждена. "
+                "Можно повторить прикрепление той же картинки без новой генерации.",
+                reply_markup=control._keyboard(
+                    [
+                        [("🔄 Прикрепить эту картинку ещё раз", "cpa:creative:refresh")],
+                        [("➡️ Продолжить без картинки", "cpa:creative:skip")],
+                        *_owner_navigation_rows(str(data["business_token"])),
+                    ]
+                ),
+            )
+            return
+        except RuntimeError:
+            await state.update_data(creative_job_id=job.id)
+            await target.answer_photo(FSInputFile(path), caption=caption)
+            await target.answer(
+                "Картинка готова, но рекламный провайдер сейчас недоступен. "
+                "Можно повторить прикрепление той же картинки без новой генерации.",
+                reply_markup=control._keyboard(
+                    [
+                        [("🔄 Прикрепить эту картинку ещё раз", "cpa:creative:refresh")],
+                        [("➡️ Продолжить без картинки", "cpa:creative:skip")],
+                        *_owner_navigation_rows(str(data["business_token"])),
+                    ]
+                ),
+            )
+            return
+        await state.update_data(creative_job_id="")
+        await target.answer_photo(FSInputFile(path), caption=caption)
         await target.answer(
-            "Визуал готов. Он не прикрепляется к Yandex Direct автоматически этим "
-            "контуром.",
+            "✅ Картинка загружена в Яндекс Директ. Локальная постоянная копия "
+            "ClientPlatform не создаётся.",
             reply_markup=control._keyboard(
                 [
                     [(_CONFIRM_DRAFT_LABEL, "cpa:confirm")],
@@ -1004,6 +1249,8 @@ __all__ = [
     "confirm_yandex_publication",
     "connect_yandex_direct",
     "generate_ad_visual",
+    "request_ad_image_upload",
+    "receive_ad_image_upload",
     "open_ad_connections",
     "open_ad_promotion_slots",
     "prepare_ad_publication",

@@ -6,7 +6,6 @@ import logging
 from core.runtime_env import env_int
 from core.task_manager import TaskManager
 from clientplatform.application.ad_goal_publication import process_one_pending_video_asset
-from clientplatform.application.ad_publication_assets import cleanup_orphaned_assets
 
 
 log = logging.getLogger(__name__)
@@ -31,13 +30,8 @@ async def _loop() -> None:
                     processed = await asyncio.to_thread(process_one_pending_video_asset)
                     if not processed:
                         break
-                await asyncio.to_thread(
-                    cleanup_orphaned_assets,
-                    grace_seconds=300,
-                    max_files=200,
-                )
             except Exception:  # validator: allow-wide-except
-                # Provider retries and orphan cleanup are both restart-safe.
+                # Provider-side video conversion polling is restart-safe.
                 log.exception("ClientPlatform ad media monitor tick failed")
             await asyncio.sleep(_interval_seconds())
     except asyncio.CancelledError:

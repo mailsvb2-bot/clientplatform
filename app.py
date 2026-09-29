@@ -120,6 +120,9 @@ from clientplatform.runtime.platform_resource_monitor import (
     start_platform_resource_monitor,
     stop_platform_resource_monitor,
 )
+from clientplatform.runtime.prelaunch_media_cutover import (
+    purge_prelaunch_legacy_ad_media,
+)
 
 from core.startup_checks import run_startup_checks
 
@@ -154,6 +157,8 @@ async def create_application():
         # v15.2: fail fast if critical files/folders are missing
         run_startup_checks(Path(__file__).resolve().parent)
         init_db()
+        if production:
+            purge_prelaunch_legacy_ad_media()
         if bot is None:
             assert_native_only_runtime_policy()
         # Full validators run after schema/migrations exist.
