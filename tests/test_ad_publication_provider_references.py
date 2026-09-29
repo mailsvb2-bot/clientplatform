@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import hashlib
 from contextlib import contextmanager
 from io import BytesIO
