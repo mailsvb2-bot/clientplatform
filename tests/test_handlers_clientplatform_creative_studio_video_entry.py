@@ -279,7 +279,7 @@ def test_owner_delivery_survives_secondary_event_asset_failure(monkeypatch, tmp_
         lambda _payload: {
             "type": "event_content",
             "event_id": "event-id",
-            "stage": "draft",
+            "stage": "warmup",
             "slot_key": "hero",
             "kind": "image",
         },
