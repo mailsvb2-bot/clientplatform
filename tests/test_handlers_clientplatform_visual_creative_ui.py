@@ -90,6 +90,59 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"VISUAL_TELEGRAM_WAIT_SECONDS": "999"}):
             self.assertEqual(ui._visual_wait_seconds(), 60)
 
+    async def test_advanced_reuse_picker_lists_existing_provider_references(self) -> None:
+        cb = callback("cpa:media:reuse")
+        st = state(base_state())
+        target = target_message()
+        reusable = [
+            SimpleNamespace(
+                publication_job_id="old-job",
+                source=ui.AdPublicationAssetSource.GENERATED,
+                updated_at="2026-09-29T09:30:00+00:00",
+                original_name="generated.jpg",
+            )
+        ]
+        with (
+            patch.object(ui.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+            patch.object(ui, "list_reusable_images", return_value=reusable) as listing,
+            patch.object(ui, "_message", return_value=target),
+            patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
+        ):
+            await ui.choose_previous_ad_image(cb, st)
+
+        listing.assert_called_once_with(
+            actor="actor",
+            publication_job_id="ad-job",
+            limit=6,
+        )
+        st.update_data.assert_awaited_with(reusable_image_job_ids=["old-job"])
+        labels = [label for row in target.answer.await_args.kwargs["reply_markup"] for label, _ in row]
+        self.assertTrue(any("AI" in label for label in labels))
+        self.assertIn("provider reference", target.answer.await_args.args[0])
+
+    async def test_advanced_reuse_picker_attaches_reference_without_upload(self) -> None:
+        data = {**base_state(), "reusable_image_job_ids": ["old-job"]}
+        cb = callback("cpa:media:reusepick:0")
+        st = state(data)
+        target = target_message()
+        with (
+            patch.object(ui.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+            patch.object(ui, "reuse_image_reference") as reuse,
+            patch.object(ui, "_message", return_value=target),
+            patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
+        ):
+            await ui.apply_previous_ad_image(cb, st)
+
+        reuse.assert_called_once_with(
+            actor="actor",
+            source_publication_job_id="old-job",
+            target_publication_job_id="ad-job",
+        )
+        st.update_data.assert_awaited_with(reusable_image_job_ids=[])
+        self.assertIn("Файл повторно не загружался", target.answer.await_args.args[0])
+
     async def test_render_pending_is_tenant_scoped_and_idempotent(self) -> None:
         cb = callback()
         st = state(base_state())
