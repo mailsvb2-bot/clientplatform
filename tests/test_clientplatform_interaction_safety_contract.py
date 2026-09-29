@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ENTRY = ROOT / "handlers" / "clientplatform_entry.py"
 SAFETY = ROOT / "handlers" / "clientplatform_interaction_safety.py"
+GOAL_FIRST_SAFETY = ROOT / "handlers" / "clientplatform_goal_first_safety.py"
 BOOKINGS = ROOT / "clientplatform" / "application" / "bookings.py"
 PROGRESS = ROOT / "clientplatform" / "application" / "progress.py"
 SAFE_ACTIVITY = (
@@ -39,6 +40,21 @@ class ClientPlatformInteractionSafetyContractTests(unittest.TestCase):
         self.assertIn(safety, text)
         self.assertLess(text.index(safety), text.index(original))
         self.assertIn("install_interaction_safety(router, control)", text)
+
+
+    def test_goal_visual_confirmation_callbacks_are_not_eagerly_acknowledged(self) -> None:
+        text = GOAL_FIRST_SAFETY.read_text(encoding="utf-8")
+        repeatable_block = text.split(
+            '_extend_tuple(\n        safety,\n        "_REPEATABLE_NAVIGATION_PREFIXES",',
+            1,
+        )[1].split("    )", 1)[0]
+
+        self.assertNotIn('"cpo:genask:"', repeatable_block)
+        self.assertNotIn('"cpo:genvideoask:"', repeatable_block)
+        self.assertIn(
+            '("cpo:custom:", "cpo:genask:", "cpo:genvideoask:", "cpo:launch:")',
+            text,
+        )
 
     def test_safety_source_has_single_flight_and_stale_keyboard_contracts(self) -> None:
         text = SAFETY.read_text(encoding="utf-8")
