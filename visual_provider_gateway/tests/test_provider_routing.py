@@ -191,6 +191,154 @@ def test_legacy_yandex_latest_uri_is_marked_deprecated():
     assert lifecycle["replacement"] == "aliceai-image-art-3.0"
 
 
+def test_yandexart_uses_native_async_image_generation_api(tmp_path, monkeypatch):
+    from visual_provider_gateway.providers import YandexArtProvider
+
+    calls = []
+
+    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0):
+        calls.append(
+            {
+                "method": method,
+                "url": url,
+                "headers": headers,
+                "payload": payload,
+            }
+        )
+        return {"id": "operation-123", "done": False}
+
+    monkeypatch.setattr(providers, "_json_request", fake_json_request)
+    monkeypatch.setenv("YANDEX_API_KEY", "durable-api-key")
+    monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    provider = YandexArtProvider(
+        ProviderConfig(
+            name="yandexart",
+            base_url="https://ai.api.cloud.yandex.net:443",
+            api_key="durable-api-key",
+            model_image="art://folder/aliceai-image-art-3.0",
+            folder_id="folder",
+            output_dir=str(tmp_path / "visual"),
+        )
+    )
+
+    job = provider.submit(
+        CreativeBrief(
+            kind="image",
+            prompt="clean product photo",
+            aspect_ratio="16:9",
+            seed=12,
+        )
+    )
+
+    assert job.status == "running"
+    assert job.external_id == "operation-123"
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["url"] == (
+        "https://ai.api.cloud.yandex.net:443"
+        "/foundationModels/v1/imageGenerationAsync"
+    )
+    assert calls[0]["headers"] == {"Authorization": "Api-Key durable-api-key"}
+    assert calls[0]["payload"] == {
+        "modelUri": "art://folder/aliceai-image-art-3.0",
+        "messages": [{"text": "clean product photo", "weight": "1"}],
+        "generationOptions": {
+            "mimeType": "image/jpeg",
+            "aspectRatio": {"widthRatio": "16", "heightRatio": "9"},
+            "seed": "12",
+        },
+    }
+    assert "OpenAI-Project" not in calls[0]["headers"]
+
+
+def test_yandexart_poll_materializes_native_operation_result(tmp_path, monkeypatch):
+    from visual_provider_gateway.providers import YandexArtProvider
+
+    encoded = base64.b64encode(b"jpeg-bytes").decode("ascii")
+    observed = {}
+
+    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0):
+        observed.update({"method": method, "url": url, "headers": headers})
+        return {
+            "id": "operation-123",
+            "done": True,
+            "response": {
+                "image": encoded,
+                "modelVersion": "2026-09-01",
+            },
+        }
+
+    monkeypatch.setattr(providers, "_json_request", fake_json_request)
+    monkeypatch.setenv("YANDEX_API_KEY", "durable-api-key")
+    monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    provider = YandexArtProvider(
+        ProviderConfig(
+            name="yandexart",
+            base_url="https://ai.api.cloud.yandex.net:443",
+            api_key="durable-api-key",
+            model_image="art://folder/aliceai-image-art-3.0",
+            folder_id="folder",
+            output_dir=str(tmp_path / "visual"),
+        )
+    )
+    job = CreativeJob(
+        provider="yandexart",
+        kind="image",
+        status="running",
+        external_id="operation-123",
+        model="art://folder/aliceai-image-art-3.0",
+    )
+
+    result = provider.poll(job)
+
+    assert result.status == "succeeded"
+    assert result.mime_type == "image/jpeg"
+    assert Path(result.asset_path).read_bytes() == b"jpeg-bytes"
+    assert result.provider_payload["model_version"] == "2026-09-01"
+    assert observed["method"] == "GET"
+    assert observed["url"] == (
+        "https://operation.api.cloud.yandex.net:443/operations/operation-123"
+    )
+    assert observed["headers"] == {"Authorization": "Api-Key durable-api-key"}
+
+
+def test_yandexart_motion_waits_for_native_image_operation(monkeypatch):
+    from visual_provider_gateway.providers import YandexArtMotionVideoProvider
+
+    provider = YandexArtMotionVideoProvider(
+        ProviderConfig(
+            name="yandexart_motion",
+            base_url="https://ai.api.cloud.yandex.net:443",
+            api_key="key",
+            model_image="art://folder/aliceai-image-art-3.0",
+            folder_id="folder",
+        )
+    )
+    queued = CreativeJob(
+        provider="yandexart",
+        kind="image",
+        status="running",
+        external_id="operation-123",
+        model="art://folder/aliceai-image-art-3.0",
+    )
+    monkeypatch.setattr(
+        providers.YandexArtProvider,
+        "submit",
+        lambda _self, _brief: queued,
+    )
+
+    result = provider.submit(
+        CreativeBrief(kind="video", prompt="animate", duration_seconds=5)
+    )
+
+    assert result.provider == "yandexart_motion"
+    assert result.kind == "video"
+    assert result.status == "running"
+    assert result.external_id == "operation-123"
+    assert result.provider_payload["motion_duration_seconds"] == 5
+
+
 def test_yandex_api_key_wins_over_stale_iam_token(monkeypatch):
     from visual_provider_gateway.engine import provider_configs
     from visual_provider_gateway.providers import YandexArtProvider
