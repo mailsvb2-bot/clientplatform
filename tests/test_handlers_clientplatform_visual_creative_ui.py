@@ -352,6 +352,62 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
         attach_generated.assert_awaited_once()
         self.assertIn("provider reference", target.answer.await_args.args[0])
 
+    async def test_render_ready_image_provider_attach_failure_reuses_same_generation(self) -> None:
+        cb = callback()
+        st = state(base_state())
+        target = target_message()
+        with tempfile.TemporaryDirectory() as directory:
+            asset = Path(directory) / "creative.png"
+            asset.write_bytes(b"png")
+            with (
+                patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+                patch.object(
+                    ui,
+                    "create_ad_visual",
+                    return_value=visual_job(status="succeeded", ready=True),
+                ),
+                patch.object(ui, "materialize_ad_visual", return_value=asset),
+                patch.object(
+                    ui,
+                    "_attach_generated_image",
+                    new=AsyncMock(side_effect=ui.AdPublicationAssetError("provider")),
+                ),
+                patch.object(ui, "_message", return_value=target),
+                patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
+            ):
+                await ui._render_ad_visual(cb, st, kind="image")
+        st.update_data.assert_awaited_with(creative_job_id="gateway-job-1")
+        target.answer_photo.assert_awaited_once()
+        self.assertIn("не запускает новый платный запрос", target.answer.await_args.args[0])
+
+    async def test_render_ready_image_runtime_provider_failure_is_retryable(self) -> None:
+        cb = callback()
+        st = state(base_state())
+        target = target_message()
+        with tempfile.TemporaryDirectory() as directory:
+            asset = Path(directory) / "creative.png"
+            asset.write_bytes(b"png")
+            with (
+                patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+                patch.object(
+                    ui,
+                    "create_ad_visual",
+                    return_value=visual_job(status="succeeded", ready=True),
+                ),
+                patch.object(ui, "materialize_ad_visual", return_value=asset),
+                patch.object(
+                    ui,
+                    "_attach_generated_image",
+                    new=AsyncMock(side_effect=RuntimeError("provider config")),
+                ),
+                patch.object(ui, "_message", return_value=target),
+                patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
+            ):
+                await ui._render_ad_visual(cb, st, kind="image")
+        st.update_data.assert_awaited_with(creative_job_id="gateway-job-1")
+        target.answer_photo.assert_awaited_once()
+        self.assertIn("повторить прикрепление", target.answer.await_args.args[0])
+
     async def test_render_ready_video_materializes_and_sends(self) -> None:
         cb = callback("cpa:creative:video")
         st = state(base_state())
