@@ -502,3 +502,99 @@ def test_reuse_image_reference_rejects_other_connection(monkeypatch) -> None:
             target_publication_job_id=target_job_id,
         )
     assert writes == []
+
+
+def test_reuse_image_reference_copies_only_provider_receipt(monkeypatch) -> None:
+    actor = SimpleNamespace(
+        user_id=101,
+        business_id=str(uuid4()),
+        membership_id=str(uuid4()),
+    )
+    connection_id = str(uuid4())
+    source_job_id = str(uuid4())
+    target_job_id = str(uuid4())
+    source_row = (
+        source_job_id,
+        actor.business_id,
+        "image",
+        "generated",
+        "image/jpeg",
+        "generated.jpg",
+        "d" * 64,
+        321,
+        None,
+        "provider-hash-reuse",
+        None,
+        None,
+        None,
+        "ready",
+        actor.membership_id,
+        "2026-09-28T00:00:00+00:00",
+        "2026-09-28T00:01:00+00:00",
+        connection_id,
+        connection_id,
+    )
+    target_row = (
+        target_job_id,
+        actor.business_id,
+        "image",
+        "generated",
+        "image/jpeg",
+        "generated.jpg",
+        "d" * 64,
+        321,
+        None,
+        "provider-hash-reuse",
+        None,
+        None,
+        None,
+        "ready",
+        actor.membership_id,
+        "2026-09-29T00:00:00+00:00",
+        "2026-09-29T00:00:00+00:00",
+    )
+    inserted: list[tuple[object, ...]] = []
+
+    class Result:
+        rowcount = 1
+
+        def __init__(self, row=None):
+            self._row = row
+
+        def fetchone(self):
+            return self._row
+
+    class Conn:
+        def execute(self, sql, params):
+            rendered = str(sql)
+            if "JOIN ad_publication_jobs AS source_job" in rendered:
+                return Result(source_row)
+            if rendered.lstrip().startswith("INSERT INTO ad_publication_assets"):
+                inserted.append(tuple(params))
+                return Result()
+            if "FROM ad_publication_assets" in rendered:
+                return Result(target_row)
+            raise AssertionError(f"unexpected SQL: {rendered}")
+
+    monkeypatch.setattr(
+        assets.AdPublicationAssetRepository,
+        "_actor",
+        lambda self, _actor: actor,
+    )
+    monkeypatch.setattr(
+        assets.AdPublicationAssetRepository,
+        "_assert_editable_job",
+        lambda self, **_kwargs: None,
+    )
+    repository = assets.AdPublicationAssetRepository(Conn())
+    result = repository.reuse_image_reference(
+        actor=actor,
+        source_publication_job_id=source_job_id,
+        target_publication_job_id=target_job_id,
+    )
+
+    assert result.publication_job_id == target_job_id
+    assert result.provider_image_hash == "provider-hash-reuse"
+    assert len(inserted) == 1
+    assert inserted[0][9] == "provider-hash-reuse"
+    assert all(not isinstance(value, bytes) for value in inserted[0])
