@@ -845,13 +845,28 @@ async def _render_ad_visual(
             return
         try:
             await _attach_generated_image(callback=callback, data=data, path=path)
-        except (AdPublicationAssetError, AdConnectionError, RuntimeError, YandexDirectError):
+        except (AdPublicationAssetError, AdConnectionError, YandexDirectError):
             await state.update_data(creative_job_id=job.id)
             await target.answer_photo(FSInputFile(path), caption=caption)
             await target.answer(
                 "Картинка готова и отправлена Вам, но Яндекс Директ временно не "
                 "подтвердил её загрузку. Повторная проверка использует эту же "
                 "генерацию и не запускает новый платный запрос.",
+                reply_markup=control._keyboard(
+                    [
+                        [("🔄 Прикрепить эту картинку ещё раз", "cpa:creative:refresh")],
+                        [("➡️ Продолжить без картинки", "cpa:creative:skip")],
+                        *_owner_navigation_rows(str(data["business_token"])),
+                    ]
+                ),
+            )
+            return
+        except RuntimeError:
+            await state.update_data(creative_job_id=job.id)
+            await target.answer_photo(FSInputFile(path), caption=caption)
+            await target.answer(
+                "Картинка готова, но рекламный провайдер сейчас недоступен. "
+                "Можно повторить прикрепление той же картинки без новой генерации.",
                 reply_markup=control._keyboard(
                     [
                         [("🔄 Прикрепить эту картинку ещё раз", "cpa:creative:refresh")],
@@ -1101,11 +1116,26 @@ async def refresh_ad_visual(callback: CallbackQuery, state: FSMContext) -> None:
             return
         try:
             await _attach_generated_image(callback=callback, data=data, path=path)
-        except (AdPublicationAssetError, AdConnectionError, RuntimeError, YandexDirectError):
+        except (AdPublicationAssetError, AdConnectionError, YandexDirectError):
             await state.update_data(creative_job_id=job.id)
             await target.answer_photo(FSInputFile(path), caption=caption)
             await target.answer(
                 "Картинка готова, но загрузка в Яндекс пока не подтверждена. "
+                "Можно повторить прикрепление той же картинки без новой генерации.",
+                reply_markup=control._keyboard(
+                    [
+                        [("🔄 Прикрепить эту картинку ещё раз", "cpa:creative:refresh")],
+                        [("➡️ Продолжить без картинки", "cpa:creative:skip")],
+                        *_owner_navigation_rows(str(data["business_token"])),
+                    ]
+                ),
+            )
+            return
+        except RuntimeError:
+            await state.update_data(creative_job_id=job.id)
+            await target.answer_photo(FSInputFile(path), caption=caption)
+            await target.answer(
+                "Картинка готова, но рекламный провайдер сейчас недоступен. "
                 "Можно повторить прикрепление той же картинки без новой генерации.",
                 reply_markup=control._keyboard(
                     [
