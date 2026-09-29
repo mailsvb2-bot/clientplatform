@@ -188,6 +188,9 @@ def install_goal_first_safety(safety: ModuleType) -> None:
         "_ONE_SHOT_PREFIXES",
         "cpo:gen:",
         "cpo:genvideo:",
+        "cpo:editgen:",
+        "cpo:editlayout:",
+        "cpo:editdone:",
         "cpo:launch:",
         "cpo:launch-confirm:",
         "cpo:custom-clear:",
@@ -200,6 +203,9 @@ def install_goal_first_safety(safety: ModuleType) -> None:
         "cpo:custom-image:",
         "cpo:custom-video:",
         "cpo:custom-done:",
+        "cpo:editask:",
+        "cpo:editfield:",
+        "cpo:editpreview:",
         "cpo:gencheck:",
     )
 
@@ -215,7 +221,13 @@ def install_goal_first_safety(safety: ModuleType) -> None:
     def state_local_callback_allowed(current_state: str, callback_data: str) -> bool:
         if current_state.startswith("GoalFirstAutopilotState:ready"):
             return callback_data.startswith(
-                ("cpo:custom:", "cpo:genask:", "cpo:genvideoask:", "cpo:launch:")
+                (
+                    "cpo:custom:",
+                    "cpo:genask:",
+                    "cpo:genvideoask:",
+                    "cpo:editask:",
+                    "cpo:launch:",
+                )
             )
         if current_state.startswith("GoalFirstAutopilotState:customizing"):
             return callback_data.startswith(
@@ -228,14 +240,27 @@ def install_goal_first_safety(safety: ModuleType) -> None:
                     "cpo:custom-done:",
                     "cpo:genask:",
                     "cpo:genvideoask:",
+                    "cpo:editask:",
+                    "cpo:editfield:",
+                    "cpo:editlayout:",
+                    "cpo:editpreview:",
+                    "cpo:editdone:",
                     "cpo:ads:",
                     "cpo:launch:",
                 )
             )
         if current_state.startswith("GoalFirstAutopilotState:confirming_generation"):
             return callback_data.startswith(
-                ("cpo:gen:", "cpo:genvideo:", "cpo:custom:")
+                ("cpo:gen:", "cpo:genvideo:", "cpo:editgen:", "cpo:custom:")
             )
+        if current_state.startswith(
+            (
+                "GoalFirstAutopilotState:waiting_editable_headline",
+                "GoalFirstAutopilotState:waiting_editable_body",
+                "GoalFirstAutopilotState:waiting_editable_cta",
+            )
+        ):
+            return callback_data.startswith(("cpo:custom:", "cpo:editask:"))
         if current_state.startswith("GoalFirstAutopilotState:generation_pending"):
             return callback_data.startswith("cpo:gencheck:")
         if current_state.startswith("GoalFirstAutopilotState:confirming_launch"):
