@@ -121,7 +121,7 @@ def test_new_visual_button_surfaces_actionable_active_generation(monkeypatch) ->
     state = SimpleNamespace(set_state=AsyncMock(), set_data=AsyncMock())
     active = SimpleNamespace(
         id="receipt-id",
-        status=CreativeGenerationReceiptStatus.PROCESSING,
+        status=CreativeGenerationReceiptStatus.RUNNING,
         delivery_claimed_at=None,
     )
     monkeypatch.setattr(
