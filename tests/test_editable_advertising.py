@@ -390,7 +390,11 @@ async def test_finish_editable_ad_is_the_single_provider_commit_boundary(
     project = _project()
     finished = SimpleNamespace(revision=project.revision)
     pack = SimpleNamespace(status="succeeded")
-    target = SimpleNamespace(answer=AsyncMock())
+    target = SimpleNamespace(
+        answer=AsyncMock(),
+        answer_photo=AsyncMock(),
+        answer_video=AsyncMock(),
+    )
     callback = SimpleNamespace(
         data="cpo:editdone:business-token",
         from_user=SimpleNamespace(id=101),
@@ -421,6 +425,7 @@ async def test_finish_editable_ad_is_the_single_provider_commit_boundary(
 
     attach.assert_called_once()
     finish.assert_called_once()
+    target.answer_photo.assert_awaited_once()
     assert state.data["editable_ad_project_id"] == ""
     assert state.state == goal.GoalFirstAutopilotState.customizing
     assert "передан в рекламный provider" in target.answer.await_args.args[0]
