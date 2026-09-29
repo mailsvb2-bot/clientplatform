@@ -263,7 +263,7 @@ async def _prepare_goal_result(
 
     actor = await control._actor(
         one_click._user_id(event),
-        str(data["business_id"]),
+        str(data.get("business_id") or ""),
     )
     try:
         promotion = await asyncio.to_thread(
@@ -377,7 +377,7 @@ async def _choose_goal_region(
 ) -> None:
     actor = await control._actor(
         int(callback.from_user.id),
-        str(data["business_id"]),
+        str(data.get("business_id") or ""),
     )
     try:
         jobs = await asyncio.to_thread(one_click.list_ad_publications, actor=actor)
@@ -467,11 +467,11 @@ async def receive_custom_text(message: Message, state: FSMContext) -> None:
         return
     title, body = lines[0], " ".join(lines[1:])
     try:
-        actor = await control._actor(control._user_id(message), str(data["business_id"]))
+        actor = await control._actor(control._user_id(message), str(data.get("business_id") or ""))
         updated = await asyncio.to_thread(
             update_ad_publication_copy,
             actor=actor,
-            publication_job_id=str(data["job_id"]),
+            publication_job_id=str(data.get("job_id") or ""),
             title=title,
             text=body,
         )
@@ -499,12 +499,12 @@ async def choose_reusable_image(callback: CallbackQuery, state: FSMContext) -> N
     try:
         actor = await control._actor(
             int(callback.from_user.id),
-            str(data["business_id"]),
+            str(data.get("business_id") or ""),
         )
         reusable = await asyncio.to_thread(
             list_reusable_images,
             actor=actor,
-            publication_job_id=str(data["job_id"]),
+            publication_job_id=str(data.get("job_id") or ""),
             limit=6,
         )
     except (KeyError, AdPublicationAssetError, TenantPermissionDenied):
@@ -562,13 +562,13 @@ async def apply_reusable_image(callback: CallbackQuery, state: FSMContext) -> No
         source_job_id = str(reusable_ids[index])
         actor = await control._actor(
             int(callback.from_user.id),
-            str(data["business_id"]),
+            str(data.get("business_id") or ""),
         )
         await asyncio.to_thread(
             reuse_image_reference,
             actor=actor,
             source_publication_job_id=source_job_id,
-            target_publication_job_id=str(data["job_id"]),
+            target_publication_job_id=str(data.get("job_id") or ""),
         )
     except (IndexError, KeyError, ValueError):
         await callback.answer("Картинка больше не доступна", show_alert=True)
@@ -641,11 +641,11 @@ async def receive_custom_image(message: Message, state: FSMContext) -> None:
         return
     try:
         payload = await _download_telegram_file(message, file_id=file_id, reported_size=size)
-        actor = await control._actor(control._user_id(message), str(data["business_id"]))
+        actor = await control._actor(control._user_id(message), str(data.get("business_id") or ""))
         await asyncio.to_thread(
             attach_image_bytes,
             actor=actor,
-            publication_job_id=str(data["job_id"]),
+            publication_job_id=str(data.get("job_id") or ""),
             payload=payload,
             source=AdPublicationAssetSource.UPLOAD,
             original_name=name,
@@ -703,11 +703,11 @@ async def receive_custom_video(message: Message, state: FSMContext) -> None:
             file_id=str(video.file_id),
             reported_size=int(video.file_size or 0),
         )
-        actor = await control._actor(control._user_id(message), str(data["business_id"]))
+        actor = await control._actor(control._user_id(message), str(data.get("business_id") or ""))
         await asyncio.to_thread(
             attach_video_bytes,
             actor=actor,
-            publication_job_id=str(data["job_id"]),
+            publication_job_id=str(data.get("job_id") or ""),
             payload=payload,
             content_type=str(video.mime_type or "video/mp4"),
             original_name=str(video.file_name or "video.mp4"),
@@ -744,11 +744,11 @@ async def clear_custom_media(callback: CallbackQuery, state: FSMContext) -> None
         await callback.answer("Этот черновик уже устарел", show_alert=True)
         return
     try:
-        actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
+        actor = await control._actor(int(callback.from_user.id), str(data.get("business_id") or ""))
         await asyncio.to_thread(
             remove_asset,
             actor=actor,
-            publication_job_id=str(data["job_id"]),
+            publication_job_id=str(data.get("job_id") or ""),
         )
     except (KeyError, ValueError, AdPublicationAssetError, TenantPermissionDenied):
         await callback.answer("Не удалось убрать медиа", show_alert=True)
@@ -767,8 +767,8 @@ def _studio_country() -> str:
 
 def _studio_variant(data: dict, index: int):
     return selected_goal_variant(
-        business_id=str(data["business_id"]),
-        publication_job_id=str(data["job_id"]),
+        business_id=str(data.get("business_id") or ""),
+        publication_job_id=str(data.get("job_id") or ""),
         title=str(data.get("creative_title") or ""),
         body=str(data.get("creative_body") or ""),
         country_code=_studio_country(),
@@ -777,11 +777,11 @@ def _studio_variant(data: dict, index: int):
 
 
 async def _studio_variant_for_actor(data: dict, index: int, *, user_id: int):
-    actor = await control._actor(user_id, str(data["business_id"]))
+    actor = await control._actor(user_id, str(data.get("business_id") or ""))
     brand = await asyncio.to_thread(load_goal_visual_brand, actor=actor)
     return selected_goal_variant(
-        business_id=str(data["business_id"]),
-        publication_job_id=str(data["job_id"]),
+        business_id=str(data.get("business_id") or ""),
+        publication_job_id=str(data.get("job_id") or ""),
         title=str(data.get("creative_title") or ""),
         body=str(data.get("creative_body") or ""),
         country_code=_studio_country(),
@@ -905,7 +905,12 @@ async def _show_editable_editor(
             reply_markup=_editable_source_keyboard(kind, str(data["business_token"])),
         )
         return
-    except (EditableAdvertisingError, VisualCreativeGatewayError, OSError, ValueError):
+    except (EditableAdvertisingError, VisualCreativeGatewayError, OSError):
+        note = (
+            "Редактор и все правки сохранены, но превью сейчас не удалось пересобрать. "
+            "Новая AI-генерация не запускалась."
+        )
+    except ValueError:
         note = (
             "Редактор и все правки сохранены, но превью сейчас не удалось пересобрать. "
             "Новая AI-генерация не запускалась."
@@ -931,18 +936,18 @@ async def ask_editable_ad_confirmation(callback: CallbackQuery, state: FSMContex
         await callback.answer("Этот черновик уже устарел", show_alert=True)
         return
     try:
-        actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
+        actor = await control._actor(int(callback.from_user.id), str(data.get("business_id") or ""))
         brand = await asyncio.to_thread(load_goal_visual_brand, actor=actor)
         project = await asyncio.to_thread(
             create_editable_ad_project,
             actor=actor,
-            publication_job_id=str(data["job_id"]),
+            publication_job_id=str(data.get("job_id") or ""),
             kind=kind,
             headline=str(data.get("creative_title") or ""),
             body=str(data.get("creative_body") or ""),
             brand=brand.render_brand(),
         )
-    except (KeyError, LookupError, ValueError, TenantPermissionDenied):
+    except (LookupError, ValueError, TenantPermissionDenied):
         await callback.answer("Не удалось открыть редактор рекламы", show_alert=True)
         return
 
@@ -1010,13 +1015,13 @@ async def generate_editable_ad_source(callback: CallbackQuery, state: FSMContext
         await callback.answer("Редактируемый макет уже недоступен", show_alert=True)
         return
     try:
-        actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
+        actor = await control._actor(int(callback.from_user.id), str(data.get("business_id") or ""))
         project = await asyncio.to_thread(
             get_editable_ad_project,
             actor=actor,
             project_id=project_id,
         )
-        if project.kind != kind or project.publication_job_id != str(data["job_id"]):
+        if project.kind != kind or project.publication_job_id != str(data.get("job_id") or ""):
             raise ValueError("editable_ad_project_mismatch")
         if (
             project.status in {
@@ -1040,7 +1045,7 @@ async def generate_editable_ad_source(callback: CallbackQuery, state: FSMContext
             actor=actor,
             project_id=project.id,
         )
-    except (KeyError, LookupError, ValueError, TenantPermissionDenied):
+    except (LookupError, ValueError, TenantPermissionDenied):
         await callback.answer("Не удалось подготовить AI-основу", show_alert=True)
         return
 
@@ -1078,14 +1083,14 @@ async def _finish_editable_source_generation(
     if not source_job_id:
         return False
     try:
-        actor = await control._actor(int(event.from_user.id), str(data["business_id"]))
+        actor = await control._actor(int(event.from_user.id), str(data.get("business_id") or ""))
         project = await asyncio.to_thread(
             bind_editable_ad_source,
             actor=actor,
             project_id=project_id,
             source_job_id=source_job_id,
         )
-    except (KeyError, LookupError, ValueError, TenantPermissionDenied):
+    except (LookupError, ValueError, TenantPermissionDenied):
         return False
 
     await state.update_data(
@@ -1150,14 +1155,14 @@ async def _receive_editable_field(
         await message.answer("Редактируемый макет уже недоступен.")
         return
     try:
-        actor = await control._actor(control._user_id(message), str(data["business_id"]))
+        actor = await control._actor(control._user_id(message), str(data.get("business_id") or ""))
         project = await asyncio.to_thread(
             update_editable_ad_composition,
             actor=actor,
             project_id=project_id,
             **{field: str(message.text or "")},
         )
-    except (KeyError, LookupError, ValueError, TenantPermissionDenied):
+    except (LookupError, ValueError, TenantPermissionDenied):
         await message.answer("Не удалось сохранить правку. Проверьте длину текста.")
         return
     await state.update_data(editable_source_revision=project.revision)
@@ -1195,7 +1200,7 @@ async def toggle_editable_layout(callback: CallbackQuery, state: FSMContext) -> 
         await callback.answer("Редактируемый макет уже недоступен", show_alert=True)
         return
     try:
-        actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
+        actor = await control._actor(int(callback.from_user.id), str(data.get("business_id") or ""))
         current = await asyncio.to_thread(
             get_editable_ad_project,
             actor=actor,
@@ -1208,7 +1213,7 @@ async def toggle_editable_layout(callback: CallbackQuery, state: FSMContext) -> 
             project_id=project_id,
             layout=next_layout,
         )
-    except (KeyError, LookupError, ValueError, TenantPermissionDenied):
+    except (LookupError, ValueError, TenantPermissionDenied):
         await callback.answer("Не удалось переместить текстовый блок", show_alert=True)
         return
     await state.update_data(editable_source_revision=project.revision)
@@ -1232,13 +1237,13 @@ async def refresh_editable_preview(callback: CallbackQuery, state: FSMContext) -
         await callback.answer("Редактируемый макет уже недоступен", show_alert=True)
         return
     try:
-        actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
+        actor = await control._actor(int(callback.from_user.id), str(data.get("business_id") or ""))
         project = await asyncio.to_thread(
             get_editable_ad_project,
             actor=actor,
             project_id=project_id,
         )
-    except (KeyError, LookupError, ValueError, TenantPermissionDenied):
+    except (LookupError, ValueError, TenantPermissionDenied):
         await callback.answer("Редактируемый макет уже недоступен", show_alert=True)
         return
     await callback.answer("Обновляю превью…")
@@ -1260,7 +1265,7 @@ async def finish_editable_ad(callback: CallbackQuery, state: FSMContext) -> None
         await callback.answer("Редактируемый макет уже недоступен", show_alert=True)
         return
     try:
-        actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
+        actor = await control._actor(int(callback.from_user.id), str(data.get("business_id") or ""))
         project, pack = await asyncio.to_thread(
             render_editable_ad_project,
             actor=actor,
@@ -1279,7 +1284,7 @@ async def finish_editable_ad(callback: CallbackQuery, state: FSMContext) -> None
                 await asyncio.to_thread(
                     attach_video_bytes,
                     actor=actor,
-                    publication_job_id=str(data["job_id"]),
+                    publication_job_id=str(data.get("job_id") or ""),
                     payload=payload,
                     content_type="video/mp4",
                     original_name=path.name or "editable-ad.mp4",
@@ -1290,7 +1295,7 @@ async def finish_editable_ad(callback: CallbackQuery, state: FSMContext) -> None
                 await asyncio.to_thread(
                     attach_image_file,
                     actor=actor,
-                    publication_job_id=str(data["job_id"]),
+                    publication_job_id=str(data.get("job_id") or ""),
                     path=path,
                     source=AdPublicationAssetSource.GENERATED,
                 )
@@ -1378,11 +1383,11 @@ async def open_generated_image_studio(callback: CallbackQuery, state: FSMContext
         await callback.answer("Этот черновик уже устарел", show_alert=True)
         return
     try:
-        actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
+        actor = await control._actor(int(callback.from_user.id), str(data.get("business_id") or ""))
         brand = await asyncio.to_thread(load_goal_visual_brand, actor=actor)
         variants = build_goal_image_variants(
-            business_id=str(data["business_id"]),
-            publication_job_id=str(data["job_id"]),
+            business_id=str(data.get("business_id") or ""),
+            publication_job_id=str(data.get("job_id") or ""),
             title=str(data.get("creative_title") or ""),
             body=str(data.get("creative_body") or ""),
             country_code=_studio_country(),
@@ -1470,13 +1475,13 @@ async def _finish_generated_visual(
         return False
     try:
         path = await asyncio.to_thread(materialize_ad_visual, job)
-        actor = await control._actor(int(event.from_user.id), str(data["business_id"]))
+        actor = await control._actor(int(event.from_user.id), str(data.get("business_id") or ""))
         if visual_kind == "video":
             payload = await asyncio.to_thread(path.read_bytes)
             await asyncio.to_thread(
                 attach_video_bytes,
                 actor=actor,
-                publication_job_id=str(data["job_id"]),
+                publication_job_id=str(data.get("job_id") or ""),
                 payload=payload,
                 content_type=str(getattr(job, "mime_type", "") or "video/mp4"),
                 original_name=path.name or "generated.mp4",
@@ -1487,7 +1492,7 @@ async def _finish_generated_visual(
             await asyncio.to_thread(
                 attach_image_file,
                 actor=actor,
-                publication_job_id=str(data["job_id"]),
+                publication_job_id=str(data.get("job_id") or ""),
                 path=path,
                 source=AdPublicationAssetSource.GENERATED,
             )
@@ -1555,11 +1560,11 @@ async def _generate_studio_variant(
         variant = await _studio_variant_for_actor(
             data, index, user_id=int(callback.from_user.id)
         )
-        actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
+        actor = await control._actor(int(callback.from_user.id), str(data.get("business_id") or ""))
         result = await asyncio.to_thread(
             start_goal_image_variant,
             actor=actor,
-            publication_job_id=str(data["job_id"]),
+            publication_job_id=str(data.get("job_id") or ""),
             variant=variant,
             wait_seconds=20,
         )
@@ -1643,8 +1648,8 @@ async def _generate_custom_visual(
     without_noun = "видео" if visual_kind == "video" else "картинки"
     await callback.answer(f"Создаю {object_noun}…")
     try:
-        business_id = str(data["business_id"])
-        publication_job_id = str(data["job_id"])
+        business_id = str(data.get("business_id") or "")
+        publication_job_id = str(data.get("job_id") or "")
         country_code = os.getenv("VISUAL_DEPLOYMENT_COUNTRY", "")
         ready = await asyncio.to_thread(
             visual_generation_ready,
@@ -1727,14 +1732,14 @@ async def _generate_custom_visual(
             try:
                 actor = await control._actor(
                     int(callback.from_user.id),
-                    str(data["business_id"]),
+                    str(data.get("business_id") or ""),
                 )
                 await asyncio.to_thread(
                     advance_failed_editable_ad_source,
                     actor=actor,
                     project_id=editable_project_id,
                 )
-            except (KeyError, LookupError, ValueError, TenantPermissionDenied):
+            except (LookupError, ValueError, TenantPermissionDenied):
                 pass
             await state.update_data(editable_generation_active=False)
         await state.update_data(creative_job_id="", creative_generation_kind=visual_kind)
@@ -1808,11 +1813,11 @@ async def _check_studio_generated_image(
         variant = await _studio_variant_for_actor(
             data, index, user_id=int(callback.from_user.id)
         )
-        actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
+        actor = await control._actor(int(callback.from_user.id), str(data.get("business_id") or ""))
         result = await asyncio.to_thread(
             poll_goal_image_variant,
             actor=actor,
-            publication_job_id=str(data["job_id"]),
+            publication_job_id=str(data.get("job_id") or ""),
             job_id=str(data["creative_job_id"]),
             variant=variant,
         )
@@ -1874,7 +1879,7 @@ async def check_generated_image(callback: CallbackQuery, state: FSMContext) -> N
         job = await asyncio.to_thread(
             poll_ad_visual,
             job_id=str(data["creative_job_id"]),
-            scope_id=str(data["business_id"]),
+            scope_id=str(data.get("business_id") or ""),
         )
     except (KeyError, VisualCreativeError):
         await callback.answer(f"Пока не удалось проверить {check_noun}", show_alert=True)
@@ -1914,14 +1919,14 @@ async def check_generated_image(callback: CallbackQuery, state: FSMContext) -> N
         try:
             actor = await control._actor(
                 int(callback.from_user.id),
-                str(data["business_id"]),
+                str(data.get("business_id") or ""),
             )
             await asyncio.to_thread(
                 advance_failed_editable_ad_source,
                 actor=actor,
                 project_id=editable_project_id,
             )
-        except (KeyError, LookupError, ValueError, TenantPermissionDenied):
+        except (LookupError, ValueError, TenantPermissionDenied):
             pass
     await state.update_data(
         creative_job_id="",
