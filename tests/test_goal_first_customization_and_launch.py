@@ -293,8 +293,9 @@ class GoalFirstCustomizationAndLaunchTests(unittest.IsolatedAsyncioTestCase):
     async def test_reusable_image_apply_permission_failure_is_recoverable(self) -> None:
         data = base_data()
         data["reusable_image_job_ids"] = ["old-job"]
+        data["reusable_image_token"] = "abc123"
         state = FakeState(data)
-        cb = callback("cpo:reusepick:0:business-token")
+        cb = callback("cpo:reusepick:abc123:0:business-token")
         with patch.object(
             goal.control,
             "_actor",
