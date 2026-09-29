@@ -370,7 +370,12 @@ async def _ask_creative_prompt(
         )
         return
     if active is not None and active.status != CreativeGenerationReceiptStatus.PREPARED:
-        await callback.answer("Сначала продолжите уже начатую генерацию", show_alert=True)
+        await callback.answer()
+        await control._callback_message(callback).answer(
+            "У Вас уже есть незавершённая генерация. Продолжите её или завершите "
+            "этот результат, чтобы начать новый.",
+            reply_markup=_menu_rows(token, active),
+        )
         return
 
     video_mode = ""
