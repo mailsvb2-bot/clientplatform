@@ -302,15 +302,21 @@ class CreativeGenerationReceiptRepository:
         ):
             raise ValueError("creative generation delivery was not claimed")
         timestamp = str(now or _iso_now())
-        self._conn.execute(
-            "DELETE FROM creative_generation_receipts WHERE id=? AND business_id=?",
-            (receipt.id, current.business_id),
+        cursor = self._conn.execute(
+            """
+            UPDATE creative_generation_receipts
+            SET status='delivered', updated_at=?
+            WHERE id=? AND business_id=? AND status='succeeded'
+              AND delivery_claimed_at<>''
+            """,
+            (timestamp, receipt.id, current.business_id),
         )
-        return replace(
-            receipt,
-            status=CreativeGenerationReceiptStatus.DELIVERED,
-            updated_at=timestamp,
-        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            raise ValueError("creative generation delivery state changed")
+        # DELIVERED is intentionally durable but non-active. Keeping the receipt
+        # addressable makes the explicit post-delivery download callback resolvable;
+        # generated image/video bytes remain transient and are not stored here.
+        return self.get(actor=current, receipt_id=receipt.id)
 
 
 __all__ = ["CreativeGenerationReceiptRepository"]
