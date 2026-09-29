@@ -370,8 +370,16 @@ async def _ask_creative_prompt(
         )
         return
     if active is not None and active.status != CreativeGenerationReceiptStatus.PREPARED:
+        try:
+            target = control._callback_message(callback)
+        except ValueError:
+            await callback.answer(
+                "Сначала продолжите уже начатую генерацию",
+                show_alert=True,
+            )
+            return
         await callback.answer()
-        await control._callback_message(callback).answer(
+        await target.answer(
             "У Вас уже есть незавершённая генерация. Продолжите её или завершите "
             "этот результат, чтобы начать новый.",
             reply_markup=_menu_rows(token, active),
