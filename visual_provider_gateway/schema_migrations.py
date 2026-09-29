@@ -9,6 +9,7 @@ _COLUMN_MIGRATIONS = (
     ("scope_id", "003_add_scope_id.sql"),
     ("idempotency_key", "004_add_idempotency_key.sql"),
     ("request_fingerprint", "005_add_request_fingerprint.sql"),
+    ("provider_state_json", "006_add_provider_state_json.sql"),
 )
 
 

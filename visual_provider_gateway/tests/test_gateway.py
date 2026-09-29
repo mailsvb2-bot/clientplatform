@@ -125,6 +125,65 @@ def test_service_submit_retry_does_not_duplicate_provider_call(tmp_path, monkeyp
     assert mime == "image/png"
 
 
+def test_provider_state_survives_service_restart_between_submit_and_poll(tmp_path):
+    db_path = tmp_path / "jobs.sqlite3"
+
+    class SubmitEngine:
+        def generate(self, brief, *, wait_seconds=0):
+            assert brief.kind == "video"
+            assert wait_seconds >= 0
+            return CreativeJob(
+                provider="yandexart_motion",
+                kind="video",
+                status="running",
+                external_id="operation-123",
+                model="art://folder/aliceai-image-art-3.0",
+                provider_payload={
+                    "motion_duration_seconds": 8,
+                    "motion_aspect_ratio": "9:16",
+                },
+            )
+
+    class PollEngine:
+        def __init__(self):
+            self.seen = None
+
+        def poll(self, job):
+            self.seen = dict(job.provider_payload)
+            job.status = "succeeded"
+            return job
+
+    first = VisualGatewayService(
+        store=JobStore(str(db_path)),
+        engine=SubmitEngine(),
+    )
+    created = first.submit(
+        payload(
+            kind="video",
+            duration_seconds=8,
+            aspect_ratio="9:16",
+        ),
+        client_id="client-a",
+    )
+
+    poll_engine = PollEngine()
+    restarted = VisualGatewayService(
+        store=JobStore(str(db_path)),
+        engine=poll_engine,
+    )
+    done = restarted.poll(
+        created["id"],
+        client_id="client-a",
+        scope_id="tenant-a",
+    )
+
+    assert done["status"] == "succeeded"
+    assert poll_engine.seen == {
+        "motion_duration_seconds": 8,
+        "motion_aspect_ratio": "9:16",
+    }
+
+
 def test_succeeded_job_is_not_asset_ready_after_transient_file_disappears(tmp_path, monkeypatch):
     output = tmp_path / "out"
     output.mkdir()
