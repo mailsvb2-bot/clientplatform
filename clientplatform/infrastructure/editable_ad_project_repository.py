@@ -191,6 +191,8 @@ class EditableAdProjectRepository:
                 headline,body,cta,layout,brand_json,source_job_id,
                 status,revision,created_at,updated_at
             ) VALUES(?,?,?,?,?,?,?,?,?,?,'','draft',1,?,?)
+            ON CONFLICT(business_id, created_by_member_id, publication_job_id, kind)
+            DO NOTHING
             """,
             (
                 project_id,
@@ -207,7 +209,14 @@ class EditableAdProjectRepository:
                 timestamp,
             ),
         )
-        return self.get(actor=current, project_id=project_id)
+        created = self.get_for_publication(
+            actor=current,
+            publication_job_id=publication,
+            kind=visual_kind,
+        )
+        if created is None:
+            raise RuntimeError("editable advertising project creation disappeared")
+        return created
 
     def prepare_new_source(
         self,
