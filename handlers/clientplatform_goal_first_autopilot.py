@@ -500,13 +500,10 @@ async def apply_reusable_image(callback: CallbackQuery, state: FSMContext) -> No
             source_publication_job_id=source_job_id,
             target_publication_job_id=str(data["job_id"]),
         )
-    except (
-        IndexError,
-        KeyError,
-        ValueError,
-        AdPublicationAssetError,
-        TenantPermissionDenied,
-    ):
+    except (IndexError, KeyError, ValueError):
+        await callback.answer("Картинка больше не доступна", show_alert=True)
+        return
+    except (AdPublicationAssetError, TenantPermissionDenied):
         await callback.answer("Картинка больше не доступна", show_alert=True)
         return
     await state.update_data(reusable_image_job_ids=[])
