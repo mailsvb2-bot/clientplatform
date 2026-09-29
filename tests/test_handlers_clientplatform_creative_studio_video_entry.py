@@ -253,6 +253,7 @@ def test_owner_delivery_survives_secondary_event_asset_failure(monkeypatch, tmp_
         request_text="ёж слушает метро",
         provider_payload_json="payload",
         source_job_id="job-123",
+        delivery_claimed_at=None,
     )
     job = SimpleNamespace(
         status="succeeded",
