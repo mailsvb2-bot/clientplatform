@@ -116,14 +116,17 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
             publication_job_id="ad-job",
             limit=6,
         )
-        st.update_data.assert_awaited_with(reusable_image_job_ids=["old-job"])
+        update_kwargs = st.update_data.await_args.kwargs
+        self.assertEqual(update_kwargs["reusable_image_job_ids"], ["old-job"])
+        reuse_token = update_kwargs["reusable_image_token"]
+        self.assertEqual(len(reuse_token), 6)
         labels = [label for row in target.answer.await_args.kwargs["reply_markup"] for label, _ in row]
         self.assertTrue(any("AI" in label for label in labels))
         self.assertIn("provider reference", target.answer.await_args.args[0])
 
     async def test_advanced_reuse_picker_attaches_reference_without_upload(self) -> None:
         data = {**base_state(), "reusable_image_job_ids": ["old-job"]}
-        cb = callback("cpa:media:reusepick:0")
+        cb = callback("cpa:media:reusepick:abc123:0")
         st = state(data)
         target = target_message()
         with (
@@ -140,7 +143,7 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
             source_publication_job_id="old-job",
             target_publication_job_id="ad-job",
         )
-        st.update_data.assert_awaited_with(reusable_image_job_ids=[])
+        st.update_data.assert_awaited_with(reusable_image_job_ids=[], reusable_image_token="")
         self.assertIn("Файл повторно не загружался", target.answer.await_args.args[0])
 
     async def test_advanced_reuse_picker_empty_list_offers_upload_or_generate(self) -> None:
@@ -173,12 +176,27 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_advanced_reuse_apply_rejects_stale_index(self) -> None:
         cb = callback("cpa:media:reusepick:9")
-        st = state({**base_state(), "reusable_image_job_ids": ["old-job"]})
+        st = state({**base_state(), "reusable_image_job_ids": ["old-job"], "reusable_image_token": "abc123"})
         with patch.object(ui, "reuse_image_reference") as reuse:
             await ui.apply_previous_ad_image(cb, st)
         reuse.assert_not_called()
         cb.answer.assert_awaited_once_with(
             "Картинка больше не доступна",
+            show_alert=True,
+        )
+
+    async def test_advanced_reuse_apply_rejects_stale_list_token(self) -> None:
+        cb = callback("cpa:media:reusepick:old999:0")
+        st = state({
+            **base_state(),
+            "reusable_image_job_ids": ["old-job"],
+            "reusable_image_token": "new123",
+        })
+        with patch.object(ui, "reuse_image_reference") as reuse:
+            await ui.apply_previous_ad_image(cb, st)
+        reuse.assert_not_called()
+        cb.answer.assert_awaited_once_with(
+            "Список картинок устарел. Откройте его заново.",
             show_alert=True,
         )
 
