@@ -265,7 +265,7 @@ def attach_image_bytes(
             actor=actor,
             publication_job_id=publication_job_id,
             reservation=reservation,
-            code="ad_provider_upload_ambiguous",
+            code="ad_image_upload_ambiguous",
         )
         raise error from exc
     return _complete_upload(
@@ -390,7 +390,7 @@ def attach_video_bytes(
             actor=actor,
             publication_job_id=publication_job_id,
             reservation=reservation,
-            code="ad_provider_upload_ambiguous",
+            code="ad_video_upload_ambiguous",
         )
         raise error from exc
     return _complete_upload(
