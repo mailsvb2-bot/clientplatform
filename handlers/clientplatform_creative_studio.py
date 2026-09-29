@@ -3,6 +3,7 @@ from __future__ import annotations
 """Discoverable owner image/video creation over the canonical visual gateway."""
 
 import asyncio
+import logging
 import os
 import tempfile
 from types import ModuleType
@@ -58,6 +59,9 @@ from clientplatform.presentation.visual_generation import (
 )
 
 from . import clientplatform_control as control
+
+
+logger = logging.getLogger(__name__)
 
 
 router = Router(name="clientplatform_creative_studio")
@@ -165,8 +169,16 @@ def _menu_rows(
     return control._keyboard(rows)
 
 
-def _result_rows(token: str):
-    return control._keyboard(
+def _result_rows(
+    token: str,
+    receipt: CreativeGenerationReceipt | None = None,
+):
+    rows: list[list[tuple[str, str]]] = []
+    if receipt is not None and receipt.source_job_id:
+        rows.append(
+            [("📥 Скачать файл", _receipt_callback("download", token, receipt))]
+        )
+    rows.extend(
         [
             [("✨ Создать ещё картинку", f"cpc:new:{token}")],
             [("🎬 Создать видео", f"cpc:video:{token}")],
@@ -174,6 +186,7 @@ def _result_rows(token: str):
             *_studio_navigation_rows(token),
         ]
     )
+    return control._keyboard(rows)
 
 
 async def _actor_for_callback(callback: CallbackQuery, token: str):
@@ -603,23 +616,6 @@ async def _finish_visual(
                     output_dir=directory,
                 )
             binding = frozen_business_visual_binding(receipt.provider_payload_json)
-            if binding is not None and binding.get("type") == "event_content":
-                await asyncio.to_thread(
-                    store_generated_event_content_asset,
-                    actor=actor,
-                    event_id=binding["event_id"],
-                    stage=EventContentStage(binding["stage"]),
-                    slot_key=binding["slot_key"],
-                    kind=ContentKind(binding["kind"]),
-                    path=path,
-                    content_type=str(getattr(job, "mime_type", "") or (
-                        "video/mp4" if binding["kind"] == "video" else "image/jpeg"
-                    )),
-                    extension=path.suffix.lower().lstrip(".") or (
-                        "mp4" if binding["kind"] == "video" else "jpg"
-                    ),
-                    source_ref=receipt.id,
-                )
             claimed = await asyncio.to_thread(
                 claim_creative_generation_delivery,
                 actor=actor,
@@ -651,7 +647,11 @@ async def _finish_visual(
                         if str(getattr(job, "provider", "") or "") == "yandexart_motion"
                         else "✅ AI-видео готово"
                     )
-                    await target.answer_video(FSInputFile(path), caption=caption)
+                    await target.answer_video(
+                        FSInputFile(path),
+                        caption=caption,
+                        supports_streaming=True,
+                    )
                 else:
                     await target.answer_photo(FSInputFile(path), caption="✅ Картинка готова")
             except TelegramAPIError:
@@ -661,7 +661,32 @@ async def _finish_visual(
                     reply_markup=_delivery_recovery_rows(token, receipt, ambiguous=True),
                 )
                 return True
-    except (VisualCreativeError, EventContentAssetError, ValueError):
+            if binding is not None and binding.get("type") == "event_content":
+                try:
+                    await asyncio.to_thread(
+                        store_generated_event_content_asset,
+                        actor=actor,
+                        event_id=binding["event_id"],
+                        stage=EventContentStage(binding["stage"]),
+                        slot_key=binding["slot_key"],
+                        kind=ContentKind(binding["kind"]),
+                        path=path,
+                        content_type=str(getattr(job, "mime_type", "") or (
+                            "video/mp4" if binding["kind"] == "video" else "image/jpeg"
+                        )),
+                        extension=path.suffix.lower().lstrip(".") or (
+                            "mp4" if binding["kind"] == "video" else "jpg"
+                        ),
+                        source_ref=receipt.id,
+                    )
+                except EventContentAssetError as exc:
+                    # Delivery to the owner is the primary contract. A secondary
+                    # campaign attachment failure must never hide a valid result.
+                    logger.warning(
+                        "creative event-content attachment failed after owner delivery: %s",
+                        exc,
+                    )
+    except (VisualCreativeError, ValueError):
         await target.answer(
             "Генератор завершил визуал, но файл сейчас не удалось получить. "
             "Можно проверить файл ещё раз или завершить этот результат и создать новый.",
@@ -682,7 +707,7 @@ async def _finish_visual(
     )
     await target.answer(
         "Можно сохранить результат из чата, создать ещё один или перейти к рекламе.",
-        reply_markup=_result_rows(token),
+        reply_markup=_result_rows(token, receipt),
     )
     return True
 
@@ -941,6 +966,69 @@ async def redeliver_creative_image(callback: CallbackQuery, state: FSMContext) -
         return
     await callback.answer("Повторяю отправку по Вашему запросу…")
     await _continue_generation(callback, actor=actor, receipt=current)
+
+
+@router.callback_query(F.data.startswith("cpc:download:"))
+async def download_creative_file(callback: CallbackQuery, state: FSMContext) -> None:
+    del state
+    parts = str(callback.data).split(":")
+    if len(parts) != 4:
+        await callback.answer("Эта кнопка устарела", show_alert=True)
+        return
+    token, receipt_token = parts[2], parts[3]
+    try:
+        actor = await _actor_for_callback(callback, token)
+        receipt = await _receipt_for_callback(actor, receipt_token)
+        if not receipt.source_job_id:
+            raise LookupError("visual job is missing")
+        job = await asyncio.to_thread(
+            poll_ad_visual,
+            job_id=receipt.source_job_id,
+            scope_id=actor.business_id,
+        )
+        if str(getattr(job, "status", "") or "") != "succeeded" or not bool(
+            getattr(job, "asset_ready", False)
+        ):
+            await callback.answer("Файл уже недоступен. Создайте визуал заново.", show_alert=True)
+            return
+        await callback.answer("Готовлю файл…")
+        target = control._callback_message(callback)
+        with tempfile.TemporaryDirectory(prefix="clientplatform-download-") as directory:
+            path = await asyncio.to_thread(
+                materialize_ad_visual,
+                job,
+                output_dir=directory,
+                repair_blank_bands=False,
+            )
+            suffix = path.suffix.lower() or (
+                ".mp4" if str(getattr(job, "kind", "") or "") == "video" else ".jpg"
+            )
+            filename = (
+                "clientplatform-video" + suffix
+                if str(getattr(job, "kind", "") or "") == "video"
+                else "clientplatform-image" + suffix
+            )
+            await target.answer_document(
+                FSInputFile(path, filename=filename),
+                caption="📥 Файл для сохранения",
+            )
+    except TenantPermissionDenied:
+        await callback.answer("Создание визуалов недоступно для Вашей роли", show_alert=True)
+    except (LookupError, TypeError, ValueError):
+        await callback.answer(
+            "Файл уже недоступен. Создайте визуал заново.",
+            show_alert=True,
+        )
+    except VisualCreativeError:
+        await callback.answer(
+            "Файл уже недоступен. Создайте визуал заново.",
+            show_alert=True,
+        )
+    except TelegramAPIError:
+        await callback.answer(
+            "Telegram не смог отправить файл. Попробуйте ещё раз.",
+            show_alert=True,
+        )
 
 
 @router.callback_query(F.data.startswith("cpc:check:"))

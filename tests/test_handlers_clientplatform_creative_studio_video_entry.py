@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 from clientplatform.domain.creative_generation import CreativeGenerationReceiptStatus
 from handlers import clientplatform_creative_studio as studio
@@ -222,3 +222,207 @@ def test_video_status_explains_motion_fallback(monkeypatch) -> None:
     text = target.answer.await_args.args[0]
     assert "оживление AI-кадра" in text
     assert "не генерация движущейся сцены" in text
+
+
+def test_result_menu_exposes_download_for_completed_receipt(monkeypatch) -> None:
+    receipt = SimpleNamespace(source_job_id="job-123")
+    monkeypatch.setattr(
+        studio,
+        "_receipt_callback",
+        lambda action, token, _receipt: f"receipt:{action}:{token}",
+    )
+
+    rows = _labels_and_callbacks(studio._result_rows("business-token", receipt))
+
+    assert ("📥 Скачать файл", "receipt:download:business-token") in rows
+
+
+def test_owner_delivery_survives_secondary_event_asset_failure(monkeypatch, tmp_path) -> None:
+    asset = tmp_path / "creative.jpg"
+    asset.write_bytes(b"jpeg")
+    target = SimpleNamespace(
+        answer=AsyncMock(),
+        answer_photo=AsyncMock(),
+        answer_video=AsyncMock(),
+        answer_document=AsyncMock(),
+    )
+    callback = SimpleNamespace(from_user=SimpleNamespace(id=101))
+    actor = SimpleNamespace(business_id="business-id")
+    receipt = SimpleNamespace(
+        id="receipt-id",
+        request_text="ёж слушает метро",
+        provider_payload_json="payload",
+        source_job_id="job-123",
+        delivery_claimed_at=None,
+    )
+    job = SimpleNamespace(
+        status="succeeded",
+        asset_ready=True,
+        kind="image",
+        provider="yandexart",
+        mime_type="image/jpeg",
+    )
+
+    async def immediate_to_thread(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(studio.asyncio, "to_thread", immediate_to_thread)
+    monkeypatch.setattr(studio.control, "_callback_message", lambda _callback: target)
+    monkeypatch.setattr(studio.control, "_uuid_token", lambda _value: "business-token")
+    monkeypatch.setattr(studio, "materialize_ad_visual", lambda *_args, **_kwargs: asset)
+    monkeypatch.setattr(studio, "claim_creative_generation_delivery", lambda **_kwargs: True)
+    mark = Mock()
+    monkeypatch.setattr(studio, "mark_creative_generation_delivered", mark)
+    monkeypatch.setattr(
+        studio,
+        "frozen_business_visual_binding",
+        lambda _payload: {
+            "type": "event_content",
+            "event_id": "event-id",
+            "stage": "warmup",
+            "slot_key": "hero",
+            "kind": "image",
+        },
+    )
+    monkeypatch.setattr(
+        studio,
+        "store_generated_event_content_asset",
+        Mock(side_effect=studio.EventContentAssetError("storage failed")),
+    )
+
+    result = asyncio.run(
+        studio._finish_visual(
+            callback,
+            actor=actor,
+            receipt=receipt,
+            job=job,
+        )
+    )
+
+    assert result is True
+    target.answer_photo.assert_awaited_once()
+    mark.assert_called_once()
+    assert "📥 Скачать файл" in [
+        button.text
+        for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+
+
+def test_video_delivery_enables_streaming(monkeypatch, tmp_path) -> None:
+    asset = tmp_path / "creative.mp4"
+    asset.write_bytes(b"video")
+    target = SimpleNamespace(
+        answer=AsyncMock(),
+        answer_photo=AsyncMock(),
+        answer_video=AsyncMock(),
+        answer_document=AsyncMock(),
+    )
+    callback = SimpleNamespace(from_user=SimpleNamespace(id=101))
+    actor = SimpleNamespace(business_id="business-id")
+    receipt = SimpleNamespace(
+        id="receipt-id",
+        request_text="короткое видео",
+        provider_payload_json="payload",
+        source_job_id="job-123",
+    )
+    job = SimpleNamespace(
+        status="succeeded",
+        asset_ready=True,
+        kind="video",
+        provider="yandexart_motion",
+        mime_type="video/mp4",
+    )
+
+    async def immediate_to_thread(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(studio.asyncio, "to_thread", immediate_to_thread)
+    monkeypatch.setattr(studio.control, "_callback_message", lambda _callback: target)
+    monkeypatch.setattr(studio.control, "_uuid_token", lambda _value: "business-token")
+    monkeypatch.setattr(studio, "materialize_ad_visual", lambda *_args, **_kwargs: asset)
+    monkeypatch.setattr(studio, "claim_creative_generation_delivery", lambda **_kwargs: True)
+    monkeypatch.setattr(studio, "mark_creative_generation_delivered", lambda **_kwargs: None)
+    monkeypatch.setattr(studio, "frozen_business_visual_binding", lambda _payload: None)
+
+    result = asyncio.run(
+        studio._finish_visual(
+            callback,
+            actor=actor,
+            receipt=receipt,
+            job=job,
+        )
+    )
+
+    assert result is True
+    target.answer_video.assert_awaited_once()
+    assert target.answer_video.await_args.kwargs["supports_streaming"] is True
+
+
+def test_download_creative_file_sends_document(monkeypatch, tmp_path) -> None:
+    asset = tmp_path / "creative.jpg"
+    asset.write_bytes(b"jpeg")
+    target = SimpleNamespace(answer_document=AsyncMock())
+    callback = SimpleNamespace(
+        data="cpc:download:business-token:receipt-token",
+        answer=AsyncMock(),
+        from_user=SimpleNamespace(id=101),
+    )
+    state = SimpleNamespace()
+    actor = SimpleNamespace(business_id="business-id")
+    receipt = SimpleNamespace(source_job_id="job-123")
+    job = SimpleNamespace(
+        id="job-123",
+        status="succeeded",
+        asset_ready=True,
+        kind="image",
+    )
+
+    async def immediate_to_thread(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(studio.asyncio, "to_thread", immediate_to_thread)
+    monkeypatch.setattr(studio, "_actor_for_callback", AsyncMock(return_value=actor))
+    monkeypatch.setattr(studio, "_receipt_for_callback", AsyncMock(return_value=receipt))
+    monkeypatch.setattr(studio, "poll_ad_visual", lambda **_kwargs: job)
+    monkeypatch.setattr(
+        studio,
+        "materialize_ad_visual",
+        lambda *_args, **_kwargs: asset,
+    )
+    monkeypatch.setattr(studio.control, "_callback_message", lambda _callback: target)
+
+    asyncio.run(studio.download_creative_file(callback, state))
+
+    callback.answer.assert_awaited_once_with("Готовлю файл…")
+    target.answer_document.assert_awaited_once()
+    document = target.answer_document.await_args.args[0]
+    assert document.filename == "clientplatform-image.jpg"
+    assert target.answer_document.await_args.kwargs["caption"] == "📥 Файл для сохранения"
+
+
+def test_download_creative_file_reports_expired_asset(monkeypatch) -> None:
+    callback = SimpleNamespace(
+        data="cpc:download:business-token:receipt-token",
+        answer=AsyncMock(),
+        from_user=SimpleNamespace(id=101),
+    )
+    state = SimpleNamespace()
+    actor = SimpleNamespace(business_id="business-id")
+    receipt = SimpleNamespace(source_job_id="job-123")
+    job = SimpleNamespace(status="succeeded", asset_ready=False, kind="image")
+
+    async def immediate_to_thread(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(studio.asyncio, "to_thread", immediate_to_thread)
+    monkeypatch.setattr(studio, "_actor_for_callback", AsyncMock(return_value=actor))
+    monkeypatch.setattr(studio, "_receipt_for_callback", AsyncMock(return_value=receipt))
+    monkeypatch.setattr(studio, "poll_ad_visual", lambda **_kwargs: job)
+
+    asyncio.run(studio.download_creative_file(callback, state))
+
+    callback.answer.assert_awaited_once_with(
+        "Файл уже недоступен. Создайте визуал заново.",
+        show_alert=True,
+    )
