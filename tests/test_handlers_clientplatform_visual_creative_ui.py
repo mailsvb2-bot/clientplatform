@@ -143,6 +143,63 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
         st.update_data.assert_awaited_with(reusable_image_job_ids=[])
         self.assertIn("Файл повторно не загружался", target.answer.await_args.args[0])
 
+    async def test_advanced_reuse_picker_empty_list_offers_upload_or_generate(self) -> None:
+        cb = callback("cpa:media:reuse")
+        st = state(base_state())
+        target = target_message()
+        with (
+            patch.object(ui.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+            patch.object(ui, "list_reusable_images", return_value=[]),
+            patch.object(ui, "_message", return_value=target),
+            patch.object(ui.control, "_keyboard", side_effect=lambda rows: rows),
+        ):
+            await ui.choose_previous_ad_image(cb, st)
+        self.assertIn("ещё нет ранее использованных картинок", target.answer.await_args.args[0])
+        labels = [label for row in target.answer.await_args.kwargs["reply_markup"] for label, _ in row]
+        self.assertIn("📎 Добавить свою картинку", labels)
+        self.assertIn("✨ Сгенерировать картинку", labels)
+
+    async def test_advanced_reuse_picker_handles_missing_state(self) -> None:
+        cb = callback("cpa:media:reuse")
+        st = state({"business_token": "business-token"})
+        with patch.object(ui.control, "_actor", new=AsyncMock()) as actor:
+            await ui.choose_previous_ad_image(cb, st)
+        actor.assert_not_awaited()
+        cb.answer.assert_awaited_once_with(
+            "Не удалось открыть прошлые картинки",
+            show_alert=True,
+        )
+
+    async def test_advanced_reuse_apply_rejects_stale_index(self) -> None:
+        cb = callback("cpa:media:reusepick:9")
+        st = state({**base_state(), "reusable_image_job_ids": ["old-job"]})
+        with patch.object(ui, "reuse_image_reference") as reuse:
+            await ui.apply_previous_ad_image(cb, st)
+        reuse.assert_not_called()
+        cb.answer.assert_awaited_once_with(
+            "Картинка больше не доступна",
+            show_alert=True,
+        )
+
+    async def test_advanced_reuse_apply_recoverable_provider_reference_error(self) -> None:
+        cb = callback("cpa:media:reusepick:0")
+        st = state({**base_state(), "reusable_image_job_ids": ["old-job"]})
+        with (
+            patch.object(ui.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+            patch.object(
+                ui,
+                "reuse_image_reference",
+                side_effect=ui.AdPublicationAssetError("stale"),
+            ),
+        ):
+            await ui.apply_previous_ad_image(cb, st)
+        cb.answer.assert_awaited_once_with(
+            "Картинка больше не доступна",
+            show_alert=True,
+        )
+
     async def test_render_pending_is_tenant_scoped_and_idempotent(self) -> None:
         cb = callback()
         st = state(base_state())
