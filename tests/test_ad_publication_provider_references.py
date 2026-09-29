@@ -767,3 +767,78 @@ async def test_ad_media_monitor_loop_drains_batch_and_sleeps(monkeypatch) -> Non
 
     assert calls == 3
     assert sleeps == [45]
+
+
+def test_reuse_image_reference_does_not_overwrite_inflight_or_ambiguous_target(
+    monkeypatch,
+) -> None:
+    actor = SimpleNamespace(
+        user_id=101,
+        business_id=str(uuid4()),
+        membership_id=str(uuid4()),
+    )
+    connection_id = str(uuid4())
+    source_job_id = str(uuid4())
+    target_job_id = str(uuid4())
+    source_row = (
+        source_job_id,
+        actor.business_id,
+        "image",
+        "upload",
+        "image/jpeg",
+        "owner.jpg",
+        "e" * 64,
+        222,
+        None,
+        "provider-hash-reuse",
+        None,
+        None,
+        None,
+        "ready",
+        actor.membership_id,
+        "2026-09-29T00:00:00+00:00",
+        "2026-09-29T00:01:00+00:00",
+        connection_id,
+        connection_id,
+    )
+    upserts: list[str] = []
+
+    class Result:
+        def __init__(self, *, row=None, rowcount=1):
+            self._row = row
+            self.rowcount = rowcount
+
+        def fetchone(self):
+            return self._row
+
+    class Conn:
+        def execute(self, sql, params):
+            rendered = str(sql)
+            if "JOIN ad_publication_jobs AS source_job" in rendered:
+                return Result(row=source_row)
+            if rendered.lstrip().startswith("INSERT INTO ad_publication_assets"):
+                upserts.append(rendered)
+                return Result(rowcount=0)
+            raise AssertionError(f"unexpected SQL: {rendered}")
+
+    monkeypatch.setattr(
+        assets.AdPublicationAssetRepository,
+        "_actor",
+        lambda self, _actor: actor,
+    )
+    monkeypatch.setattr(
+        assets.AdPublicationAssetRepository,
+        "_assert_editable_job",
+        lambda self, **_kwargs: None,
+    )
+    repository = assets.AdPublicationAssetRepository(Conn())
+
+    with pytest.raises(ValueError, match="in-flight or ambiguous"):
+        repository.reuse_image_reference(
+            actor=actor,
+            source_publication_job_id=source_job_id,
+            target_publication_job_id=target_job_id,
+        )
+
+    assert len(upserts) == 1
+    assert "NOT IN ('uploading', 'ambiguous')" in upserts[0]
