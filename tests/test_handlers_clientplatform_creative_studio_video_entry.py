@@ -561,3 +561,133 @@ def test_checking_expired_completed_asset_ends_deadlock_and_restores_both_entrie
     assert "Старый результат завершён" in text
     assert ("✨ Создать ещё картинку", "cpc:new:business-token") in rows
     assert ("🎬 Создать видео", "cpc:video:business-token") in rows
+
+
+def test_transient_receipt_reconciliation_covers_safe_noop_states(monkeypatch) -> None:
+    actor = SimpleNamespace(business_id="business-id")
+    abandon = Mock()
+    poll = Mock()
+    monkeypatch.setattr(studio, "abandon_creative_generation", abandon)
+    monkeypatch.setattr(studio, "poll_ad_visual", poll)
+
+    assert asyncio.run(
+        studio._retire_unavailable_completed_receipt(actor, None)
+    ) is False
+    assert asyncio.run(
+        studio._retire_unavailable_completed_receipt(
+            actor,
+            SimpleNamespace(
+                id="running-receipt",
+                status=CreativeGenerationReceiptStatus.RUNNING,
+                source_job_id="job-running",
+            ),
+        )
+    ) is False
+    assert asyncio.run(
+        studio._retire_unavailable_completed_receipt(
+            actor,
+            SimpleNamespace(
+                id="missing-job-receipt",
+                status=CreativeGenerationReceiptStatus.SUCCEEDED,
+                source_job_id="",
+            ),
+        )
+    ) is False
+
+    succeeded = SimpleNamespace(
+        id="receipt-id",
+        status=CreativeGenerationReceiptStatus.SUCCEEDED,
+        source_job_id="job-123",
+    )
+    assert asyncio.run(
+        studio._retire_unavailable_completed_receipt(
+            actor,
+            succeeded,
+            job=SimpleNamespace(status="running", asset_ready=False),
+        )
+    ) is False
+    assert asyncio.run(
+        studio._retire_unavailable_completed_receipt(
+            actor,
+            succeeded,
+            job=SimpleNamespace(status="succeeded", asset_ready=True),
+        )
+    ) is False
+
+    poll.assert_not_called()
+    abandon.assert_not_called()
+
+
+def test_transient_receipt_reconciliation_treats_concurrent_cleanup_as_terminal(
+    monkeypatch,
+) -> None:
+    actor = SimpleNamespace(business_id="business-id")
+    receipt = SimpleNamespace(
+        id="receipt-id",
+        status=CreativeGenerationReceiptStatus.SUCCEEDED,
+        source_job_id="job-123",
+    )
+
+    def already_gone(**_kwargs):
+        raise LookupError("already retired")
+
+    monkeypatch.setattr(studio, "abandon_creative_generation", already_gone)
+
+    retired = asyncio.run(
+        studio._retire_unavailable_completed_receipt(
+            actor,
+            receipt,
+            job=SimpleNamespace(status="succeeded", asset_ready=False),
+        )
+    )
+
+    assert retired is True
+
+
+def test_opening_studio_reconciles_expired_success_before_rendering_menu(
+    monkeypatch,
+) -> None:
+    message = SimpleNamespace(answer=AsyncMock())
+    actor = SimpleNamespace(
+        business_id="business-id",
+        assert_can_manage_promotions=Mock(),
+    )
+    stale = SimpleNamespace(
+        id="receipt-id",
+        status=CreativeGenerationReceiptStatus.SUCCEEDED,
+        source_job_id="job-123",
+        delivery_claimed_at=None,
+    )
+
+    monkeypatch.setattr(studio.control, "_actor", AsyncMock(return_value=actor))
+    monkeypatch.setattr(studio.control, "_uuid_token", lambda _value: "business-token")
+    monkeypatch.setattr(studio, "_active", AsyncMock(side_effect=[stale, None]))
+    monkeypatch.setattr(
+        studio,
+        "_retire_unavailable_completed_receipt",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        studio,
+        "visual_generation_ready",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        studio,
+        "visual_video_generation_mode",
+        lambda **_kwargs: "motion",
+    )
+
+    asyncio.run(
+        studio.send_creative_studio_menu(
+            message,
+            user_id=101,
+            business_id="business-id",
+        )
+    )
+
+    text = message.answer.await_args.args[0]
+    rows = _labels_and_callbacks(message.answer.await_args.kwargs["reply_markup"])
+    assert "Выберите, что хотите создать" in text
+    assert ("✨ Создать картинку", "cpc:new:business-token") in rows
+    assert ("🎞 Оживить картинку", "cpc:video:business-token") in rows
