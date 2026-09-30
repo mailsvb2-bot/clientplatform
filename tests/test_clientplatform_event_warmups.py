@@ -7,6 +7,7 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from clientplatform.application import event_warmups as warmups
+from clientplatform.application import events as events_application
 from clientplatform.application.event_commercial_consent import (
     grant_event_commercial_consent_in_transaction,
 )
@@ -128,28 +129,34 @@ class TestPersistedWarmupPlan:
             business_id=access.business.id,
         )
         starts_at = datetime(2026, 9, 30, 16, 0, tzinfo=timezone.utc)
-        draft = create_multisession_online_event_draft_in_transaction(
-            self.conn,
-            actor=self.actor,
-            request=MultiSessionOnlineEventCreateRequest(
-                title="Практический вебинар",
-                description="Разберём тему на примерах.",
-                timezone_name="Europe/Moscow",
-                enable_email_notifications=False,
-                sessions=(
-                    OnlineEventSessionCreateRequest(
-                        starts_at=starts_at,
-                        ends_at=starts_at + timedelta(hours=2),
-                        join_url="https://room.example.test/live",
+        # Keep this persisted-plan fixture deterministic. Event creation/publish
+        # validates against the current clock, while the warmup scenarios below
+        # intentionally exercise a fixed September 2026 timeline. Without a
+        # frozen application clock this fixture becomes a calendar time bomb.
+        with patch.object(events_application, "datetime", wraps=datetime) as clock:
+            clock.now.return_value = NOW
+            draft = create_multisession_online_event_draft_in_transaction(
+                self.conn,
+                actor=self.actor,
+                request=MultiSessionOnlineEventCreateRequest(
+                    title="Практический вебинар",
+                    description="Разберём тему на примерах.",
+                    timezone_name="Europe/Moscow",
+                    enable_email_notifications=False,
+                    sessions=(
+                        OnlineEventSessionCreateRequest(
+                            starts_at=starts_at,
+                            ends_at=starts_at + timedelta(hours=2),
+                            join_url="https://room.example.test/live",
+                        ),
                     ),
                 ),
-            ),
-        )
-        publish_multisession_online_event_draft_in_transaction(
-            self.conn,
-            actor=self.actor,
-            event_id=draft.event_id,
-        )
+            )
+            publish_multisession_online_event_draft_in_transaction(
+                self.conn,
+                actor=self.actor,
+                event_id=draft.event_id,
+            )
         self.event_id = draft.event_id
 
     def teardown_method(self) -> None:
