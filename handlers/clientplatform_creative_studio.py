@@ -44,6 +44,7 @@ from clientplatform.application.visual_creatives import (
     freeze_business_video_payload,
     frozen_business_visual_binding,
     frozen_business_visual_kind,
+    frozen_business_visual_style,
     materialize_ad_visual,
     normalize_business_image_request,
     poll_ad_visual,
@@ -205,6 +206,21 @@ def _result_rows(
     if receipt is not None and receipt.source_job_id:
         rows.append(
             [("📥 Скачать файл", _receipt_callback("download", token, receipt))]
+        )
+    if receipt is not None:
+        kind = _receipt_kind(receipt)
+        rows.extend(
+            [
+                [("👍 Подходит", _receipt_callback("accept", token, receipt))],
+                [("🎨 Изменить стиль", _receipt_callback("restyle", token, receipt))],
+                [("🔄 Другой вариант", _receipt_callback("variant", token, receipt))],
+                [
+                    (
+                        "✏️ Изменить идею",
+                        f"cpc:video:{token}" if kind == "video" else f"cpc:new:{token}",
+                    )
+                ],
+            ]
         )
     rows.extend(
         [
@@ -1372,6 +1388,99 @@ async def redeliver_creative_image(callback: CallbackQuery, state: FSMContext) -
     await _continue_generation(callback, actor=actor, receipt=current)
 
 
+@router.callback_query(F.data.startswith("cpc:accept:"))
+async def accept_creative_result(callback: CallbackQuery, state: FSMContext) -> None:
+    del state
+    parts = str(callback.data).split(":")
+    if len(parts) != 4:
+        await callback.answer("Эта кнопка устарела", show_alert=True)
+        return
+    token, receipt_token = parts[2], parts[3]
+    try:
+        actor = await _actor_for_callback(callback, token)
+        await _receipt_for_callback(actor, receipt_token)
+    except (LookupError, TypeError, ValueError, TenantPermissionDenied):
+        await callback.answer("Этот результат уже недоступен", show_alert=True)
+        return
+    await callback.answer("Хорошо — оставляем этот вариант")
+
+
+@router.callback_query(F.data.startswith("cpc:restyle:"))
+async def restyle_creative_result(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = str(callback.data).split(":")
+    if len(parts) != 4:
+        await callback.answer("Эта кнопка устарела", show_alert=True)
+        return
+    token, receipt_token = parts[2], parts[3]
+    try:
+        actor = await _actor_for_callback(callback, token)
+        receipt = await _receipt_for_callback(actor, receipt_token)
+        frozen_style = frozen_business_visual_style(receipt.provider_payload_json)
+        style = resolve_visual_style_intent(
+            request=receipt.request_text,
+            selected=frozen_style,
+        )
+        inference = infer_visual_style_intent(receipt.request_text)
+    except (LookupError, TypeError, ValueError, TenantPermissionDenied):
+        await callback.answer("Этот результат уже недоступен", show_alert=True)
+        return
+
+    await state.set_data(
+        {
+            "creative_business_id": actor.business_id,
+            "creative_business_token": token,
+            "creative_kind": _receipt_kind(receipt),
+            "creative_pending_prompt": receipt.request_text,
+            "creative_brand_context": receipt.brand_context,
+            "creative_country_code": receipt.country_code,
+            "creative_style_intent": style.to_mapping(),
+            "creative_saved_style": VisualStyleIntent().to_mapping(),
+            "creative_saved_style_applied": False,
+            "creative_style_inferred_fields": list(inference.explicit_fields),
+        }
+    )
+    await state.set_state(ClientPlatformCreativeStudioState.choosing_style)
+    await callback.answer("Меняем только визуальный стиль")
+    await _show_style_dashboard(control._callback_message(callback), await state.get_data(), token)
+
+
+@router.callback_query(F.data.startswith("cpc:variant:"))
+async def create_another_visual_variant(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    del state
+    parts = str(callback.data).split(":")
+    if len(parts) != 4:
+        await callback.answer("Эта кнопка устарела", show_alert=True)
+        return
+    token, receipt_token = parts[2], parts[3]
+    try:
+        actor = await _actor_for_callback(callback, token)
+        receipt = await _receipt_for_callback(actor, receipt_token)
+        new_receipt = await asyncio.to_thread(
+            prepare_creative_generation,
+            actor=actor,
+            request_text=receipt.request_text,
+            brand_context=receipt.brand_context,
+            country_code=receipt.country_code,
+            provider_payload_json=receipt.provider_payload_json,
+        )
+    except (LookupError, TypeError, ValueError, TenantPermissionDenied):
+        await callback.answer("Не удалось подготовить другой вариант", show_alert=True)
+        return
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "🔄 Подготовил ещё один вариант с той же идеей и тем же стилем. "
+        "Это будет отдельная платная генерация; она начнётся только после подтверждения.",
+    )
+    await _show_paid_generation_confirmation(
+        control._callback_message(callback),
+        token=token,
+        receipt=new_receipt,
+    )
+
+
 @router.callback_query(F.data.startswith("cpc:download:"))
 async def download_creative_file(callback: CallbackQuery, state: FSMContext) -> None:
     del state
@@ -1555,6 +1664,9 @@ def install_creative_studio_safety(safety: ModuleType) -> None:
         "cpc:generate:",
         "cpc:abandon:",
         "cpc:redeliver:",
+        "cpc:accept:",
+        "cpc:restyle:",
+        "cpc:variant:",
         "cpc:st:save:",
         "cpc:st:clear:",
         "cpc:st:go:",
