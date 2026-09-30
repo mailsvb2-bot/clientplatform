@@ -162,6 +162,14 @@ def _menu_rows(
     rows.extend(
         [
             [("🚀 Картинка для рекламы", f"cpo:start:{token}")],
+            [(
+                "картинка для рекламы (возможность редактирования)",
+                f"cpc:editad:image:{token}",
+            )],
+            [(
+                "видео для рекламы (возможность редактирования)",
+                f"cpc:editad:video:{token}",
+            )],
             [("🎨 Фирменный стиль", f"cpb:open:{token}")],
             *_studio_navigation_rows(token),
         ]
@@ -421,6 +429,42 @@ async def open_creative_studio(callback: CallbackQuery, state: FSMContext) -> No
         control._callback_message(callback),
         user_id=actor.user_id,
         business_id=actor.business_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cpc:editad:"))
+async def open_editable_advertising(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    try:
+        _, _, kind, token = str(callback.data).split(":", 3)
+    except ValueError:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    if kind not in {"image", "video"}:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    try:
+        await _actor_for_callback(callback, token)
+    except (TypeError, ValueError, TenantPermissionDenied):
+        await callback.answer(
+            "Создание рекламы недоступно для Вашей роли",
+            show_alert=True,
+        )
+        return
+    await state.clear()
+    await callback.answer()
+    noun = "видео" if kind == "video" else "картинки"
+    await control._callback_message(callback).answer(
+        f"Редактируемый режим {noun} работает внутри рекламного черновика: "
+        "AI создаёт визуальную основу, а заголовок, текст и CTA остаются отдельной "
+        "детерминированной композицией. Правки макета не запускают новый AI-job.\n\n"
+        "Сначала подготовьте рекламный черновик; в нём будут отдельные кнопки "
+        "редактируемой картинки и видео.",
+        reply_markup=control._keyboard(
+            [[("🚀 Подготовить рекламу", f"cpo:start:{token}")]]
+        ),
     )
 
 
@@ -1199,12 +1243,14 @@ def install_creative_studio_safety(safety: ModuleType) -> None:
         "cpc:open:",
         "cpc:new:",
         "cpc:video:",
+        "cpc:editad:",
     )
     _extend_tuple(
         safety,
         "_REPEATABLE_NAVIGATION_PREFIXES",
         "cpc:open:",
         "cpc:check:",
+        "cpc:editad:",
     )
     _extend_tuple(
         safety,

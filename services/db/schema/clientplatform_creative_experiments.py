@@ -108,3 +108,46 @@ def ensure(c: sqlite3.Connection) -> None:
         ON creative_generation_receipts(business_id, updated_at)
         """
     )
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS editable_ad_projects(
+            id TEXT PRIMARY KEY,
+            business_id TEXT NOT NULL,
+            created_by_member_id TEXT NOT NULL,
+            publication_job_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            headline TEXT NOT NULL,
+            body TEXT NOT NULL,
+            cta TEXT NOT NULL DEFAULT '',
+            layout TEXT NOT NULL DEFAULT 'lower_card',
+            brand_json TEXT NOT NULL,
+            source_job_id TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'draft',
+            revision INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(id, business_id),
+            UNIQUE(business_id, created_by_member_id, publication_job_id, kind),
+            FOREIGN KEY(publication_job_id, business_id)
+                REFERENCES ad_publication_jobs(id, business_id) ON DELETE CASCADE,
+            FOREIGN KEY(created_by_member_id, business_id)
+                REFERENCES business_members(id, business_id),
+            CHECK(kind IN ('image','video')),
+            CHECK(length(headline) BETWEEN 1 AND 160),
+            CHECK(length(body) BETWEEN 1 AND 500),
+            CHECK(length(cta) <= 80),
+            CHECK(layout IN ('lower_card','top_card')),
+            CHECK(length(brand_json) BETWEEN 2 AND 512),
+            CHECK(length(source_job_id) <= 128),
+            CHECK(status IN ('draft','source_ready','source_expired','finished')),
+            CHECK(revision >= 1)
+        )
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_editable_ad_projects_publication
+        ON editable_ad_projects(business_id, publication_job_id, kind, updated_at)
+        """
+    )
