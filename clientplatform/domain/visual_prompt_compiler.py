@@ -221,11 +221,15 @@ def compile_visual_prompt(
 
     flags = _semantic_flags(owner_request)
     explicit_text = "explicit_text" in flags
-    medium = (
-        "Create one polished 8-second vertical visual story."
-        if visual_kind == "video"
-        else "Create one polished single advertising-quality image."
-    )
+    if visual_kind == "video":
+        medium = (
+            "Create one polished short vertical advertising video as an 8-second "
+            "visual story."
+            if visual_purpose == "advertising"
+            else "Create one polished 8-second vertical visual story."
+        )
+    else:
+        medium = "Create one polished single advertising-quality image."
     purpose_line = (
         "The visual may be used in advertising, but semantic fidelity to the owner's "
         "idea is more important than making a generic commercial stock image."
