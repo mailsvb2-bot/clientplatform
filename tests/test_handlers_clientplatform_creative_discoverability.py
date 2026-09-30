@@ -69,6 +69,9 @@ class FakeState:
     async def set_data(self, data):
         self.data = dict(data)
 
+    async def update_data(self, **kwargs):
+        self.data.update(kwargs)
+
     async def set_state(self, state):
         self.state = state
 
@@ -413,6 +416,7 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
             {"creative_business_id": _BUSINESS, "creative_business_token": _TOKEN}
         )
         target.answer.reset_mock()
+        target.text = "calm office"
         brand = SimpleNamespace(prompt_context=lambda: "Tone: calm")
         with (
             patch.object(creative.asyncio, "to_thread", new=direct),
@@ -420,10 +424,30 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
             patch.object(creative.control, "_user_id", return_value=101),
             patch.object(creative, "visual_generation_ready", return_value=True),
             patch.object(creative, "load_goal_visual_brand", return_value=brand),
-            patch.object(creative, "prepare_creative_generation", side_effect=OSError("db")),
+            patch.object(
+                creative,
+                "load_visual_style_preference",
+                return_value=creative.VisualStyleIntent(),
+            ),
         ):
-            target.text = "calm office"
             await creative.receive_creative_prompt(target, state)
+
+        target.answer.reset_mock()
+        with (
+            patch.object(creative.asyncio, "to_thread", new=direct),
+            patch.object(creative.control, "_actor", new=AsyncMock(return_value=actor())),
+            patch.object(
+                creative,
+                "prepare_creative_generation",
+                side_effect=OSError("db"),
+            ),
+        ):
+            await creative._prepare_styled_generation(
+                target,
+                state,
+                user_id=101,
+                token=_TOKEN,
+            )
         self.assertIn("безопасно подготовить", target.answer.await_args.args[0])
 
     async def test_receive_prompt_stops_before_paid_consent_when_provider_is_unavailable(self) -> None:
@@ -497,15 +521,52 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
             {"creative_business_id": _BUSINESS, "creative_business_token": _TOKEN}
         )
         prepared = receipt(status=CreativeGenerationReceiptStatus.PREPARED)
+        prepare = AsyncMock(return_value=prepared)
         with (
             patch.object(creative.asyncio, "to_thread", new=direct),
             patch.object(creative.control, "_actor", new=AsyncMock(return_value=actor())),
             patch.object(creative.control, "_user_id", return_value=101),
             patch.object(creative, "visual_generation_ready", return_value=True),
             patch.object(creative, "load_goal_visual_brand", return_value=brand),
-            patch.object(creative, "prepare_creative_generation", return_value=prepared),
+            patch.object(
+                creative,
+                "load_visual_style_preference",
+                return_value=creative.VisualStyleIntent(),
+            ),
+            patch.object(creative, "prepare_creative_generation", prepare),
         ):
             await creative.receive_creative_prompt(target, state)
+
+        prepare.assert_not_awaited()
+        self.assertEqual(state.clear_count, 0)
+        self.assertEqual(
+            state.state,
+            creative.ClientPlatformCreativeStudioState.choosing_style,
+        )
+        labels_ = [
+            b.text
+            for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+            for b in row
+        ]
+        self.assertIn("✨ Продолжить без уточнений", labels_)
+        self.assertIn("🎨 Уточнить стиль", labels_)
+
+        target.answer.reset_mock()
+        with (
+            patch.object(creative.asyncio, "to_thread", new=direct),
+            patch.object(creative.control, "_actor", new=AsyncMock(return_value=actor())),
+            patch.object(
+                creative,
+                "prepare_creative_generation",
+                return_value=prepared,
+            ),
+        ):
+            await creative._prepare_styled_generation(
+                target,
+                state,
+                user_id=101,
+                token=_TOKEN,
+            )
         self.assertEqual(state.clear_count, 1)
         self.assertIn("Платный вызов начнётся", target.answer.await_args.args[0])
         labels_ = [
@@ -536,8 +597,26 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
             patch.object(creative, "load_goal_visual_brand", return_value=brand),
             patch.object(
                 creative,
+                "load_visual_style_preference",
+                return_value=creative.VisualStyleIntent(),
+            ),
+            patch.object(creative, "prepare_creative_generation") as video_prepare,
+        ):
+            await creative.receive_creative_prompt(target, video_state)
+        video_prepare.assert_not_called()
+        self.assertEqual(
+            video_state.state,
+            creative.ClientPlatformCreativeStudioState.choosing_style,
+        )
+
+        target.answer.reset_mock()
+        with (
+            patch.object(creative.asyncio, "to_thread", new=direct),
+            patch.object(creative.control, "_actor", new=AsyncMock(return_value=actor())),
+            patch.object(
+                creative,
                 "freeze_business_video_payload",
-                return_value='{"version":1,"brief":{"kind":"video"}}',
+                return_value='{"version":2}',
             ) as freeze_video,
             patch.object(
                 creative,
@@ -546,7 +625,12 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(creative, "_receipt_kind", return_value="video"),
         ):
-            await creative.receive_creative_prompt(target, video_state)
+            await creative._prepare_styled_generation(
+                target,
+                video_state,
+                user_id=101,
+                token=_TOKEN,
+            )
         freeze_video.assert_called_once()
         video_labels = [
             b.text
@@ -556,8 +640,16 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("✅ Создать 1 видео", video_labels)
 
         target.answer.reset_mock()
-        state = FakeState(
-            {"creative_business_id": _BUSINESS, "creative_business_token": _TOKEN}
+        existing_state = FakeState(
+            {
+                "creative_business_id": _BUSINESS,
+                "creative_business_token": _TOKEN,
+                "creative_kind": "image",
+                "creative_pending_prompt": "new request",
+                "creative_brand_context": "Tone: calm",
+                "creative_country_code": "RU",
+                "creative_style_intent": creative.VisualStyleIntent().to_mapping(),
+            }
         )
         existing = receipt(
             status=CreativeGenerationReceiptStatus.RUNNING,
@@ -567,12 +659,18 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(creative.asyncio, "to_thread", new=direct),
             patch.object(creative.control, "_actor", new=AsyncMock(return_value=actor())),
-            patch.object(creative.control, "_user_id", return_value=101),
-            patch.object(creative, "visual_generation_ready", return_value=True),
-            patch.object(creative, "load_goal_visual_brand", return_value=brand),
-            patch.object(creative, "prepare_creative_generation", return_value=existing),
+            patch.object(
+                creative,
+                "prepare_creative_generation",
+                return_value=existing,
+            ),
         ):
-            await creative.receive_creative_prompt(target, state)
+            await creative._prepare_styled_generation(
+                target,
+                existing_state,
+                user_id=101,
+                token=_TOKEN,
+            )
         self.assertIn("уже есть незавершённая генерация", target.answer.await_args.args[0])
 
     def test_owner_copy_space_detection_is_explicit_and_narrow(self) -> None:
