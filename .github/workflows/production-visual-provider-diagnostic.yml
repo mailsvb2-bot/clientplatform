@@ -134,6 +134,10 @@ jobs:
               "credential_presence": {
                   "YANDEX_API_KEY": bool(os.environ.get("YANDEX_API_KEY")),
                   "YANDEX_ART_IAM_TOKEN": bool(os.environ.get("YANDEX_ART_IAM_TOKEN")),
+                  "YANDEX_ART_AUTHORIZED_KEY_JSON": bool(os.environ.get("YANDEX_ART_AUTHORIZED_KEY_JSON")),
+                  "YANDEX_ART_AUTHORIZED_KEY_FILE": bool(os.environ.get("YANDEX_ART_AUTHORIZED_KEY_FILE")),
+                  "YANDEX_BILLING_AUTHORIZED_KEY_JSON": bool(os.environ.get("YANDEX_BILLING_AUTHORIZED_KEY_JSON")),
+                  "YANDEX_BILLING_AUTHORIZED_KEY_FILE": bool(os.environ.get("YANDEX_BILLING_AUTHORIZED_KEY_FILE")),
                   "YANDEX_ART_FOLDER_ID": bool(os.environ.get("YANDEX_ART_FOLDER_ID")),
                   "VISUAL_SELFHOST_BASE_URL": bool(os.environ.get("VISUAL_SELFHOST_BASE_URL")),
                   "VISUAL_SELFHOST_VIDEO_MODEL": bool(os.environ.get("VISUAL_SELFHOST_VIDEO_MODEL")),
@@ -145,10 +149,18 @@ jobs:
           print("CLIENTPLATFORM_PRODUCTION_VISUAL_SNAPSHOT " + json.dumps(safe, ensure_ascii=False, sort_keys=True))
           readiness = (
               "ready"
-              if safe["enabled"] and safe["configured_image"]
+              if (
+                  safe["enabled"]
+                  and safe["configured_image"]
+                  and safe["configured_video"]
+                  and not safe["runtime_image_error"]
+                  and not safe["runtime_video_error"]
+              )
               else "provider_unavailable"
           )
           print("CLIENTPLATFORM_PRODUCTION_VISUAL_READINESS state=" + readiness)
+          if readiness != "ready":
+              raise SystemExit(28)
           PY
 
           privileged docker exec -i "$provider_id" python - <<'PY'
@@ -163,6 +175,10 @@ jobs:
           credential_presence = {
               "YANDEX_MODEL_CATALOG_API_KEY": bool(os.environ.get("YANDEX_MODEL_CATALOG_API_KEY")),
               "YANDEX_MODEL_CATALOG_AUTH_SCHEME": bool(os.environ.get("YANDEX_MODEL_CATALOG_AUTH_SCHEME")),
+              "YANDEX_ART_AUTHORIZED_KEY_JSON": bool(os.environ.get("YANDEX_ART_AUTHORIZED_KEY_JSON")),
+              "YANDEX_ART_AUTHORIZED_KEY_FILE": bool(os.environ.get("YANDEX_ART_AUTHORIZED_KEY_FILE")),
+              "YANDEX_BILLING_AUTHORIZED_KEY_JSON": bool(os.environ.get("YANDEX_BILLING_AUTHORIZED_KEY_JSON")),
+              "YANDEX_BILLING_AUTHORIZED_KEY_FILE": bool(os.environ.get("YANDEX_BILLING_AUTHORIZED_KEY_FILE")),
           }
           print(
               "CLIENTPLATFORM_PRODUCTION_VISUAL_PROVIDER_CREDENTIAL_PRESENCE "
