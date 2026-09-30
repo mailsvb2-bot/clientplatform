@@ -106,6 +106,7 @@ def _load_art_authorized_key() -> _AuthorizedKey | None:
         )
     return _load_authorized_key()
 
+
 def _fingerprint(key: _AuthorizedKey) -> str:
     import hashlib
 
