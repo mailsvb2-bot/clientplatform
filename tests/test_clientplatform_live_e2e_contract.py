@@ -31,6 +31,8 @@ def test_live_e2e_workflow_never_runs_on_pull_request_code() -> None:
     assert "clientplatform-windows-11" in workflow
     assert "matrix.os_label" in workflow
     assert "matrix.os_id" in workflow
+    assert "CLIENTPLATFORM_E2E_RUNNER_IDENTITY: .clientplatform-live-e2e-runner-identity.json" in workflow
+    assert "CLIENTPLATFORM_E2E_RUNNER_IDENTITY: ${{ runner.temp }}" not in workflow
     assert "environment: clientplatform_live_e2e" in workflow
     assert "ref: main" in workflow
     assert "CLIENTPLATFORM_LIVE_E2E_REAL_MONEY: '0'" in workflow
