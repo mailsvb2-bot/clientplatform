@@ -10,13 +10,13 @@ from clientplatform.domain.visual_prompt_compiler import compile_visual_prompt
 class VisualPromptCompilerTests(unittest.TestCase):
     def test_short_owner_request_becomes_explicit_transformation_scene(self) -> None:
         request = (
-            "колючий ёж, который слушает метротерапию "
+            "колючий ёж, который слушает аудиосессию «Тишина» "
             "и превращается в доброго и мягкого"
         )
         compiled = compile_visual_prompt(
             request=request,
             kind="image",
-            brand_context="Brand name: Метротерапия. Tone: calm, human.",
+            brand_context="Brand name: Тишина. Tone: calm, human.",
         )
 
         self.assertEqual(
@@ -29,7 +29,7 @@ class VisualPromptCompilerTests(unittest.TestCase):
         self.assertIn("transformation is mandatory visual evidence", compiled.prompt)
         self.assertIn("both the initial and final states", compiled.prompt)
         self.assertIn("same subject", compiled.prompt)
-        self.assertIn("Brand name: Метротерапия", compiled.prompt)
+        self.assertIn("Brand name: Тишина", compiled.prompt)
         self.assertIn("unfamiliar names", compiled.prompt)
         self.assertLess(
             compiled.prompt.index("listening unmistakable"),
@@ -120,17 +120,17 @@ class VisualPromptCompilerTests(unittest.TestCase):
     ) -> None:
         brief = visual_creatives.build_business_image_brief(
             request=(
-                "колючий ёж, который слушает метротерапию "
+                "колючий ёж, который слушает аудиосессию «Тишина» "
                 "и превращается в доброго и мягкого"
             ),
             brand_context=(
                 "ClientPlatform business brand. "
-                "Brand name: Метротерапия. Tone: calm, supportive."
+                "Brand name: Тишина. Tone: calm, supportive."
             ),
             country_code="RU",
         )
 
-        self.assertIn("Brand name: Метротерапия", brief.prompt)
+        self.assertIn("Brand name: Тишина", brief.prompt)
         self.assertIn("listening unmistakable", brief.prompt)
         self.assertIn("transformation is mandatory visual evidence", brief.prompt)
         self.assertIn("audio interaction missing", brief.negative_prompt)
@@ -139,10 +139,10 @@ class VisualPromptCompilerTests(unittest.TestCase):
     def test_paid_generation_freezes_the_compiled_prompt_before_consent(self) -> None:
         frozen = visual_creatives.freeze_business_image_payload(
             request=(
-                "колючий ёж слушает метротерапию "
+                "колючий ёж слушает аудиосессию «Тишина» "
                 "и превращается в доброго и мягкого"
             ),
-            brand_context="Brand name: Метротерапия. Tone: calm.",
+            brand_context="Brand name: Тишина. Tone: calm.",
             country_code="RU",
         )
         payload = json.loads(frozen)
@@ -151,19 +151,19 @@ class VisualPromptCompilerTests(unittest.TestCase):
 
         self.assertIn("listening unmistakable", provider_prompt)
         self.assertIn("transformation is mandatory visual evidence", provider_prompt)
-        self.assertIn("Brand name: Метротерапия", provider_prompt)
+        self.assertIn("Brand name: Тишина", provider_prompt)
         self.assertIn("audio interaction missing", provider_negative)
 
     def test_ad_visual_brief_uses_the_same_semantic_compiler(self) -> None:
         brief = visual_creatives.build_ad_visual_brief(
-            title="Метротерапия",
+            title="Тишина",
             body="Человек слушает аудиосессию и становится спокойнее",
             kind="video",
             country_code="RU",
         )
 
         self.assertIn("vertical advertising video", brief.prompt)
-        self.assertIn("Service or offering: Метротерапия", brief.prompt)
+        self.assertIn("Service or offering: Тишина", brief.prompt)
         self.assertIn("listening unmistakable", brief.prompt)
         self.assertIn("transformation", brief.negative_prompt)
         self.assertEqual(brief.aspect_ratio, "9:16")
