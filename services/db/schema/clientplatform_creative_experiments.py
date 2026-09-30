@@ -75,7 +75,7 @@ def ensure(c: sqlite3.Connection) -> None:
             CHECK(length(request_text) BETWEEN 1 AND 1500),
             CHECK(length(brand_context) <= 2500),
             CHECK(country_code='' OR length(country_code)=2),
-            CHECK(length(provider_payload_json) BETWEEN 1 AND 16000),
+            CHECK(length(provider_payload_json) BETWEEN 1 AND 10000),
             CHECK(length(idempotency_key) BETWEEN 8 AND 200),
             CHECK(length(source_job_id) <= 128),
             CHECK(status IN (
