@@ -68,7 +68,6 @@ def _style_state(**overrides):
         "creative_brand_context": "Brand name: Practice. Tone: calm.",
         "creative_country_code": "RU",
         "creative_style_intent": VisualStyleIntent().to_mapping(),
-        "creative_saved_style": VisualStyleIntent().to_mapping(),
         "creative_saved_style_applied": False,
         "creative_style_inferred_fields": [],
     }
@@ -233,12 +232,6 @@ def test_style_callbacks_are_state_local_in_creative_studio_safety(monkeypatch) 
 
 def test_style_state_helpers_cover_defaults_and_session_contract() -> None:
     assert studio._style_intent_from_state({}) == VisualStyleIntent()
-    saved = visual_style_preset("premium")
-    assert studio._saved_style_from_state(
-        {"creative_saved_style": saved.to_mapping()}
-    ) == saved
-    assert studio._saved_style_from_state({"creative_saved_style": "bad"}) == VisualStyleIntent()
-
     data = _style_state()
     assert studio._style_session_matches(data, "business-token")
     assert not studio._style_session_matches(data, "wrong-token")
@@ -319,7 +312,6 @@ def test_clear_style_and_style_persistence_error_paths(monkeypatch) -> None:
     state = FakeState(
         _style_state(
             creative_style_intent=style.to_mapping(),
-            creative_saved_style=style.to_mapping(),
             creative_saved_style_applied=True,
         )
     )
@@ -331,7 +323,6 @@ def test_clear_style_and_style_persistence_error_paths(monkeypatch) -> None:
     asyncio.run(studio.clear_current_visual_style(callback, state))
 
     clear.assert_called_once()
-    assert state.data["creative_saved_style"] == VisualStyleIntent().to_mapping()
     assert state.data["creative_saved_style_applied"] is False
     assert callback.answer.await_args.args[0] == "Сохранённый стиль сброшен"
 

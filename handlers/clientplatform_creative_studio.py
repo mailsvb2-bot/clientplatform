@@ -609,11 +609,6 @@ def _style_intent_from_state(data: dict) -> VisualStyleIntent:
     return VisualStyleIntent.from_mapping(raw if isinstance(raw, dict) else None)
 
 
-def _saved_style_from_state(data: dict) -> VisualStyleIntent:
-    raw = data.get("creative_saved_style")
-    return VisualStyleIntent.from_mapping(raw if isinstance(raw, dict) else None)
-
-
 def _style_session_matches(data: dict, token: str) -> bool:
     return bool(
         str(data.get("creative_business_token") or "") == str(token or "")
@@ -810,7 +805,6 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
         creative_brand_context=brand_context,
         creative_country_code=country_code,
         creative_style_intent=resolved.to_mapping(),
-        creative_saved_style=saved.to_mapping(),
         creative_saved_style_applied=saved_applied,
         creative_style_inferred_fields=list(inference.explicit_fields),
     )
@@ -950,10 +944,7 @@ async def save_current_visual_style(callback: CallbackQuery, state: FSMContext) 
     except (KeyError, TypeError, ValueError):
         await callback.answer("Не удалось запомнить стиль", show_alert=True)
         return
-    await state.update_data(
-        creative_saved_style=style.to_mapping(),
-        creative_saved_style_applied=True,
-    )
+    await state.update_data(creative_saved_style_applied=True)
     await callback.answer("Буду предлагать этот стиль в следующих визуалах")
 
 
@@ -976,10 +967,7 @@ async def clear_current_visual_style(callback: CallbackQuery, state: FSMContext)
     except (KeyError, TypeError, ValueError):
         await callback.answer("Не удалось сбросить сохранённый стиль", show_alert=True)
         return
-    await state.update_data(
-        creative_saved_style=VisualStyleIntent().to_mapping(),
-        creative_saved_style_applied=False,
-    )
+    await state.update_data(creative_saved_style_applied=False)
     await callback.answer("Сохранённый стиль сброшен")
 
 
@@ -1456,7 +1444,6 @@ async def restyle_creative_result(callback: CallbackQuery, state: FSMContext) ->
             "creative_brand_context": receipt.brand_context,
             "creative_country_code": receipt.country_code,
             "creative_style_intent": style.to_mapping(),
-            "creative_saved_style": VisualStyleIntent().to_mapping(),
             "creative_saved_style_applied": False,
             "creative_style_inferred_fields": list(inference.explicit_fields),
         }
