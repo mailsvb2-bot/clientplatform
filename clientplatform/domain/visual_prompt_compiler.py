@@ -69,6 +69,11 @@ _TEXT_REQUEST_RE = re.compile(
     re.IGNORECASE,
 )
 
+_PORTRAIT_RE = re.compile(
+    r"(?:\bпортрет\w*|\bхедшот\w*|\bportrait\b|\bheadshot\b)",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class CompiledVisualPrompt:
@@ -102,6 +107,7 @@ def _semantic_flags(request: str) -> tuple[str, ...]:
         ("eating_or_drinking", _EATING_RE),
         ("comparison", _COMPARISON_RE),
         ("explicit_text", _TEXT_REQUEST_RE),
+        ("portrait", _PORTRAIT_RE),
     )
     return tuple(name for name, pattern in checks if pattern.search(request))
 
@@ -287,20 +293,38 @@ def compile_visual_prompt(
     if len(prompt) > _MAX_COMPILED_PROMPT_CHARS:
         prompt = prompt[:_MAX_COMPILED_PROMPT_CHARS].rstrip()
 
+    dynamic_flags = {
+        "transformation",
+        "sequence",
+        "listening",
+        "watching",
+        "reading",
+        "using",
+        "holding",
+        "eating_or_drinking",
+    }
+    has_dynamic_action = bool(dynamic_flags.intersection(flags))
     negatives = [
-        "generic isolated portrait",
-        "static catalog shot when an action was requested",
-        "missing requested action",
-        "missing requested relationship",
         "unrelated props",
         "unrelated replacement subject",
-        "duplicate main subject by accident",
         "cropped important subject",
         "large blank technical band",
         "watermark",
         "gibberish text",
         "invented logo",
     ]
+    if has_dynamic_action:
+        negatives.extend(
+            [
+                "static catalog shot when an action was requested",
+                "missing requested action",
+                "missing requested relationship",
+            ]
+        )
+        if "portrait" not in flags:
+            negatives.append("generic isolated portrait")
+    if "transformation" not in flags:
+        negatives.append("duplicate main subject by accident")
     if "transformation" in flags:
         negatives.extend(
             [
