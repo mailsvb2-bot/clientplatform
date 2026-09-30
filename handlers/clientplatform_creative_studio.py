@@ -1196,7 +1196,6 @@ async def rewrite_creative_idea(callback: CallbackQuery, state: FSMContext) -> N
     if context is None:
         return
     data, token, _actor, _request, _saved = context
-    kind = str(data.get("creative_kind") or "image")
     await state.set_state(ClientPlatformCreativeStudioState.waiting_prompt)
     await callback.answer()
     await control._callback_message(callback).answer(
