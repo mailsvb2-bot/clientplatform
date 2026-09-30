@@ -9,6 +9,7 @@ from visual_provider_gateway import providers
 from visual_provider_gateway.engine import provider_order, provider_snapshot
 from visual_provider_gateway.models import CreativeBrief, CreativeJob, ProviderConfig
 from visual_provider_gateway.providers import SelfHostedVisualProvider
+from services.yandex_iam_token import YandexIamTokenResult
 
 
 def _clear_provider_routing(monkeypatch):
@@ -1101,3 +1102,124 @@ def test_visual_provider_gateway_image_contains_ffmpeg_contract():
 
     dockerfile = Path("visual_provider_gateway/Dockerfile").read_text(encoding="utf-8")
     assert "apt-get install -y --no-install-recommends ffmpeg" in dockerfile
+
+def test_yandexart_retries_with_renewable_iam_after_static_auth_rejection(monkeypatch):
+    from visual_provider_gateway.providers import ProviderTransportError, YandexArtProvider
+
+    calls = []
+
+    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0):
+        authorization = str((headers or {}).get("Authorization") or "")
+        calls.append((method, url, authorization))
+        if authorization.startswith("Api-Key "):
+            raise ProviderTransportError("http_403")
+        assert authorization == "Bearer renewable-iam-token"
+        assert url.endswith("/foundationModels/v1/imageGenerationAsync")
+        return {"id": "operation-renewed", "done": False}
+
+    monkeypatch.setenv("YANDEX_API_KEY", "expired-or-insufficient-key")
+    monkeypatch.delenv("YANDEX_ART_IAM_TOKEN", raising=False)
+    monkeypatch.setattr(providers, "_json_request", fake_json_request)
+    monkeypatch.setattr(
+        providers,
+        "get_yandex_art_iam_token",
+        lambda: YandexIamTokenResult(
+            configured=True,
+            available=True,
+            token="renewable-iam-token",
+            auth_mode="authorized_key",
+        ),
+    )
+    provider = YandexArtProvider(
+        ProviderConfig(
+            name="yandexart",
+            base_url="https://ai.api.cloud.yandex.net:443",
+            api_key="expired-or-insufficient-key",
+            model_image="art://folder/aliceai-image-art-3.0",
+            folder_id="folder",
+        )
+    )
+
+    result = provider.submit(CreativeBrief(kind="image", prompt="hedgehog"))
+
+    assert result.status == "running"
+    assert result.external_id == "operation-renewed"
+    assert any(auth.startswith("Api-Key ") for _, _, auth in calls)
+    assert calls[-1][2] == "Bearer renewable-iam-token"
+
+
+def test_yandexart_does_not_switch_credentials_after_ambiguous_failure(monkeypatch):
+    from visual_provider_gateway.providers import ProviderTransportError, YandexArtProvider
+
+    renewable_calls = 0
+
+    def renewable():
+        nonlocal renewable_calls
+        renewable_calls += 1
+        return YandexIamTokenResult(
+            configured=True,
+            available=True,
+            token="renewable-iam-token",
+            auth_mode="authorized_key",
+        )
+
+    monkeypatch.setenv("YANDEX_API_KEY", "primary-key")
+    monkeypatch.setattr(
+        providers,
+        "_json_request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ProviderTransportError("TimeoutError")
+        ),
+    )
+    monkeypatch.setattr(providers, "get_yandex_art_iam_token", renewable)
+    provider = YandexArtProvider(
+        ProviderConfig(
+            name="yandexart",
+            base_url="https://ai.api.cloud.yandex.net:443",
+            api_key="primary-key",
+            model_image="art://folder/aliceai-image-art-3.0",
+            folder_id="folder",
+        )
+    )
+
+    with pytest.raises(ProviderTransportError, match="TimeoutError"):
+        provider.submit(CreativeBrief(kind="image", prompt="hedgehog"))
+
+    assert renewable_calls == 0
+
+
+def test_yandexart_can_be_configured_by_renewable_iam_only(monkeypatch):
+    from visual_provider_gateway.providers import YandexArtProvider
+
+    monkeypatch.delenv("YANDEX_API_KEY", raising=False)
+    monkeypatch.delenv("YANDEX_ART_IAM_TOKEN", raising=False)
+    monkeypatch.setattr(providers, "yandex_art_renewable_auth_configured", lambda: True)
+    monkeypatch.setattr(
+        providers,
+        "get_yandex_art_iam_token",
+        lambda: YandexIamTokenResult(
+            configured=True,
+            available=True,
+            token="renewable-only-token",
+            auth_mode="authorized_key",
+        ),
+    )
+    monkeypatch.setattr(
+        providers,
+        "_json_request",
+        lambda *_args, **_kwargs: {"id": "operation-renewable-only", "done": False},
+    )
+    provider = YandexArtProvider(
+        ProviderConfig(
+            name="yandexart",
+            base_url="https://ai.api.cloud.yandex.net:443",
+            api_key="",
+            model_image="art://folder/aliceai-image-art-3.0",
+            folder_id="folder",
+        )
+    )
+
+    assert provider.configured("image") is True
+    result = provider.submit(CreativeBrief(kind="image", prompt="hedgehog"))
+    assert result.external_id == "operation-renewable-only"
+
