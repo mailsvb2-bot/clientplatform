@@ -1543,6 +1543,11 @@ def install_creative_studio_safety(safety: ModuleType) -> None:
         "cpc:open:",
         "cpc:check:",
         "cpc:editad:",
+        "cpc:st:open:",
+        "cpc:st:p:",
+        "cpc:st:d:",
+        "cpc:st:s:",
+        "cpc:st:reset:",
     )
     _extend_tuple(
         safety,
@@ -1550,12 +1555,26 @@ def install_creative_studio_safety(safety: ModuleType) -> None:
         "cpc:generate:",
         "cpc:abandon:",
         "cpc:redeliver:",
+        "cpc:st:save:",
+        "cpc:st:clear:",
+        "cpc:st:go:",
     )
 
+    original_state_local = cast(
+        Callable[[str, str], bool],
+        getattr(safety, "_state_local_callback_allowed"),
+    )
     original_escape = cast(
         Callable[[str, str], bool],
         getattr(safety, "_callback_can_escape_state"),
     )
+
+    def state_local_callback_allowed(current_state: str, callback_data: str) -> bool:
+        if current_state.startswith("ClientPlatformCreativeStudioState:choosing_style"):
+            return callback_data.startswith(
+                ("cpc:st:", "cpc:new:", "cpc:video:", "cpc:open:")
+            )
+        return original_state_local(current_state, callback_data)
 
     def callback_can_escape_state(current_state: str, callback_data: str) -> bool:
         if current_state.startswith("ClientPlatformCreativeStudioState:"):
@@ -1565,6 +1584,7 @@ def install_creative_studio_safety(safety: ModuleType) -> None:
                 return True
         return original_escape(current_state, callback_data)
 
+    setattr(safety, "_state_local_callback_allowed", state_local_callback_allowed)
     setattr(safety, "_callback_can_escape_state", callback_can_escape_state)
     setattr(safety, "_creative_studio_safety_installed", True)
 
