@@ -18,6 +18,18 @@ NATIVE_UI = ROOT / "clientplatform" / "application" / "native_member_interaction
 
 _REQUIRED_CHANNELS = {"telegram", "vk", "max", "cockpit_edge", "cockpit_chrome"}
 _REQUIRED_ROLES = {"owner", "member", "customer"}
+_REQUIRED_WINDOWS_VARIANTS = {
+    "windows-10": {
+        "runner_label": "clientplatform-windows-10",
+        "caption_pattern": "Windows 10",
+        "minimum_build": 19045,
+    },
+    "windows-11": {
+        "runner_label": "clientplatform-windows-11",
+        "caption_pattern": "Windows 11",
+        "minimum_build": 22000,
+    },
+}
 _REQUIRED_EVIDENCE = {
     "cross_tenant_denial",
     "duplicate_event_replay",
@@ -90,6 +102,35 @@ def validate_manifest(raw: dict[str, Any]) -> dict[str, Any]:
         problems.append("interactive_session_required")
     if runner.get("staging_only") is not True:
         problems.append("runner_must_be_staging_only")
+
+    raw_variants = runner.get("os_variants")
+    variants: dict[str, dict[str, Any]] = {}
+    if not isinstance(raw_variants, list):
+        problems.append("runner_os_variants_missing")
+        raw_variants = []
+    for item in raw_variants:
+        if not isinstance(item, dict):
+            problems.append("runner_os_variant_invalid")
+            continue
+        variant_id = str(item.get("id") or "").strip()
+        if not variant_id:
+            problems.append("runner_os_variant_id_missing")
+            continue
+        if variant_id in variants:
+            problems.append(f"runner_os_variant_duplicate:{variant_id}")
+            continue
+        variants[variant_id] = item
+
+    for variant_id, expected in _REQUIRED_WINDOWS_VARIANTS.items():
+        variant = variants.get(variant_id)
+        if variant is None:
+            problems.append(f"runner_os_variant_missing:{variant_id}")
+            continue
+        for key, expected_value in expected.items():
+            if variant.get(key) != expected_value:
+                problems.append(f"runner_os_variant_contract_mismatch:{variant_id}:{key}")
+    for variant_id in sorted(set(variants) - set(_REQUIRED_WINDOWS_VARIANTS)):
+        problems.append(f"runner_os_variant_unknown:{variant_id}")
 
     safety = raw.get("safety")
     if not isinstance(safety, dict):
@@ -182,6 +223,7 @@ def validate_manifest(raw: dict[str, Any]) -> dict[str, Any]:
         "native_actions": len(expected_actions),
         "channels": sorted(_REQUIRED_CHANNELS),
         "roles": sorted(covered_roles),
+        "windows_variants": sorted(variants),
         "live_probes": sum(len(live_probes.get(channel) or ()) for channel in _REQUIRED_CHANNELS),
     }
 

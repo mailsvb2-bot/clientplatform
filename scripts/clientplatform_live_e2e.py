@@ -70,8 +70,22 @@ def _windows_preflight() -> dict[str, str]:
     if not DRIVER.is_file():
         raise LiveE2EPreflightError("desktop_driver_missing")
 
+    expected_windows = _require("CLIENTPLATFORM_E2E_EXPECTED_WINDOWS")
+    identity_path = Path(_require("CLIENTPLATFORM_E2E_RUNNER_IDENTITY"))
+    if not identity_path.is_file():
+        raise LiveE2EPreflightError("validated_runner_identity_missing")
+    try:
+        runner_identity = json.loads(identity_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise LiveE2EPreflightError("validated_runner_identity_invalid") from exc
+    if not isinstance(runner_identity, dict):
+        raise LiveE2EPreflightError("validated_runner_identity_not_object")
+    if str(runner_identity.get("os_id") or "") != expected_windows:
+        raise LiveE2EPreflightError("validated_runner_identity_os_mismatch")
+
     return {
         "session": session,
+        "runner_identity": runner_identity,
         "telegram_chat": _require("CLIENTPLATFORM_E2E_TELEGRAM_CHAT"),
         "max_chat": _require("CLIENTPLATFORM_E2E_MAX_CHAT"),
         "vk_chat_url": _require("CLIENTPLATFORM_E2E_VK_CHAT_URL"),
@@ -160,6 +174,7 @@ def execute(evidence_dir: Path) -> int:
         "suite": raw["suite"],
         "preflight": {
             "session": preflight["session"],
+            "runner_identity": preflight["runner_identity"],
             "test_accounts": True,
             "staging_only": True,
             "real_money": False,
@@ -226,7 +241,13 @@ def main() -> int:
         data = _windows_preflight()
         print(
             "CLIENTPLATFORM_LIVE_E2E_PREFLIGHT_OK "
-            + json.dumps({"session": data["session"]}, sort_keys=True)
+            + json.dumps(
+                {
+                    "session": data["session"],
+                    "runner_identity": data["runner_identity"],
+                },
+                sort_keys=True,
+            )
         )
         return 0
     return execute(Path(args.evidence_dir).resolve())

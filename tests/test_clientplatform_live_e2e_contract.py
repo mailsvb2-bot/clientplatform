@@ -17,6 +17,7 @@ def test_live_e2e_manifest_covers_current_native_parity_registry() -> None:
     assert summary["native_actions"] == len(required_native_actions())
     assert summary["native_actions"] >= 90
     assert summary["live_probes"] >= 17
+    assert summary["windows_variants"] == ["windows-10", "windows-11"]
     assert {"telegram", "vk", "max"} <= set(summary["channels"])
 
 
@@ -25,7 +26,11 @@ def test_live_e2e_workflow_never_runs_on_pull_request_code() -> None:
         ROOT / ".github" / "workflows" / "clientplatform-live-e2e-windows.yml"
     ).read_text(encoding="utf-8")
     assert "pull_request:" not in workflow
-    assert "runs-on: [self-hosted, Windows, X64, clientplatform-live-e2e]" in workflow
+    assert "clientplatform-live-e2e" in workflow
+    assert "clientplatform-windows-10" in workflow
+    assert "clientplatform-windows-11" in workflow
+    assert "matrix.os_label" in workflow
+    assert "matrix.os_id" in workflow
     assert "environment: clientplatform_live_e2e" in workflow
     assert "ref: main" in workflow
     assert "CLIENTPLATFORM_LIVE_E2E_REAL_MONEY: '0'" in workflow
@@ -83,11 +88,15 @@ def test_live_checklist_no_longer_uses_imported_consumer_smoke_as_evidence() -> 
     assert "Cross-tenant isolation" in checklist
 
 
-def test_runner_validator_requires_real_windows_11_x64_interactive_host() -> None:
+def test_runner_validator_requires_real_windows_10_or_11_x64_interactive_host() -> None:
     validator = (
         ROOT / "scripts" / "live_e2e" / "windows" / "validate_runner.ps1"
     ).read_text(encoding="utf-8")
-    assert "Windows 11" in validator
+    assert "CLIENTPLATFORM_E2E_EXPECTED_WINDOWS" in validator
+    assert "live_e2e_manifest.json" in validator
+    assert "caption_pattern" in validator
+    assert "minimum_build" in validator
+    assert "BuildNumber" in validator
     assert "OSArchitecture" in validator
     assert "SessionId" in validator
     assert "Runner.Listener" in validator
@@ -120,6 +129,8 @@ def test_live_orchestrator_reports_semantic_and_live_evidence_separately() -> No
     assert '"semantic_contract"' in source
     assert '"live_transport"' in source
     assert '"hermetic_registry_coverage"' in source
+    assert '"runner_identity"' in source
+    assert "CLIENTPLATFORM_E2E_RUNNER_IDENTITY" in source
     assert 'raw["live_transport_probes"]' in source
 
 

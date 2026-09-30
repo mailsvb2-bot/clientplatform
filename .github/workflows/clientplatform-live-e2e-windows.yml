@@ -15,7 +15,15 @@ concurrency:
 jobs:
   live-user-journeys:
     if: ${{ vars.CLIENTPLATFORM_LIVE_E2E_ENABLED == '1' }}
-    runs-on: [self-hosted, Windows, X64, clientplatform-live-e2e]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os_id: windows-10
+            os_label: clientplatform-windows-10
+          - os_id: windows-11
+            os_label: clientplatform-windows-11
+    runs-on: [self-hosted, Windows, X64, clientplatform-live-e2e, "${{ matrix.os_label }}"]
     environment: clientplatform_live_e2e
     timeout-minutes: 90
     env:
@@ -26,6 +34,8 @@ jobs:
       CLIENTPLATFORM_LIVE_E2E_TEST_ACCOUNTS: '1'
       CLIENTPLATFORM_LIVE_E2E_PRODUCTION_CREDENTIALS: '0'
       CLIENTPLATFORM_LIVE_E2E_REAL_MONEY: '0'
+      CLIENTPLATFORM_E2E_EXPECTED_WINDOWS: ${{ matrix.os_id }}
+      CLIENTPLATFORM_E2E_RUNNER_IDENTITY: ${{ runner.temp }}\clientplatform-runner-identity.json
       CLIENTPLATFORM_E2E_TELEGRAM_EXE: ${{ vars.CLIENTPLATFORM_E2E_TELEGRAM_EXE }}
       CLIENTPLATFORM_E2E_TELEGRAM_PROCESS: ${{ vars.CLIENTPLATFORM_E2E_TELEGRAM_PROCESS }}
       CLIENTPLATFORM_E2E_TELEGRAM_CHAT: ${{ vars.CLIENTPLATFORM_E2E_TELEGRAM_CHAT }}
@@ -64,7 +74,7 @@ jobs:
           python -m pip install --disable-pip-version-check pip==26.1.2
           python -m pip install --require-hashes -r requirements-dev.txt
 
-      - name: Validate Windows 11 x64 interactive runner
+      - name: Validate Windows 10/11 x64 interactive runner
         shell: powershell
         run: ./scripts/live_e2e/windows/validate_runner.ps1
 
@@ -78,13 +88,13 @@ jobs:
         run: python scripts/clientplatform_live_e2e.py --preflight
 
       - name: Run real desktop and browser journeys
-        run: python scripts/clientplatform_live_e2e.py --execute --evidence-dir "${{ runner.temp }}\clientplatform-live-e2e"
+        run: python scripts/clientplatform_live_e2e.py --execute --evidence-dir "${{ runner.temp }}\clientplatform-live-e2e\${{ matrix.os_id }}"
 
       - name: Upload synthetic live E2E evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: clientplatform-live-e2e-${{ github.run_id }}
-          path: ${{ runner.temp }}\clientplatform-live-e2e
+          name: clientplatform-live-e2e-${{ matrix.os_id }}-${{ github.run_id }}
+          path: ${{ runner.temp }}\clientplatform-live-e2e\${{ matrix.os_id }}
           if-no-files-found: warn
           retention-days: 7

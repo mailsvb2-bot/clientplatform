@@ -9,7 +9,21 @@
       "clientplatform-live-e2e"
     ],
     "interactive_session_required": true,
-    "staging_only": true
+    "staging_only": true,
+    "os_variants": [
+      {
+        "id": "windows-10",
+        "runner_label": "clientplatform-windows-10",
+        "caption_pattern": "Windows 10",
+        "minimum_build": 19045
+      },
+      {
+        "id": "windows-11",
+        "runner_label": "clientplatform-windows-11",
+        "caption_pattern": "Windows 11",
+        "minimum_build": 22000
+      }
+    ]
   },
   "safety": {
     "test_accounts_only": true,
