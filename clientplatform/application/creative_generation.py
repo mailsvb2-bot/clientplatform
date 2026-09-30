@@ -70,6 +70,34 @@ def remember_creative_generation_job(
 
 
 
+def record_creative_generation_semantic_review(
+    *,
+    actor: TenantContext,
+    receipt_id: str,
+    review_json: str,
+) -> CreativeGenerationReceipt:
+    with get_db() as conn:
+        return CreativeGenerationReceiptRepository(conn).record_semantic_review(
+            actor=actor,
+            receipt_id=receipt_id,
+            review_json=review_json,
+        )
+
+
+def authorize_creative_generation_semantic_override(
+    *,
+    actor: TenantContext,
+    receipt_id: str,
+) -> CreativeGenerationReceipt:
+    with get_db() as conn:
+        return CreativeGenerationReceiptRepository(
+            conn
+        ).authorize_semantic_review_override(
+            actor=actor,
+            receipt_id=receipt_id,
+        )
+
+
 def claim_creative_generation_delivery(
     *, actor: TenantContext, receipt_id: str
 ) -> bool:
@@ -112,11 +140,13 @@ def mark_creative_generation_delivered(
 __all__ = [
     "abandon_creative_generation",
     "authorize_creative_generation_redelivery",
+    "authorize_creative_generation_semantic_override",
     "begin_creative_generation_submission",
     "claim_creative_generation_delivery",
     "get_active_creative_generation",
     "get_creative_generation",
     "mark_creative_generation_delivered",
+    "record_creative_generation_semantic_review",
     "prepare_creative_generation",
     "remember_creative_generation_job",
 ]
