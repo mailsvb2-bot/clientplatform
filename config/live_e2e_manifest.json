@@ -1,0 +1,521 @@
+{
+  "schema_version": 1,
+  "suite": "clientplatform-live-user-journeys",
+  "runner": {
+    "labels": [
+      "self-hosted",
+      "Windows",
+      "X64",
+      "clientplatform-live-e2e"
+    ],
+    "interactive_session_required": true,
+    "staging_only": true
+  },
+  "safety": {
+    "test_accounts_only": true,
+    "production_credentials_forbidden": true,
+    "real_money_forbidden": true,
+    "paid_provider_calls": "sandbox_or_explicit_zero-cost-test-project-only",
+    "cross_product_credentials_forbidden": true
+  },
+  "channels": {
+    "telegram": {
+      "surface": "desktop",
+      "required": true
+    },
+    "vk": {
+      "surface": "browser",
+      "required": true
+    },
+    "max": {
+      "surface": "desktop",
+      "required": true
+    },
+    "cockpit_edge": {
+      "surface": "browser",
+      "required": true
+    },
+    "cockpit_chrome": {
+      "surface": "browser",
+      "required": true
+    }
+  },
+  "journeys": [
+    {
+      "id": "owner-core",
+      "roles": [
+        "owner",
+        "member"
+      ],
+      "channels": [
+        "telegram",
+        "vk",
+        "max",
+        "cockpit_edge",
+        "cockpit_chrome"
+      ],
+      "covers_native_actions": [
+        "today",
+        "today-full",
+        "customers",
+        "customer",
+        "behavior",
+        "attention",
+        "sales",
+        "messengers",
+        "recent",
+        "release",
+        "system",
+        "menu-all"
+      ],
+      "evidence": [
+        "response",
+        "screenshot"
+      ]
+    },
+    {
+      "id": "channel-connections-and-switching",
+      "roles": [
+        "owner",
+        "member"
+      ],
+      "channels": [
+        "telegram",
+        "vk",
+        "max"
+      ],
+      "covers_native_actions": [
+        "connect-telegram",
+        "connect-vk",
+        "connect-max"
+      ],
+      "evidence": [
+        "response",
+        "cross_channel_parity"
+      ]
+    },
+    {
+      "id": "growth-and-automation",
+      "roles": [
+        "owner",
+        "member"
+      ],
+      "channels": [
+        "telegram",
+        "vk",
+        "max"
+      ],
+      "covers_native_actions": [
+        "acquire",
+        "autopilot",
+        "autopilot-enable",
+        "autopilot-disable",
+        "automation-approve",
+        "automation-reject",
+        "automation-revoke",
+        "funnel",
+        "funnel2",
+        "segments",
+        "retention",
+        "experiments"
+      ],
+      "evidence": [
+        "response",
+        "idempotency"
+      ]
+    },
+    {
+      "id": "publications",
+      "roles": [
+        "owner",
+        "member"
+      ],
+      "channels": [
+        "telegram",
+        "vk",
+        "max"
+      ],
+      "covers_native_actions": [
+        "publications",
+        "publication-new",
+        "publication-new-text",
+        "publication-schedule",
+        "publication-schedule-text",
+        "publication-cancel",
+        "publication-cancel-ok",
+        "publication-publish"
+      ],
+      "evidence": [
+        "response",
+        "idempotency",
+        "restart_recovery"
+      ]
+    },
+    {
+      "id": "money-and-pricing",
+      "roles": [
+        "owner",
+        "member"
+      ],
+      "channels": [
+        "telegram",
+        "vk",
+        "max",
+        "cockpit_edge",
+        "cockpit_chrome"
+      ],
+      "covers_native_actions": [
+        "money",
+        "payments",
+        "payment-new",
+        "payment-new-text",
+        "pay-refund",
+        "pay-refund-ok",
+        "prices",
+        "price-set",
+        "price-set-text",
+        "tariff",
+        "tariff-upgrade"
+      ],
+      "sandbox_only": true,
+      "evidence": [
+        "response",
+        "sandbox_receipt",
+        "idempotency"
+      ]
+    },
+    {
+      "id": "business-profile-offerings-and-formats",
+      "roles": [
+        "owner",
+        "member"
+      ],
+      "channels": [
+        "telegram",
+        "vk",
+        "max"
+      ],
+      "covers_native_actions": [
+        "offers",
+        "offering-new",
+        "copy",
+        "activity-edit-help",
+        "activity-edit-text",
+        "directions",
+        "direction",
+        "direction-new",
+        "direction-create-text",
+        "direction-edit",
+        "direction-edit-text",
+        "direction-archive",
+        "direction-archive-ok",
+        "direction-restore",
+        "formats",
+        "format-enable",
+        "format-disable"
+      ],
+      "evidence": [
+        "response",
+        "stale_action_rejection"
+      ]
+    },
+    {
+      "id": "team-and-rbac",
+      "roles": [
+        "owner",
+        "member"
+      ],
+      "channels": [
+        "telegram",
+        "vk",
+        "max",
+        "cockpit_edge",
+        "cockpit_chrome"
+      ],
+      "covers_native_actions": [
+        "member-add-help",
+        "member-add-text",
+        "members",
+        "member",
+        "member-role",
+        "member-revoke",
+        "permissions"
+      ],
+      "evidence": [
+        "response",
+        "cross_tenant_denial",
+        "revoked_access_denial"
+      ]
+    },
+    {
+      "id": "events",
+      "roles": [
+        "owner",
+        "member"
+      ],
+      "channels": [
+        "telegram",
+        "vk",
+        "max"
+      ],
+      "covers_native_actions": [
+        "events",
+        "event-new",
+        "event-edit",
+        "event-edit-text",
+        "event-wizard",
+        "event-create-text"
+      ],
+      "evidence": [
+        "response",
+        "restart_recovery"
+      ]
+    },
+    {
+      "id": "programs-and-delivery",
+      "roles": [
+        "owner",
+        "member",
+        "customer"
+      ],
+      "channels": [
+        "telegram",
+        "vk",
+        "max"
+      ],
+      "covers_native_actions": [
+        "programs",
+        "program-create",
+        "program-draft",
+        "program-lessons",
+        "program-lesson",
+        "program-lesson-detail",
+        "program-lesson-title-edit",
+        "program-lesson-content-edit",
+        "program-lesson-move",
+        "program-lesson-archive",
+        "program-draft-archive",
+        "program-publish",
+        "program-deliver"
+      ],
+      "evidence": [
+        "response",
+        "media_delivery",
+        "progress",
+        "restart_recovery",
+        "duplicate_delivery_guard"
+      ]
+    },
+    {
+      "id": "booking",
+      "roles": [
+        "owner",
+        "member",
+        "customer"
+      ],
+      "channels": [
+        "telegram",
+        "vk",
+        "max",
+        "cockpit_edge",
+        "cockpit_chrome"
+      ],
+      "covers_native_actions": [
+        "bookings",
+        "booking-open",
+        "booking-open-for",
+        "booking-months",
+        "booking-dates",
+        "booking-date",
+        "booking-times",
+        "booking-time",
+        "booking-duration"
+      ],
+      "evidence": [
+        "response",
+        "concurrency",
+        "idempotency"
+      ]
+    },
+    {
+      "id": "customer-invite-and-identity",
+      "roles": [
+        "owner",
+        "customer"
+      ],
+      "channels": [
+        "telegram",
+        "vk",
+        "max"
+      ],
+      "covers_native_actions": [
+        "invites",
+        "invite-new"
+      ],
+      "evidence": [
+        "response",
+        "channel_neutral_identity",
+        "cross_tenant_denial"
+      ]
+    },
+    {
+      "id": "creative-studio-image-video",
+      "roles": [
+        "owner",
+        "member"
+      ],
+      "channels": [
+        "telegram",
+        "cockpit_edge",
+        "cockpit_chrome"
+      ],
+      "covers_native_actions": [],
+      "sandbox_only": true,
+      "evidence": [
+        "image_result",
+        "video_result",
+        "download_action",
+        "paid_boundary_receipt"
+      ]
+    },
+    {
+      "id": "resilience-and-isolation",
+      "roles": [
+        "owner",
+        "member",
+        "customer"
+      ],
+      "channels": [
+        "telegram",
+        "vk",
+        "max"
+      ],
+      "covers_native_actions": [],
+      "evidence": [
+        "duplicate_event_replay",
+        "temporary_provider_failure",
+        "restart_recovery",
+        "cross_tenant_denial",
+        "forged_action_denial"
+      ]
+    },
+    {
+      "id": "platform-support-operator",
+      "roles": [
+        "platform_operator"
+      ],
+      "channels": [
+        "telegram"
+      ],
+      "covers_native_actions": [],
+      "evidence": [
+        "readonly_snapshot",
+        "audited_support_session",
+        "support_case_lifecycle",
+        "bounded_directory_search"
+      ]
+    }
+  ],
+  "coverage_model": {
+    "semantic_registry": "covers_native_actions is exact and hermetically validated against native parity registries",
+    "live_transport": "live_transport_probes are the provider/client acceptance checks and must assert expected UI text",
+    "mutation_claim": "No live mutation is claimed unless an explicit deterministic step and expected outcome exist"
+  },
+  "live_transport_probes": {
+    "telegram": [
+      {
+        "id": "owner-entry",
+        "input": "/start",
+        "expect": "ClientPlatform"
+      }
+    ],
+    "vk": [
+      {
+        "id": "menu",
+        "input": "start",
+        "expect": "Выберите, что хотите сделать"
+      },
+      {
+        "id": "today",
+        "input": "cpm:today",
+        "expect": "Что сегодня происходит"
+      },
+      {
+        "id": "customers",
+        "input": "cpm:customers",
+        "expect": "Клиенты"
+      },
+      {
+        "id": "messengers",
+        "input": "cpm:messengers",
+        "expect": "Мессенджеры бизнеса"
+      },
+      {
+        "id": "programs",
+        "input": "cpm:programs",
+        "expect": "Материалы и программы"
+      },
+      {
+        "id": "bookings",
+        "input": "cpm:bookings",
+        "expect": "Запись и свободное время"
+      },
+      {
+        "id": "sales",
+        "input": "cpm:sales",
+        "expect": "Обращения и продажи"
+      }
+    ],
+    "max": [
+      {
+        "id": "menu",
+        "input": "start",
+        "expect": "Выберите, что хотите сделать"
+      },
+      {
+        "id": "today",
+        "input": "cpm:today",
+        "expect": "Что сегодня происходит"
+      },
+      {
+        "id": "customers",
+        "input": "cpm:customers",
+        "expect": "Клиенты"
+      },
+      {
+        "id": "messengers",
+        "input": "cpm:messengers",
+        "expect": "Мессенджеры бизнеса"
+      },
+      {
+        "id": "programs",
+        "input": "cpm:programs",
+        "expect": "Материалы и программы"
+      },
+      {
+        "id": "bookings",
+        "input": "cpm:bookings",
+        "expect": "Запись и свободное время"
+      },
+      {
+        "id": "sales",
+        "input": "cpm:sales",
+        "expect": "Обращения и продажи"
+      }
+    ],
+    "cockpit_edge": [
+      {
+        "id": "cockpit-open",
+        "input": "open",
+        "expect": "ClientPlatform"
+      }
+    ],
+    "cockpit_chrome": [
+      {
+        "id": "cockpit-open",
+        "input": "open",
+        "expect": "ClientPlatform"
+      }
+    ]
+  }
+}

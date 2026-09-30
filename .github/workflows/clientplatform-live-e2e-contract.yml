@@ -1,0 +1,53 @@
+name: ClientPlatform Live E2E Contract
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clientplatform-live-e2e-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Validate live E2E coverage contract
+        run: python scripts/check_live_e2e_manifest.py
+
+      - name: Render live E2E plan
+        run: python scripts/clientplatform_live_e2e.py --plan
+
+      - name: Parse Windows E2E scripts
+        shell: powershell
+        run: |
+          foreach ($path in @(
+            "scripts/live_e2e/windows/desktop_driver.ps1",
+            "scripts/live_e2e/windows/validate_runner.ps1"
+          )) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path),
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "$path :: $($_.Message)" }
+              exit 1
+            }
+          }
