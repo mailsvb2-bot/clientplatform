@@ -183,6 +183,7 @@ def style_dashboard_rows(token: str) -> list[list[tuple[str, str]]]:
         [
             [("🤖 Авто по запросу", f"cpc:st:reset:{token}")],
             [("💾 Запомнить этот стиль", f"cpc:st:save:{token}")],
+            [("🗑 Не использовать сохранённый стиль", f"cpc:st:clear:{token}")],
             [("✅ Продолжить", f"cpc:st:go:{token}")],
         ]
     )
