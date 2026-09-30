@@ -101,7 +101,7 @@ def test_style_intent_json_roundtrip_is_strict_and_deterministic() -> None:
 
 def test_prompt_compiler_preserves_semantics_while_applying_style() -> None:
     request = (
-        "колючий ёж, который слушает метротерапию "
+        "колючий ёж, который слушает аудиосессию «Тишина» "
         "и превращается в доброго и мягкого"
     )
     style = VisualStyleIntent(
@@ -114,7 +114,7 @@ def test_prompt_compiler_preserves_semantics_while_applying_style() -> None:
     compiled = compile_visual_prompt(
         request=request,
         kind="image",
-        brand_context="Brand name: Метротерапия.",
+        brand_context="Brand name: Тишина.",
         style_intent=style,
     )
 
@@ -132,10 +132,10 @@ def test_prompt_compiler_preserves_semantics_while_applying_style() -> None:
 def test_frozen_payload_v2_locks_semantics_style_and_compiler_versions() -> None:
     frozen = visual_creatives.freeze_business_image_payload(
         request=(
-            "колючий ёж слушает метротерапию "
+            "колючий ёж слушает аудиосессию «Тишина» "
             "и превращается в доброго и мягкого"
         ),
-        brand_context="Brand name: Метротерапия.",
+        brand_context="Brand name: Тишина.",
         country_code="RU",
         style_intent=VisualStyleIntent(
             color_temperature="warm",
