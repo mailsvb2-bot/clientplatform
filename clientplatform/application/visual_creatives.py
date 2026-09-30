@@ -4,7 +4,16 @@ import json
 from pathlib import Path
 import os
 
-from clientplatform.domain.visual_prompt_compiler import compile_visual_prompt
+from clientplatform.domain.visual_prompt_compiler import (
+    PROMPT_COMPILER_VERSION,
+    SEMANTIC_COMPILER_VERSION,
+    compile_visual_prompt,
+)
+from clientplatform.domain.visual_style_intent import (
+    STYLE_SCHEMA_VERSION,
+    VisualStyleIntent,
+    visual_style_from_mapping,
+)
 
 from services.visual_creative_gateway import (
     VisualCreativeBrief,
@@ -22,7 +31,8 @@ class VisualCreativeError(RuntimeError):
     """Sanitized failure of the shared visual-creative capability."""
 
 
-_BUSINESS_IMAGE_BRIEF_VERSION = 1
+_BUSINESS_IMAGE_BRIEF_VERSION = 2
+_SUPPORTED_BUSINESS_VISUAL_PAYLOAD_VERSIONS = frozenset({1, 2})
 _BUSINESS_IMAGE_WAIT_SECONDS = 20
 _FROZEN_BRIEF_KEYS = frozenset(
     {
@@ -90,6 +100,7 @@ def freeze_business_visual_payload(
     country_code: str = "",
     preferred_provider: str = "",
     binding: dict[str, str] | None = None,
+    style_intent: VisualStyleIntent | None = None,
 ) -> str:
     """Freeze the exact versioned image/video brief before owner paid consent."""
 
@@ -99,11 +110,26 @@ def freeze_business_visual_payload(
         brand_context=brand_context,
         country_code=country_code,
         preferred_provider=preferred_provider,
+        style_intent=style_intent,
+    )
+    compiled = compile_visual_prompt(
+        request=request,
+        kind=kind,
+        brand_context=str(brand_context or "").strip()[:1200],
+        purpose="owner_visual",
+        style_intent=style_intent,
     )
     value: dict[str, object] = {
         "version": _BUSINESS_IMAGE_BRIEF_VERSION,
         "brief": _brief_dict(brief),
         "wait_seconds": _BUSINESS_IMAGE_WAIT_SECONDS,
+        "intent_snapshot": {
+            "semantic_compiler_version": SEMANTIC_COMPILER_VERSION,
+            "prompt_compiler_version": PROMPT_COMPILER_VERSION,
+            "style_schema_version": STYLE_SCHEMA_VERSION,
+            "semantic_flags": list(compiled.semantic_flags),
+            "style_intent": compiled.style_intent.to_mapping(),
+        },
     }
     if binding is not None:
         normalized_binding = {str(key): str(item) for key, item in binding.items()}
@@ -129,6 +155,7 @@ def freeze_business_image_payload(
     brand_context: str = "",
     country_code: str = "",
     preferred_provider: str = "",
+    style_intent: VisualStyleIntent | None = None,
 ) -> str:
     return freeze_business_visual_payload(
         request=request,
@@ -136,6 +163,7 @@ def freeze_business_image_payload(
         brand_context=brand_context,
         country_code=country_code,
         preferred_provider=preferred_provider,
+        style_intent=style_intent,
     )
 
 
@@ -145,6 +173,7 @@ def freeze_business_video_payload(
     brand_context: str = "",
     country_code: str = "",
     preferred_provider: str = "",
+    style_intent: VisualStyleIntent | None = None,
 ) -> str:
     return freeze_business_visual_payload(
         request=request,
@@ -152,6 +181,7 @@ def freeze_business_video_payload(
         brand_context=brand_context,
         country_code=country_code,
         preferred_provider=preferred_provider,
+        style_intent=style_intent,
     )
 
 
@@ -160,13 +190,43 @@ def _load_frozen_business_visual_payload(value: str) -> tuple[VisualCreativeBrie
         raw = json.loads(str(value or ""))
     except json.JSONDecodeError as exc:
         raise ValueError("frozen business image payload is invalid") from exc
-    if not isinstance(raw, dict) or set(raw) not in (
-        {"version", "brief", "wait_seconds"},
-        {"version", "brief", "wait_seconds", "binding"},
-    ):
+    if not isinstance(raw, dict):
         raise ValueError("frozen business image payload is invalid")
-    if raw.get("version") != _BUSINESS_IMAGE_BRIEF_VERSION:
+    version = raw.get("version")
+    if version not in _SUPPORTED_BUSINESS_VISUAL_PAYLOAD_VERSIONS:
         raise ValueError("unsupported frozen business image payload version")
+    allowed = {"version", "brief", "wait_seconds", "binding"}
+    if version == 2:
+        allowed.add("intent_snapshot")
+        if "intent_snapshot" not in raw:
+            raise ValueError("frozen business visual intent snapshot is missing")
+    if set(raw) - allowed or not {"version", "brief", "wait_seconds"}.issubset(raw):
+        raise ValueError("frozen business image payload is invalid")
+    if version == 1 and "intent_snapshot" in raw:
+        raise ValueError("legacy frozen business visual payload cannot carry intent snapshot")
+    if version == 2:
+        snapshot = raw.get("intent_snapshot")
+        if not isinstance(snapshot, dict) or set(snapshot) != {
+            "semantic_compiler_version",
+            "prompt_compiler_version",
+            "style_schema_version",
+            "semantic_flags",
+            "style_intent",
+        }:
+            raise ValueError("frozen business visual intent snapshot is invalid")
+        if snapshot.get("semantic_compiler_version") != SEMANTIC_COMPILER_VERSION:
+            raise ValueError("frozen business visual semantic compiler version is invalid")
+        if snapshot.get("prompt_compiler_version") != PROMPT_COMPILER_VERSION:
+            raise ValueError("frozen business visual prompt compiler version is invalid")
+        if snapshot.get("style_schema_version") != STYLE_SCHEMA_VERSION:
+            raise ValueError("frozen business visual style version is invalid")
+        flags = snapshot.get("semantic_flags")
+        if not isinstance(flags, list) or not all(isinstance(item, str) for item in flags):
+            raise ValueError("frozen business visual semantic flags are invalid")
+        style = snapshot.get("style_intent")
+        if not isinstance(style, dict):
+            raise ValueError("frozen business visual style intent is invalid")
+        visual_style_from_mapping(style)
     raw_brief = raw.get("brief")
     if not isinstance(raw_brief, dict) or set(raw_brief) != _FROZEN_BRIEF_KEYS:
         raise ValueError("frozen business image brief is invalid")
@@ -206,6 +266,15 @@ def _load_frozen_business_image_payload(value: str) -> tuple[VisualCreativeBrief
 def frozen_business_visual_kind(value: str) -> str:
     brief, _ = _load_frozen_business_visual_payload(value)
     return brief.kind
+
+
+def frozen_business_visual_intent(value: str) -> dict[str, object] | None:
+    raw = json.loads(str(value or ""))
+    if not isinstance(raw, dict):
+        raise ValueError("frozen business visual payload is invalid")
+    _load_frozen_business_visual_payload(value)
+    snapshot = raw.get("intent_snapshot")
+    return dict(snapshot) if isinstance(snapshot, dict) else None
 
 
 def frozen_business_visual_binding(value: str) -> dict[str, str] | None:
@@ -248,6 +317,7 @@ def build_business_visual_brief(
     brand_context: str = "",
     country_code: str = "",
     preferred_provider: str = "",
+    style_intent: VisualStyleIntent | None = None,
 ) -> VisualCreativeBrief:
     owner_request = normalize_business_image_request(request)
     visual_kind = str(kind or "").strip().lower()
@@ -258,6 +328,7 @@ def build_business_visual_brief(
         kind=visual_kind,
         brand_context=str(brand_context or "").strip()[:1200],
         purpose="owner_visual",
+        style_intent=style_intent,
     )
     return VisualCreativeBrief(
         kind=visual_kind,
@@ -277,6 +348,7 @@ def build_business_image_brief(
     brand_context: str = "",
     country_code: str = "",
     preferred_provider: str = "",
+    style_intent: VisualStyleIntent | None = None,
 ) -> VisualCreativeBrief:
     return build_business_visual_brief(
         request=request,
@@ -284,6 +356,7 @@ def build_business_image_brief(
         brand_context=brand_context,
         country_code=country_code,
         preferred_provider=preferred_provider,
+        style_intent=style_intent,
     )
 
 
@@ -345,6 +418,7 @@ def create_business_image(
     country_code: str = "",
     preferred_provider: str = "",
     wait_seconds: int = 20,
+    style_intent: VisualStyleIntent | None = None,
 ) -> VisualCreativeJob:
     # Compatibility path for existing callers. Restart-safe owner generation freezes
     # the provider brief first and calls create_business_image_from_frozen_payload.
@@ -353,6 +427,7 @@ def create_business_image(
         brand_context=brand_context,
         country_code=country_code,
         preferred_provider=preferred_provider,
+        style_intent=style_intent,
     )
     if int(wait_seconds or 0) != _BUSINESS_IMAGE_WAIT_SECONDS:
         brief, _ = _load_frozen_business_image_payload(payload)
@@ -379,6 +454,7 @@ def build_ad_visual_brief(
     kind: str,
     country_code: str = "",
     preferred_provider: str = "",
+    style_intent: VisualStyleIntent | None = None,
 ) -> VisualCreativeBrief:
     visual_kind = str(kind or "image").strip().lower()
     if visual_kind not in {"image", "video"}:
@@ -393,6 +469,7 @@ def build_ad_visual_brief(
         kind=visual_kind,
         brand_context=f"Service or offering: {service}. {context}".strip()[:1200],
         purpose="advertising",
+        style_intent=style_intent,
     )
     return VisualCreativeBrief(
         kind=visual_kind,
