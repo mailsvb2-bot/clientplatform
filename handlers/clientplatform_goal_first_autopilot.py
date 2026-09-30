@@ -1942,7 +1942,13 @@ async def check_generated_image(callback: CallbackQuery, state: FSMContext) -> N
                 project_id=editable_project_id,
             )
         except (LookupError, ValueError, TenantPermissionDenied):
-            pass
+            log.warning(
+                "Failed to advance editable source revision after polled provider failure "
+                "business_id=%s project_id=%s",
+                str(data.get("business_id") or ""),
+                editable_project_id,
+                exc_info=True,
+            )
     await state.update_data(
         creative_job_id="",
         creative_generation_kind=visual_kind,
