@@ -66,8 +66,8 @@ def _parse_authorized_key(raw: str) -> _AuthorizedKey | None:
         or ""
     ).strip()
     private_key = str(payload.get("private_key") or payload.get("privateKey") or "")
-    if "\\\\n" in private_key and "\n" not in private_key:
-        private_key = private_key.replace("\\\\n", "\n")
+    if "\\n" in private_key and "\n" not in private_key:
+        private_key = private_key.replace("\\n", "\n")
     private_key = private_key.strip()
     if not key_id or not service_account_id or "PRIVATE KEY" not in private_key:
         return None
