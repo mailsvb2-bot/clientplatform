@@ -40,6 +40,9 @@ class CreativeGenerationReceipt:
     created_at: str
     updated_at: str
     delivery_claimed_at: str = ""
+    semantic_review_json: str = ""
+    semantic_reviewed_at: str = ""
+    semantic_review_override_at: str = ""
 
     @property
     def active(self) -> bool:
