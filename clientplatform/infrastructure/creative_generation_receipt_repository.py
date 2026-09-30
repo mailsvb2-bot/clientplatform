@@ -109,7 +109,7 @@ class CreativeGenerationReceiptRepository:
             raise ValueError("creative generation brand context is invalid")
         if country and (len(country) != 2 or not country.isalpha()):
             raise ValueError("creative generation country code is invalid")
-        if not provider_payload or len(provider_payload) > 16000 or "\x00" in provider_payload:
+        if not provider_payload or len(provider_payload) > 10000 or "\x00" in provider_payload:
             raise ValueError("creative generation provider payload is invalid")
         existing = self.get_active(actor=current)
         timestamp = str(now or _iso_now())
