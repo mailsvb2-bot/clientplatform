@@ -17,8 +17,9 @@ def _compiled_brief(*, kind: str = "image") -> CreativeBrief:
             "5. If the subject is listening, make the listening unmistakable through visible audio interaction.",
             "6. The transformation is mandatory visual evidence. Show the initial and final states of the same subject.",
             "7. " + ("background filler " * 80),
-            "8. Visual style intent is subordinate to semantics: warm color palette; calm and gentle mood; illustrative artistic treatment.",
-            "9. Business grounding: audio wellness session.",
+            "8. Style choices may shape presentation but must never remove mandatory actions.",
+            "9. Use a warm color temperature. The emotional tone should feel calm and gentle.",
+            "10. Business grounding: audio wellness session.",
         ]
     )
     return CreativeBrief(
@@ -61,7 +62,7 @@ def test_runway_adapter_preserves_semantics_and_style_inside_hard_prompt_limit()
     assert "hedgehog listens to an audio session" in adapted.prompt
     assert "listening unmistakable" in adapted.prompt
     assert "transformation is mandatory" in adapted.prompt.casefold()
-    assert "Visual style intent" in adapted.prompt
+    assert "warm color temperature" in adapted.prompt
 
 
 def test_openai_adapter_does_not_rewrite_provider_neutral_compiled_prompt() -> None:
