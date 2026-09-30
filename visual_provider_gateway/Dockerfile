@@ -13,10 +13,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg \
+ && apt-get install -y --no-install-recommends ffmpeg openssl \
  && rm -rf /var/lib/apt/lists/*
 COPY visual_provider_gateway/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
+COPY services/__init__.py /app/services/__init__.py
+COPY services/yandex_iam_token.py /app/services/yandex_iam_token.py
 COPY visual_provider_gateway /app/visual_provider_gateway
 
 CMD ["python", "-m", "visual_provider_gateway.run"]
