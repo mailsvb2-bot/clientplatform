@@ -54,8 +54,11 @@ def main() -> int:
     runner = Path(str(os.environ.get("CLIENTPLATFORM_E2E_HYPIUM_RUNNER") or "")).resolve()
     if not runner.is_file():
         raise HypiumAdapterError("CLIENTPLATFORM_E2E_HYPIUM_RUNNER_missing")
+    repo_root = Path(__file__).resolve().parents[3]
+    if runner.is_relative_to(repo_root):
+        raise HypiumAdapterError("hypium_runner_must_be_runner_local")
 
-    completed = subprocess.run(  # nosec B603 - argv only; no shell=True
+    completed = subprocess.run(  # nosec B603 - argv only; shell disabled
         [str(runner), "--plan", str(plan_path), "--result", str(result_path)],
         text=True,
         capture_output=True,
@@ -63,10 +66,7 @@ def main() -> int:
         check=False,
     )
     if completed.returncode:
-        detail = (completed.stdout + "\n" + completed.stderr).strip()[-3000:]
-        raise HypiumAdapterError(
-            f"hypium_runner_failed:{completed.returncode}:{detail}"
-        )
+        raise HypiumAdapterError(f"hypium_runner_failed:{completed.returncode}")
     if not result_path.is_file():
         raise HypiumAdapterError("hypium_result_missing")
     result = json.loads(result_path.read_text(encoding="utf-8"))

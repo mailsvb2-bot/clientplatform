@@ -188,9 +188,13 @@ def _run_surface(
     finally:
         plan_path.unlink(missing_ok=True)
 
-    detail = (completed.stdout + "\n" + completed.stderr).strip()[-4000:]
     if completed.returncode or not result_path.is_file():
-        return SurfaceProbe(channel=channel, status="failed", actions_checked=0, detail=detail)
+        return SurfaceProbe(
+            channel=channel,
+            status="failed",
+            actions_checked=0,
+            detail=f"driver_failed:{completed.returncode}",
+        )
 
     try:
         result = json.loads(result_path.read_text(encoding="utf-8"))
@@ -219,7 +223,7 @@ def _run_surface(
         channel=channel,
         status="ok" if passed else "failed",
         actions_checked=len(probes) if passed else 0,
-        detail=detail,
+        detail="expected_text_evidence_ok" if passed else "driver_probe_evidence_failed",
     )
 
 

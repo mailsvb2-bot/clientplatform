@@ -7,6 +7,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -23,6 +24,11 @@ _ALLOWED_LOCATORS = {
     "-ios predicate string",
     "-ios class chain",
 }
+_SECRET_VALUE_PATTERNS = (
+    re.compile(r"\b\d{8,12}:[A-Za-z0-9_-]{25,}\b"),
+    re.compile(r"\blive_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"^\s*Bearer\s+\S+", re.IGNORECASE),
+)
 _FORBIDDEN_PROFILE_KEY_FRAGMENTS = {
     "password",
     "passwd",
@@ -39,6 +45,8 @@ class AppiumProbeError(RuntimeError):
 
 
 def profile_contains_secret_like_key(value: object) -> bool:
+    if isinstance(value, str):
+        return any(pattern.search(value) for pattern in _SECRET_VALUE_PATTERNS)
     if isinstance(value, dict):
         for key, item in value.items():
             folded = str(key).casefold()
@@ -83,9 +91,7 @@ class AppiumClient:
         if isinstance(parsed, dict):
             value = parsed.get("value")
             if isinstance(value, dict) and value.get("error"):
-                raise AppiumProbeError(
-                    f"appium_error:{value.get('error')}:{value.get('message', '')}"
-                )
+                raise AppiumProbeError(f"appium_error:{value.get('error')}")
         return parsed
 
     def create_session(self, capabilities: dict[str, Any]) -> None:
@@ -261,6 +267,7 @@ def execute(plan: dict[str, Any]) -> dict[str, Any]:
             url = str(profile.get("url") or "").strip()
             if not url:
                 raise AppiumProbeError("cockpit_profile_url_missing")
+            client.navigate("about:blank")
             before_text = client.source()
             before_hash = _hash(before_text)
             for index, probe in enumerate(plan["probes"], start=1):

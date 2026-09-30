@@ -204,6 +204,9 @@ def test_mobile_device_validator_checks_physical_identity_and_form_factor() -> N
     assert "hdc" in source
     assert "CLIENTPLATFORM_E2E_HARMONY_REAL_DEVICE" in source
     assert "sha256" in source
+    assert 'line.replace(udid, "<redacted>")' in source
+    assert "adb_device_not_ready:{udid}" not in source
+    assert "output[-800:]" not in source
 
 
 def test_mobile_appium_driver_requires_expected_text_and_changed_ui() -> None:
@@ -216,6 +219,9 @@ def test_mobile_appium_driver_requires_expected_text_and_changed_ui() -> None:
     assert "/source" in source
     assert "page_source" not in source.casefold()
     assert "profile_contains_secret_like_key" in source
+    assert 'client.navigate("about:blank")' in source
+    assert "Bearer" in source
+    assert "value.get('message'" not in source
 
 
 def test_harmony_adapter_requires_structured_hypium_evidence() -> None:
@@ -226,6 +232,8 @@ def test_harmony_adapter_requires_structured_hypium_evidence() -> None:
     assert "expected_text_asserted" in source
     assert "screenshot" in source
     assert "shell=True" not in source
+    assert "hypium_runner_must_be_runner_local" in source
+    assert "completed.stdout" not in source
 
 
 def test_mobile_orchestrator_never_claims_one_device_as_another() -> None:
@@ -238,3 +246,4 @@ def test_mobile_orchestrator_never_claims_one_device_as_another() -> None:
     assert '"live_transport"' in source
     assert "CLIENTPLATFORM_E2E_TELEGRAM_MOBILE_PROFILE" in source
     assert "CLIENTPLATFORM_E2E_COCKPIT_MOBILE_PROFILE" in source
+    assert "completed.stdout" not in source

@@ -49,7 +49,7 @@ def _run(command: list[str], *, timeout: int = 20) -> str:
     output = (completed.stdout + "\n" + completed.stderr).strip()
     if completed.returncode:
         raise DeviceValidationError(
-            f"device_command_failed:{Path(command[0]).name}:{completed.returncode}:{output[-800:]}"
+            f"device_command_failed:{Path(command[0]).name}:{completed.returncode}"
         )
     return output
 
@@ -145,7 +145,7 @@ def _validate_android_family(target: dict[str, Any], udid: str) -> dict[str, Any
         if len(parts := line.split()) >= 2
     }
     if connected.get(udid) != "device":
-        raise DeviceValidationError(f"adb_device_not_ready:{udid}")
+        raise DeviceValidationError("adb_device_not_ready")
 
     if udid.startswith("emulator-"):
         raise DeviceValidationError("real_device_required:android_emulator_serial")
@@ -194,7 +194,7 @@ def _validate_apple(target: dict[str, Any], udid: str) -> dict[str, Any]:
             f"apple_form_factor_mismatch:expected={expected_model}:actual={line}"
         )
     _appium_status()
-    return {"device_line": line[:240]}
+    return {"device_line": line.replace(udid, "<redacted>")[:240]}
 
 
 def _validate_harmony(target: dict[str, Any], udid: str) -> dict[str, Any]:
