@@ -696,6 +696,7 @@ __all__ = [
     "freeze_business_video_payload",
     "frozen_business_visual_kind",
     "frozen_business_visual_binding",
+    "frozen_business_visual_style",
     "normalize_business_image_request",
     "build_ad_visual_brief",
     "create_ad_visual",
