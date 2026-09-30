@@ -9,6 +9,7 @@ image or video. Paid generation and real advertising spend remain explicit.
 
 import asyncio
 import hashlib
+import logging
 import os
 import secrets
 import tempfile
@@ -86,6 +87,7 @@ from . import clientplatform_one_click_experience as one_click
 
 
 router = Router(name="clientplatform_goal_first_autopilot")
+log = logging.getLogger(__name__)
 _MAX_TELEGRAM_MEDIA_BYTES = 20_000_000
 _GENERATED_VIDEO_DURATION_SECONDS = 8
 
@@ -1316,7 +1318,14 @@ async def finish_editable_ad(callback: CallbackQuery, state: FSMContext) -> None
                         caption="✅ Редактируемая рекламная картинка готова",
                     )
             except TelegramAPIError:
-                pass
+                log.warning(
+                    "Editable ad provider commit succeeded but Telegram owner delivery failed "
+                    "business_id=%s project_id=%s kind=%s",
+                    str(data.get("business_id") or ""),
+                    project.id,
+                    project.kind,
+                    exc_info=True,
+                )
         finished = await asyncio.to_thread(
             finish_editable_ad_project,
             actor=actor,
@@ -1740,7 +1749,13 @@ async def _generate_custom_visual(
                     project_id=editable_project_id,
                 )
             except (LookupError, ValueError, TenantPermissionDenied):
-                pass
+                log.warning(
+                    "Failed to advance editable source revision after definitive provider failure "
+                    "business_id=%s project_id=%s",
+                    str(data.get("business_id") or ""),
+                    editable_project_id,
+                    exc_info=True,
+                )
             await state.update_data(editable_generation_active=False)
         await state.update_data(creative_job_id="", creative_generation_kind=visual_kind)
         await state.set_state(GoalFirstAutopilotState.customizing)
