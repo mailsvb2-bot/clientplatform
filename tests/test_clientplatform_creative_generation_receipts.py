@@ -36,7 +36,7 @@ class FrozenBusinessImagePayloadTests(unittest.TestCase):
         )
         self.assertEqual(first, second)
         value = json.loads(first)
-        self.assertEqual(value["version"], 1)
+        self.assertEqual(value["version"], 2)
         self.assertEqual(value["wait_seconds"], 20)
         self.assertEqual(value["brief"]["kind"], "image")
         self.assertIn('Owner request, preserve its meaning exactly: "calm office"', value["brief"]["prompt"])
@@ -109,7 +109,7 @@ class FrozenBusinessImagePayloadTests(unittest.TestCase):
     def test_frozen_payload_rejects_version_or_shape_drift(self) -> None:
         frozen = json.loads(freeze_business_image_payload(request="calm office"))
         for mutate in (
-            lambda value: value.__setitem__("version", 2),
+            lambda value: value.__setitem__("version", 99),
             lambda value: value.__setitem__("extra", "changed"),
             lambda value: value.__setitem__("wait_seconds", 61),
         ):
