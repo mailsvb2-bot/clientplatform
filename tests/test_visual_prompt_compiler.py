@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 
 from clientplatform.application import visual_creatives
@@ -121,6 +122,24 @@ class VisualPromptCompilerTests(unittest.TestCase):
         self.assertIn("transformation is mandatory visual evidence", brief.prompt)
         self.assertIn("audio interaction missing", brief.negative_prompt)
         self.assertEqual(brief.aspect_ratio, "4:5")
+
+    def test_paid_generation_freezes_the_compiled_prompt_before_consent(self) -> None:
+        frozen = visual_creatives.freeze_business_image_payload(
+            request=(
+                "колючий ёж слушает метротерапию "
+                "и превращается в доброго и мягкого"
+            ),
+            brand_context="Brand name: Метротерапия. Tone: calm.",
+            country_code="RU",
+        )
+        payload = json.loads(frozen)
+        provider_prompt = payload["brief"]["prompt"]
+        provider_negative = payload["brief"]["negative_prompt"]
+
+        self.assertIn("listening unmistakable", provider_prompt)
+        self.assertIn("transformation is mandatory visual evidence", provider_prompt)
+        self.assertIn("Brand name: Метротерапия", provider_prompt)
+        self.assertIn("audio interaction missing", provider_negative)
 
     def test_ad_visual_brief_uses_the_same_semantic_compiler(self) -> None:
         brief = visual_creatives.build_ad_visual_brief(
