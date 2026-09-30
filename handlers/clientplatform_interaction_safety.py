@@ -74,6 +74,7 @@ _CLIENTPLATFORM_CALLBACK_PREFIXES = (
     "cpao:",
     "cps:",
     "cpj:",
+    "cpgs:",
     "cpp:",
     "cpy:",
     "cpsp:",
