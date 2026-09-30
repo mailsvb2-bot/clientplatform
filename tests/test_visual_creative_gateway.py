@@ -248,6 +248,70 @@ def test_download_is_bounded_scoped_and_materialized(monkeypatch, tmp_path: Path
     assert "scope_id=tenant-1" in seen["url"]
 
 
+def test_download_retries_transient_content_gap_without_resubmitting(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setenv("VISUAL_GATEWAY_URL", "http://gateway.internal")
+    attempts = []
+    sleeps = []
+
+    def fake_request(method, path, **_kwargs):
+        attempts.append((method, path))
+        if len(attempts) < 3:
+            raise gateway.VisualCreativeGatewayError("visual_gateway_http_404")
+        return ({"content-type": "image/jpeg"}, b"\xff\xd8\xfffresh")
+
+    monkeypatch.setattr(gateway, "_request", fake_request)
+    monkeypatch.setattr(gateway.time, "sleep", lambda delay: sleeps.append(delay))
+    job = gateway.VisualCreativeJob(
+        id="fresh-image",
+        provider="yandexart",
+        scope_id="tenant-1",
+        kind="image",
+        status="succeeded",
+        asset_ready=True,
+    )
+
+    path = gateway.download_visual(job, output_dir=str(tmp_path))
+
+    assert path.read_bytes() == b"\xff\xd8\xfffresh"
+    assert len(attempts) == 3
+    assert sleeps == [0.25, 0.5]
+
+
+def test_download_does_not_retry_permanent_content_contract_error(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setenv("VISUAL_GATEWAY_URL", "http://gateway.internal")
+    attempts = []
+
+    def fake_request(*_args, **_kwargs):
+        attempts.append(1)
+        raise gateway.VisualCreativeGatewayError("visual_gateway_http_401")
+
+    monkeypatch.setattr(gateway, "_request", fake_request)
+    monkeypatch.setattr(
+        gateway.time,
+        "sleep",
+        lambda _delay: pytest.fail("permanent errors must not be retried"),
+    )
+    job = gateway.VisualCreativeJob(
+        id="forbidden-image",
+        provider="yandexart",
+        scope_id="tenant-1",
+        kind="image",
+        status="succeeded",
+        asset_ready=True,
+    )
+
+    with pytest.raises(gateway.VisualCreativeGatewayError, match="visual_gateway_http_401"):
+        gateway.download_visual(job, output_dir=str(tmp_path))
+
+    assert attempts == [1]
+
+
 def test_download_rejects_wrong_mime(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("VISUAL_GATEWAY_URL", "http://gateway.internal")
     monkeypatch.setattr(
