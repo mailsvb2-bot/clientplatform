@@ -20,7 +20,6 @@ _MAX_NEGATIVE_PROMPT_CHARS = 1800
 _TRANSFORMATION_RE = re.compile(
     r"(?:"
     r"превращ|станов|меняет(?:ся)?|изменяет(?:ся)?|до\s*(?:и|/|→|->)\s*после|"
-    r"из\s+.+?\s+в\s+|"
     r"transform|turns?\s+into|becomes?|changes?\s+from|before\s*(?:and|/|→|->)\s*after"
     r")",
     re.IGNORECASE,
@@ -31,28 +30,32 @@ _SEQUENCE_RE = re.compile(
     re.IGNORECASE,
 )
 _LISTENING_RE = re.compile(
-    r"(?:слуша|наушник|аудио|подкаст|музык|listen|headphone|earbud|audio|podcast|music)",
+    r"(?:\bслуша\w*|\bнаушник\w*|\bаудиосес\w*|\bподкаст\w*|"
+    r"\blisten(?:s|ing)?\b|\bheadphones?\b|\bearbuds?\b|\bpodcasts?\b)",
     re.IGNORECASE,
 )
 _WATCHING_RE = re.compile(
-    r"(?:смотрит|просматривает|видео|экран|watch|viewing|screen|video)",
+    r"(?:\bсмотр\w*|\bпросматрива\w*|\bэкран\w*|"
+    r"\bwatch(?:es|ing)?\b|\bviewing\b|\bscreens?\b)",
     re.IGNORECASE,
 )
 _READING_RE = re.compile(
-    r"(?:читает|книг|текст|read(?:s|ing)?|book|article)",
+    r"(?:\bчит\w*|\bкниг\w*|\bread(?:s|ing)?\b|\bbooks?\b|\barticles?\b)",
     re.IGNORECASE,
 )
 _USING_RE = re.compile(
-    r"(?:использует|пользуется|применяет|работает\s+с|"
-    r"uses?|using|interacts?\s+with)",
+    r"(?:\bиспользу\w*|\bпользу\w*|\bприменя\w*|\bработа\w*\s+с\b|"
+    r"\buses?\b|\busing\b|\binteracts?\s+with\b)",
     re.IGNORECASE,
 )
 _HOLDING_RE = re.compile(
-    r"(?:держит|несет|берет|hold(?:s|ing)?|carries|carrying)",
+    r"(?:\bдерж\w*|\bнес[её]\w*|\bбер[её]\w*|"
+    r"\bhold(?:s|ing)?\b|\bcarr(?:y|ies|ying)\b)",
     re.IGNORECASE,
 )
 _EATING_RE = re.compile(
-    r"(?:ест|кушает|пьет|выпивает|eat(?:s|ing)?|drink(?:s|ing)?)",
+    r"(?:\bест\b|\bедят\b|\bкуша\w*|\bпь[её]\w*|\bвыпива\w*|"
+    r"\beat(?:s|ing)?\b|\bdrink(?:s|ing)?\b)",
     re.IGNORECASE,
 )
 _COMPARISON_RE = re.compile(
@@ -246,10 +249,10 @@ def compile_visual_prompt(
         "unless it is impossible to depict visually.",
         "Never collapse a multi-action request into a generic portrait of the main "
         "noun. Show visual evidence for the requested verbs and relationships.",
-        *_business_context_directive(brand),
         *_interaction_directives(flags),
         *_transformation_directives(visual_kind, flags),
         *_sequence_directives(visual_kind, flags),
+        *_business_context_directive(brand),
     ]
 
     if "comparison" in flags and "transformation" not in flags:
