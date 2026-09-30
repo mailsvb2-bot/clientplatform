@@ -71,6 +71,19 @@ class VisualPromptCompilerTests(unittest.TestCase):
         self.assertIn("scene contract", compiled.prompt)
         self.assertIn("Do not rely on readable text", compiled.prompt)
 
+    def test_explicit_portrait_request_is_not_negated_by_the_compiler(self) -> None:
+        compiled = compile_visual_prompt(
+            request="деловой портрет психолога в светлом кабинете",
+            kind="image",
+        )
+
+        self.assertIn("portrait", compiled.semantic_flags)
+        self.assertNotIn("generic isolated portrait", compiled.negative_prompt)
+        self.assertNotIn(
+            "static catalog shot when an action was requested",
+            compiled.negative_prompt,
+        )
+
     def test_explicit_text_request_does_not_add_blanket_text_ban(self) -> None:
         compiled = compile_visual_prompt(
             request='афиша с надписью "Открытая встреча"',
