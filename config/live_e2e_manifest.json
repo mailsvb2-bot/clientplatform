@@ -531,5 +531,127 @@
         "expect": "ClientPlatform"
       }
     ]
+  },
+  "mobile_runner": {
+    "labels": [
+      "self-hosted",
+      "clientplatform-live-e2e"
+    ],
+    "staging_only": true,
+    "real_device_required": true,
+    "targets": [
+      {
+        "id": "android-phone",
+        "host_label": "Linux",
+        "runner_label": "clientplatform-android-phone",
+        "device_os": "android",
+        "form_factor": "phone",
+        "driver": "appium-uiautomator2",
+        "required_surfaces": [
+          "telegram",
+          "vk",
+          "max",
+          "cockpit"
+        ]
+      },
+      {
+        "id": "android-tablet",
+        "host_label": "Linux",
+        "runner_label": "clientplatform-android-tablet",
+        "device_os": "android",
+        "form_factor": "tablet",
+        "driver": "appium-uiautomator2",
+        "required_surfaces": [
+          "telegram",
+          "vk",
+          "max",
+          "cockpit"
+        ]
+      },
+      {
+        "id": "ios-iphone",
+        "host_label": "macOS",
+        "runner_label": "clientplatform-ios-iphone",
+        "device_os": "ios",
+        "form_factor": "phone",
+        "driver": "appium-xcuitest",
+        "required_surfaces": [
+          "telegram",
+          "vk",
+          "max",
+          "cockpit"
+        ]
+      },
+      {
+        "id": "ipados-ipad",
+        "host_label": "macOS",
+        "runner_label": "clientplatform-ipados-ipad",
+        "device_os": "ipados",
+        "form_factor": "tablet",
+        "driver": "appium-xcuitest",
+        "required_surfaces": [
+          "telegram",
+          "vk",
+          "max",
+          "cockpit"
+        ]
+      },
+      {
+        "id": "harmonyos-phone",
+        "host_label": "Windows",
+        "runner_label": "clientplatform-harmonyos-phone",
+        "device_os": "harmonyos",
+        "form_factor": "phone",
+        "driver": "deveco-hypium",
+        "required_surfaces": [
+          "telegram",
+          "vk",
+          "max",
+          "cockpit"
+        ]
+      },
+      {
+        "id": "harmonyos-tablet",
+        "host_label": "Windows",
+        "runner_label": "clientplatform-harmonyos-tablet",
+        "device_os": "harmonyos",
+        "form_factor": "tablet",
+        "driver": "deveco-hypium",
+        "required_surfaces": [
+          "telegram",
+          "vk",
+          "max",
+          "cockpit"
+        ]
+      },
+      {
+        "id": "fireos-tablet",
+        "host_label": "Linux",
+        "runner_label": "clientplatform-fireos-tablet",
+        "device_os": "fireos",
+        "form_factor": "tablet",
+        "driver": "appium-uiautomator2",
+        "required_surfaces": [
+          "telegram",
+          "vk",
+          "max",
+          "cockpit"
+        ]
+      },
+      {
+        "id": "chromeos-tablet",
+        "host_label": "Linux",
+        "runner_label": "clientplatform-chromeos-tablet",
+        "device_os": "chromeos",
+        "form_factor": "tablet",
+        "driver": "appium-uiautomator2",
+        "required_surfaces": [
+          "telegram",
+          "vk",
+          "max",
+          "cockpit"
+        ]
+      }
+    ]
   }
 }

@@ -29,8 +29,17 @@ jobs:
       - name: Validate live E2E coverage contract
         run: python scripts/check_live_e2e_manifest.py
 
-      - name: Render live E2E plan
-        run: python scripts/clientplatform_live_e2e.py --plan
+      - name: Render live E2E plans
+        run: |
+          python scripts/clientplatform_live_e2e.py --plan
+          python scripts/clientplatform_mobile_live_e2e.py --plan
+
+      - name: Compile mobile E2E scripts
+        run: |
+          python -m py_compile scripts/clientplatform_mobile_live_e2e.py
+          python -m py_compile scripts/live_e2e/mobile/validate_device.py
+          python -m py_compile scripts/live_e2e/mobile/appium_driver.py
+          python -m py_compile scripts/live_e2e/mobile/hypium_adapter.py
 
       - name: Parse Windows E2E scripts
         shell: powershell

@@ -30,6 +30,65 @@ _REQUIRED_WINDOWS_VARIANTS = {
         "minimum_build": 22000,
     },
 }
+_REQUIRED_MOBILE_SURFACES = {"telegram", "vk", "max", "cockpit"}
+_REQUIRED_MOBILE_TARGETS = {
+    "android-phone": {
+        "host_label": "Linux",
+        "runner_label": "clientplatform-android-phone",
+        "device_os": "android",
+        "form_factor": "phone",
+        "driver": "appium-uiautomator2",
+    },
+    "android-tablet": {
+        "host_label": "Linux",
+        "runner_label": "clientplatform-android-tablet",
+        "device_os": "android",
+        "form_factor": "tablet",
+        "driver": "appium-uiautomator2",
+    },
+    "ios-iphone": {
+        "host_label": "macOS",
+        "runner_label": "clientplatform-ios-iphone",
+        "device_os": "ios",
+        "form_factor": "phone",
+        "driver": "appium-xcuitest",
+    },
+    "ipados-ipad": {
+        "host_label": "macOS",
+        "runner_label": "clientplatform-ipados-ipad",
+        "device_os": "ipados",
+        "form_factor": "tablet",
+        "driver": "appium-xcuitest",
+    },
+    "harmonyos-phone": {
+        "host_label": "Windows",
+        "runner_label": "clientplatform-harmonyos-phone",
+        "device_os": "harmonyos",
+        "form_factor": "phone",
+        "driver": "deveco-hypium",
+    },
+    "harmonyos-tablet": {
+        "host_label": "Windows",
+        "runner_label": "clientplatform-harmonyos-tablet",
+        "device_os": "harmonyos",
+        "form_factor": "tablet",
+        "driver": "deveco-hypium",
+    },
+    "fireos-tablet": {
+        "host_label": "Linux",
+        "runner_label": "clientplatform-fireos-tablet",
+        "device_os": "fireos",
+        "form_factor": "tablet",
+        "driver": "appium-uiautomator2",
+    },
+    "chromeos-tablet": {
+        "host_label": "Linux",
+        "runner_label": "clientplatform-chromeos-tablet",
+        "device_os": "chromeos",
+        "form_factor": "tablet",
+        "driver": "appium-uiautomator2",
+    },
+}
 _REQUIRED_EVIDENCE = {
     "cross_tenant_denial",
     "duplicate_event_replay",
@@ -132,6 +191,51 @@ def validate_manifest(raw: dict[str, Any]) -> dict[str, Any]:
     for variant_id in sorted(set(variants) - set(_REQUIRED_WINDOWS_VARIANTS)):
         problems.append(f"runner_os_variant_unknown:{variant_id}")
 
+    mobile_runner = raw.get("mobile_runner")
+    if not isinstance(mobile_runner, dict):
+        problems.append("mobile_runner_missing")
+        mobile_runner = {}
+    mobile_labels = set(mobile_runner.get("labels") or ())
+    for label in ("self-hosted", "clientplatform-live-e2e"):
+        if label not in mobile_labels:
+            problems.append(f"mobile_runner_label_missing:{label}")
+    if mobile_runner.get("staging_only") is not True:
+        problems.append("mobile_runner_must_be_staging_only")
+    if mobile_runner.get("real_device_required") is not True:
+        problems.append("mobile_runner_real_device_required")
+
+    raw_mobile_targets = mobile_runner.get("targets")
+    mobile_targets: dict[str, dict[str, Any]] = {}
+    if not isinstance(raw_mobile_targets, list):
+        problems.append("mobile_targets_missing")
+        raw_mobile_targets = []
+    for item in raw_mobile_targets:
+        if not isinstance(item, dict):
+            problems.append("mobile_target_invalid")
+            continue
+        target_id = str(item.get("id") or "").strip()
+        if not target_id:
+            problems.append("mobile_target_id_missing")
+            continue
+        if target_id in mobile_targets:
+            problems.append(f"mobile_target_duplicate:{target_id}")
+            continue
+        mobile_targets[target_id] = item
+
+    for target_id, expected in _REQUIRED_MOBILE_TARGETS.items():
+        target = mobile_targets.get(target_id)
+        if target is None:
+            problems.append(f"mobile_target_missing:{target_id}")
+            continue
+        for key, expected_value in expected.items():
+            if target.get(key) != expected_value:
+                problems.append(f"mobile_target_contract_mismatch:{target_id}:{key}")
+        surfaces = set(target.get("required_surfaces") or ())
+        if surfaces != _REQUIRED_MOBILE_SURFACES:
+            problems.append(f"mobile_target_surfaces_mismatch:{target_id}")
+    for target_id in sorted(set(mobile_targets) - set(_REQUIRED_MOBILE_TARGETS)):
+        problems.append(f"mobile_target_unknown:{target_id}")
+
     safety = raw.get("safety")
     if not isinstance(safety, dict):
         problems.append("safety_missing")
@@ -224,6 +328,7 @@ def validate_manifest(raw: dict[str, Any]) -> dict[str, Any]:
         "channels": sorted(_REQUIRED_CHANNELS),
         "roles": sorted(covered_roles),
         "windows_variants": sorted(variants),
+        "mobile_targets": sorted(mobile_targets),
         "live_probes": sum(len(live_probes.get(channel) or ()) for channel in _REQUIRED_CHANNELS),
     }
 

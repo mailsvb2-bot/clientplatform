@@ -18,6 +18,16 @@ def test_live_e2e_manifest_covers_current_native_parity_registry() -> None:
     assert summary["native_actions"] >= 90
     assert summary["live_probes"] >= 17
     assert summary["windows_variants"] == ["windows-10", "windows-11"]
+    assert summary["mobile_targets"] == [
+        "android-phone",
+        "android-tablet",
+        "chromeos-tablet",
+        "fireos-tablet",
+        "harmonyos-phone",
+        "harmonyos-tablet",
+        "ios-iphone",
+        "ipados-ipad",
+    ]
     assert {"telegram", "vk", "max"} <= set(summary["channels"])
 
 
@@ -56,6 +66,10 @@ def test_live_e2e_contract_is_checked_on_hosted_windows_without_credentials() ->
     assert "runs-on: windows-2025" in workflow
     assert "scripts/check_live_e2e_manifest.py" in workflow
     assert "scripts/clientplatform_live_e2e.py --plan" in workflow
+    assert "scripts/clientplatform_mobile_live_e2e.py --plan" in workflow
+    assert "scripts/live_e2e/mobile/validate_device.py" in workflow
+    assert "scripts/live_e2e/mobile/appium_driver.py" in workflow
+    assert "scripts/live_e2e/mobile/hypium_adapter.py" in workflow
     assert "secrets." not in workflow
 
 
@@ -146,3 +160,79 @@ def test_imported_consumer_messenger_fixtures_are_not_live_e2e_evidence() -> Non
     fixture_root = ROOT / "tests" / "fixtures" / "messenger"
     for name in retired:
         assert not (fixture_root / name).exists()
+
+
+def test_mobile_live_e2e_matrix_is_real_device_only_and_never_runs_pr_code() -> None:
+    workflow = (
+        ROOT / ".github" / "workflows" / "clientplatform-live-e2e-mobile.yml"
+    ).read_text(encoding="utf-8")
+    assert "pull_request:" not in workflow
+    assert "ref: main" in workflow
+    assert "vars.CLIENTPLATFORM_MOBILE_LIVE_E2E_ENABLED == '1'" in workflow
+    assert "environment: clientplatform_mobile_live_e2e" in workflow
+    assert "CLIENTPLATFORM_LIVE_E2E_REAL_MONEY: '0'" in workflow
+    assert "CLIENTPLATFORM_LIVE_E2E_PRODUCTION_CREDENTIALS: '0'" in workflow
+    for label in (
+        "clientplatform-android-phone",
+        "clientplatform-android-tablet",
+        "clientplatform-ios-iphone",
+        "clientplatform-ipados-ipad",
+        "clientplatform-harmonyos-phone",
+        "clientplatform-harmonyos-tablet",
+        "clientplatform-fireos-tablet",
+        "clientplatform-chromeos-tablet",
+    ):
+        assert label in workflow
+    assert "matrix.host_label" in workflow
+    assert "matrix.device_label" in workflow
+    assert "validate_device.py" in workflow
+
+
+def test_mobile_device_validator_checks_physical_identity_and_form_factor() -> None:
+    source = (
+        ROOT / "scripts" / "live_e2e" / "mobile" / "validate_device.py"
+    ).read_text(encoding="utf-8")
+    assert "ro.kernel.qemu" in source
+    assert "emulator-" in source
+    assert "smallest_width_dp" in source
+    assert "org.chromium.arc" in source
+    assert "amazon" in source.casefold()
+    assert "xctrace" in source
+    assert "== Simulators ==" in source
+    assert "hdc" in source
+    assert "CLIENTPLATFORM_E2E_HARMONY_REAL_DEVICE" in source
+    assert "sha256" in source
+
+
+def test_mobile_appium_driver_requires_expected_text_and_changed_ui() -> None:
+    source = (
+        ROOT / "scripts" / "live_e2e" / "mobile" / "appium_driver.py"
+    ).read_text(encoding="utf-8")
+    assert "expected_count > before_count" in source
+    assert "after_hash != before_hash" in source
+    assert "/screenshot" in source
+    assert "/source" in source
+    assert "page_source" not in source.casefold()
+    assert "profile_contains_secret_like_key" in source
+
+
+def test_harmony_adapter_requires_structured_hypium_evidence() -> None:
+    source = (
+        ROOT / "scripts" / "live_e2e" / "mobile" / "hypium_adapter.py"
+    ).read_text(encoding="utf-8")
+    assert "CLIENTPLATFORM_E2E_HYPIUM_RUNNER" in source
+    assert "expected_text_asserted" in source
+    assert "screenshot" in source
+    assert "shell=True" not in source
+
+
+def test_mobile_orchestrator_never_claims_one_device_as_another() -> None:
+    source = (ROOT / "scripts" / "clientplatform_mobile_live_e2e.py").read_text(
+        encoding="utf-8"
+    )
+    assert "device_identity_target_mismatch" in source
+    assert '"target_id"' in source
+    assert '"semantic_contract"' in source
+    assert '"live_transport"' in source
+    assert "CLIENTPLATFORM_E2E_TELEGRAM_MOBILE_PROFILE" in source
+    assert "CLIENTPLATFORM_E2E_COCKPIT_MOBILE_PROFILE" in source
