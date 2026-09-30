@@ -11,6 +11,14 @@ same request into the same provider prompt and never require a second LLM call.
 from dataclasses import dataclass
 import re
 
+from clientplatform.domain.visual_style_intent import (
+    VisualStyleIntent,
+    visual_style_prompt_lines,
+)
+
+
+SEMANTIC_COMPILER_VERSION = 2
+PROMPT_COMPILER_VERSION = 2
 
 _MAX_REQUEST_CHARS = 1500
 _MAX_BRAND_CONTEXT_CHARS = 1200
@@ -80,6 +88,9 @@ class CompiledVisualPrompt:
     prompt: str
     negative_prompt: str
     semantic_flags: tuple[str, ...]
+    style_intent: VisualStyleIntent
+    semantic_compiler_version: int = SEMANTIC_COMPILER_VERSION
+    prompt_compiler_version: int = PROMPT_COMPILER_VERSION
 
 
 def _clean(value: str, *, field: str, limit: int) -> str:
@@ -206,6 +217,7 @@ def compile_visual_prompt(
     kind: str,
     brand_context: str = "",
     purpose: str = "owner_visual",
+    style_intent: VisualStyleIntent | None = None,
 ) -> CompiledVisualPrompt:
     owner_request = _clean(
         request,
@@ -229,6 +241,8 @@ def compile_visual_prompt(
         raise ValueError("visual purpose is invalid")
 
     flags = _semantic_flags(owner_request)
+    style = (style_intent or VisualStyleIntent()).normalized()
+    style_lines = visual_style_prompt_lines(style)
     explicit_text = "explicit_text" in flags
     if visual_kind == "video":
         medium = (
@@ -258,8 +272,14 @@ def compile_visual_prompt(
         *_interaction_directives(flags),
         *_transformation_directives(visual_kind, flags),
         *_sequence_directives(visual_kind, flags),
-        *_business_context_directive(brand),
     ]
+    if style_lines:
+        directives.append(
+            "Visual style intent is subordinate to the scene semantics. Apply all of "
+            "these choices without dropping any mandatory subject, action, relationship "
+            "or transformation: " + "; ".join(style_lines) + "."
+        )
+    directives.extend(_business_context_directive(brand))
 
     if "comparison" in flags and "transformation" not in flags:
         directives.append(
@@ -340,6 +360,10 @@ def compile_visual_prompt(
                 "audio interaction missing",
             ]
         )
+    if style.copy_space == "none":
+        negatives.append("large intentional copy space")
+    if style.composition == "before_after" and "transformation" in flags:
+        negatives.append("transformation shown without readable before-and-after structure")
     if not explicit_text:
         negatives.append("readable advertising text baked into image")
     negative_prompt = "; ".join(negatives)
@@ -350,7 +374,13 @@ def compile_visual_prompt(
         prompt=prompt,
         negative_prompt=negative_prompt,
         semantic_flags=flags,
+        style_intent=style,
     )
 
 
-__all__ = ["CompiledVisualPrompt", "compile_visual_prompt"]
+__all__ = [
+    "CompiledVisualPrompt",
+    "PROMPT_COMPILER_VERSION",
+    "SEMANTIC_COMPILER_VERSION",
+    "compile_visual_prompt",
+]
