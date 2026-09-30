@@ -34,16 +34,22 @@ def _receipt(row: Any) -> CreativeGenerationReceipt:
         idempotency_key=str(_value(row, "idempotency_key", 7)),
         source_job_id=str(_value(row, "source_job_id", 8)),
         delivery_claimed_at=str(_value(row, "delivery_claimed_at", 9)),
-        status=CreativeGenerationReceiptStatus(str(_value(row, "status", 10))),
-        created_at=str(_value(row, "created_at", 11)),
-        updated_at=str(_value(row, "updated_at", 12)),
+        semantic_review_json=str(_value(row, "semantic_review_json", 10)),
+        semantic_reviewed_at=str(_value(row, "semantic_reviewed_at", 11)),
+        semantic_review_override_at=str(
+            _value(row, "semantic_review_override_at", 12)
+        ),
+        status=CreativeGenerationReceiptStatus(str(_value(row, "status", 13))),
+        created_at=str(_value(row, "created_at", 14)),
+        updated_at=str(_value(row, "updated_at", 15)),
     )
 
 
 _SELECT = """
     SELECT id, business_id, created_by_member_id, request_text, brand_context,
            country_code, provider_payload_json, idempotency_key, source_job_id,
-           delivery_claimed_at, status, created_at, updated_at
+           delivery_claimed_at, semantic_review_json, semantic_reviewed_at,
+           semantic_review_override_at, status, created_at, updated_at
     FROM creative_generation_receipts
 """
 
@@ -225,6 +231,76 @@ class CreativeGenerationReceiptRepository:
             """,
             (job_id, status.value, timestamp, receipt.id, current.business_id),
         )
+        return self.get(actor=current, receipt_id=receipt.id)
+
+    def record_semantic_review(
+        self,
+        *,
+        actor: TenantContext,
+        receipt_id: str,
+        review_json: str,
+        now: str | None = None,
+    ) -> CreativeGenerationReceipt:
+        current = self._actor(actor)
+        receipt = self.get(actor=current, receipt_id=receipt_id)
+        if receipt.status != CreativeGenerationReceiptStatus.SUCCEEDED:
+            raise ValueError("creative generation is not ready for semantic review")
+        payload = str(review_json or "")
+        if not payload or len(payload) > 4000 or "\x00" in payload:
+            raise ValueError("creative generation semantic review is invalid")
+        timestamp = str(now or _iso_now())
+        if receipt.semantic_review_json:
+            if receipt.semantic_review_json != payload:
+                raise ValueError("creative generation semantic review changed")
+            return receipt
+        cursor = self._conn.execute(
+            """
+            UPDATE creative_generation_receipts
+            SET semantic_review_json=?, semantic_reviewed_at=?, updated_at=?
+            WHERE id=? AND business_id=? AND status='succeeded'
+              AND semantic_review_json=''
+            """,
+            (
+                payload,
+                timestamp,
+                timestamp,
+                receipt.id,
+                current.business_id,
+            ),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            raise ValueError("creative generation semantic review state changed")
+        return self.get(actor=current, receipt_id=receipt.id)
+
+    def authorize_semantic_review_override(
+        self,
+        *,
+        actor: TenantContext,
+        receipt_id: str,
+        now: str | None = None,
+    ) -> CreativeGenerationReceipt:
+        current = self._actor(actor)
+        receipt = self.get(actor=current, receipt_id=receipt_id)
+        if (
+            receipt.status != CreativeGenerationReceiptStatus.SUCCEEDED
+            or not receipt.semantic_review_json
+        ):
+            raise ValueError("creative generation semantic review is unavailable")
+        timestamp = str(now or _iso_now())
+        if receipt.semantic_review_override_at:
+            return receipt
+        cursor = self._conn.execute(
+            """
+            UPDATE creative_generation_receipts
+            SET semantic_review_override_at=?, updated_at=?
+            WHERE id=? AND business_id=? AND status='succeeded'
+              AND semantic_review_json<>''
+              AND semantic_review_override_at=''
+            """,
+            (timestamp, timestamp, receipt.id, current.business_id),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            raise ValueError("creative generation semantic review override changed")
         return self.get(actor=current, receipt_id=receipt.id)
 
     def claim_delivery(
