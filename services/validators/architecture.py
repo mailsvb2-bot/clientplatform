@@ -10,7 +10,7 @@ from services.validators.base import ValidationError
 
 SECRET_PATTERNS = (
     re.compile(r"\b\d{8,12}:[A-Za-z0-9_-]{25,}\b"),  # Telegram bot/provider token-like
-    re.compile(r"live_[A-Za-z0-9_-]{16,}"),              # YooKassa live secret-like
+    re.compile(r"\blive_[A-Za-z0-9]{20,}\b"),             # Opaque live provider secret-like
 )
 
 RAW_NETWORK_IMPORTS = {

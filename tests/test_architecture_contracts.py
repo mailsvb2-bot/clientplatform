@@ -31,3 +31,16 @@ def test_app_registers_only_canonical_clientplatform_router():
     app = Path("app.py").read_text(encoding="utf-8")
     assert app.count("dp.include_router(clientplatform_entry.router)") == 1
     assert app.count("dp.include_router(") == 1
+
+def test_live_secret_pattern_rejects_safe_e2e_identifiers_but_catches_opaque_key():
+    mod = importlib.import_module("services.validators.architecture")
+
+    def matches(value: str) -> bool:
+        return any(pattern.search(value) for pattern in mod.SECRET_PATTERNS)
+
+    assert not matches("live_transport_probes")
+    assert not matches("clientplatform_live_e2e_production_credentials")
+    assert not matches("live_e2e_manifest")
+    opaque = "live_" + ("Ab9" * 8)
+    assert matches(opaque)
+
