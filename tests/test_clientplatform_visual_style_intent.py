@@ -108,6 +108,27 @@ class VisualStyleIntentTests(unittest.TestCase):
         self.assertEqual(payload["intent"]["style"]["color_temperature"], "warm")
         self.assertIn("Use a warm color temperature", payload["brief"]["prompt"])
 
+    def test_worst_case_frozen_payload_stays_within_receipt_contract(self) -> None:
+        payload = visual_creatives.freeze_business_image_payload(
+            request="сцена " + ("деталь " * 180),
+            brand_context="Brand context " + ("visual " * 220),
+            style_intent=VisualStyleIntent(
+                color_temperature="warm",
+                emotional_tone="dramatic",
+                energy="high",
+                realism="photorealistic",
+                lighting="dark",
+                contrast="strong",
+                detail="detailed",
+                composition="story_scene",
+                motion="dynamic",
+                commercial_tone="premium",
+                copy_space="large",
+            ),
+        )
+
+        self.assertLessEqual(len(payload), 10000)
+
     def test_legacy_version_one_frozen_payload_stays_loadable(self) -> None:
         current = json.loads(
             visual_creatives.freeze_business_image_payload(request="calm office")
