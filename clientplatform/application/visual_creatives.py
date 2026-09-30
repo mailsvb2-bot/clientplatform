@@ -312,7 +312,7 @@ def build_business_visual_brief(
         aspect_ratio="9:16" if visual_kind == "video" else "4:5",
         duration_seconds=8,
         negative_prompt=compiled.negative_prompt,
-        brand_context=str(brand_context or "").strip()[:2500],
+        brand_context=str(brand_context or "").strip()[:1200],
     )
 
 
