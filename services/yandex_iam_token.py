@@ -19,6 +19,9 @@ _cache_lock = threading.Lock()
 _cached_token = ""
 _cached_expires_epoch = 0.0
 _cached_key_fingerprint = ""
+_cached_art_token = ""
+_cached_art_expires_epoch = 0.0
+_cached_art_key_fingerprint = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,14 +49,8 @@ def _safe_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
-def _load_authorized_key() -> _AuthorizedKey | None:
-    raw = str(os.getenv("YANDEX_BILLING_AUTHORIZED_KEY_JSON", "") or "").strip()
-    path = str(os.getenv("YANDEX_BILLING_AUTHORIZED_KEY_FILE", "") or "").strip()
-    if not raw and path:
-        try:
-            raw = Path(path).read_text(encoding="utf-8")
-        except OSError:
-            return None
+def _parse_authorized_key(raw: str) -> _AuthorizedKey | None:
+    raw = str(raw or "").strip()
     if not raw:
         return None
     try:
@@ -79,6 +76,35 @@ def _load_authorized_key() -> _AuthorizedKey | None:
         service_account_id=service_account_id,
         private_key=private_key,
     )
+
+
+def _read_authorized_key(raw_env: str, file_env: str) -> _AuthorizedKey | None:
+    raw = str(os.getenv(raw_env, "") or "").strip()
+    path = str(os.getenv(file_env, "") or "").strip()
+    if not raw and path:
+        try:
+            raw = Path(path).read_text(encoding="utf-8")
+        except OSError:
+            return None
+    return _parse_authorized_key(raw)
+
+
+def _load_authorized_key() -> _AuthorizedKey | None:
+    return _read_authorized_key(
+        "YANDEX_BILLING_AUTHORIZED_KEY_JSON",
+        "YANDEX_BILLING_AUTHORIZED_KEY_FILE",
+    )
+
+
+def _load_art_authorized_key() -> _AuthorizedKey | None:
+    dedicated_raw = str(os.getenv("YANDEX_ART_AUTHORIZED_KEY_JSON", "") or "").strip()
+    dedicated_file = str(os.getenv("YANDEX_ART_AUTHORIZED_KEY_FILE", "") or "").strip()
+    if dedicated_raw or dedicated_file:
+        return _read_authorized_key(
+            "YANDEX_ART_AUTHORIZED_KEY_JSON",
+            "YANDEX_ART_AUTHORIZED_KEY_FILE",
+        )
+    return _load_authorized_key()
 
 
 def _fingerprint(key: _AuthorizedKey) -> str:
@@ -291,6 +317,106 @@ def get_yandex_billing_iam_token() -> YandexIamTokenResult:
     )
 
 
+def _art_error_code(code: str) -> str:
+    raw = str(code or "").strip()
+    if raw.startswith("yandex_billing_iam_"):
+        return "yandex_art_iam_" + raw.removeprefix("yandex_billing_iam_")
+    return "yandex_art_iam_unavailable"
+
+
+def yandex_art_renewable_auth_configured() -> bool:
+    return bool(
+        str(os.getenv("YANDEX_ART_IAM_TOKEN", "") or "").strip()
+        or str(os.getenv("YANDEX_ART_AUTHORIZED_KEY_JSON", "") or "").strip()
+        or str(os.getenv("YANDEX_ART_AUTHORIZED_KEY_FILE", "") or "").strip()
+        or str(os.getenv("YANDEX_BILLING_AUTHORIZED_KEY_JSON", "") or "").strip()
+        or str(os.getenv("YANDEX_BILLING_AUTHORIZED_KEY_FILE", "") or "").strip()
+    )
+
+
+def get_yandex_art_iam_token() -> YandexIamTokenResult:
+    global _cached_art_token, _cached_art_expires_epoch, _cached_art_key_fingerprint
+    static_token = str(os.getenv("YANDEX_ART_IAM_TOKEN", "") or "").strip()
+    if static_token:
+        return YandexIamTokenResult(
+            configured=True,
+            available=True,
+            token=static_token,
+            auth_mode="static_iam_token",
+        )
+
+    key = _load_art_authorized_key()
+    configured = yandex_art_renewable_auth_configured()
+    if key is None:
+        return YandexIamTokenResult(
+            configured=configured,
+            available=False,
+            auth_mode="authorized_key" if configured else "",
+            error_code="yandex_art_invalid_authorized_key" if configured else "",
+        )
+
+    fingerprint = _fingerprint(key)
+    now = time.time()
+    with _cache_lock:
+        if (
+            _cached_art_token
+            and _cached_art_key_fingerprint == fingerprint
+            and _cached_art_expires_epoch - now > 300
+        ):
+            return YandexIamTokenResult(
+                configured=True,
+                available=True,
+                token=_cached_art_token,
+                expires_at_epoch=_cached_art_expires_epoch,
+                auth_mode="authorized_key",
+            )
+
+    try:
+        jwt_token = _create_jwt(key)
+        token, expires_epoch = _exchange_jwt(jwt_token)
+    except FileNotFoundError:
+        return YandexIamTokenResult(
+            configured=True,
+            available=False,
+            auth_mode="authorized_key",
+            error_code="yandex_art_iam_signer_unavailable",
+        )
+    except subprocess.TimeoutExpired:
+        return YandexIamTokenResult(
+            configured=True,
+            available=False,
+            auth_mode="authorized_key",
+            error_code="yandex_art_iam_sign_timeout",
+        )
+    except RuntimeError as exc:
+        return YandexIamTokenResult(
+            configured=True,
+            available=False,
+            auth_mode="authorized_key",
+            error_code=_art_error_code(str(exc or "")),
+        )
+
+    with _cache_lock:
+        _cached_art_token = token
+        _cached_art_expires_epoch = expires_epoch
+        _cached_art_key_fingerprint = fingerprint
+    return YandexIamTokenResult(
+        configured=True,
+        available=True,
+        token=token,
+        expires_at_epoch=expires_epoch,
+        auth_mode="authorized_key",
+    )
+
+
+def clear_yandex_art_iam_cache() -> None:
+    global _cached_art_token, _cached_art_expires_epoch, _cached_art_key_fingerprint
+    with _cache_lock:
+        _cached_art_token = ""
+        _cached_art_expires_epoch = 0.0
+        _cached_art_key_fingerprint = ""
+
+
 def clear_yandex_billing_iam_cache() -> None:
     global _cached_token, _cached_expires_epoch, _cached_key_fingerprint
     with _cache_lock:
@@ -301,6 +427,9 @@ def clear_yandex_billing_iam_cache() -> None:
 
 __all__ = [
     "YandexIamTokenResult",
+    "clear_yandex_art_iam_cache",
     "clear_yandex_billing_iam_cache",
+    "get_yandex_art_iam_token",
     "get_yandex_billing_iam_token",
+    "yandex_art_renewable_auth_configured",
 ]

@@ -42,6 +42,7 @@ services:
       - /tmp:size=256m,mode=1777
     volumes:
       - ${CLIENTPLATFORM_VISUAL_PROVIDER_DATA_DIR:-/opt/visual-creative-gateway/data}:/data
+      - ${CLIENTPLATFORM_YANDEX_BILLING_SECRET_HOST_DIR:-/var/lib/clientplatform/yandex-billing-secrets}:/run/secrets/clientplatform-yandex-billing:ro
     expose: ["8097"]
     healthcheck:
       test:

@@ -363,3 +363,161 @@ def test_get_token_normalizes_signer_and_unknown_runtime_failures(monkeypatch):
         result = iam.get_yandex_billing_iam_token()
         assert result.available is False
         assert result.error_code == expected
+
+def test_yandex_art_authorized_key_uses_dedicated_source_and_caches(monkeypatch):
+    iam.clear_yandex_art_iam_cache()
+    monkeypatch.setenv("YANDEX_ART_AUTHORIZED_KEY_JSON", _key_json())
+    monkeypatch.delenv("YANDEX_ART_AUTHORIZED_KEY_FILE", raising=False)
+    monkeypatch.delenv("YANDEX_ART_IAM_TOKEN", raising=False)
+    monkeypatch.setenv("YANDEX_BILLING_AUTHORIZED_KEY_JSON", '{"id":"wrong"}')
+    monkeypatch.setattr(iam, "_create_jwt", lambda key: f"jwt-{key.key_id}")
+    calls = 0
+
+    def exchange(jwt_token):
+        nonlocal calls
+        calls += 1
+        assert jwt_token == "jwt-key-1"
+        return "art-iam-token", time.time() + 3600
+
+    monkeypatch.setattr(iam, "_exchange_jwt", exchange)
+
+    first = iam.get_yandex_art_iam_token()
+    second = iam.get_yandex_art_iam_token()
+
+    assert first.available is True
+    assert first.auth_mode == "authorized_key"
+    assert first.token == "art-iam-token"
+    assert second.token == "art-iam-token"
+    assert calls == 1
+
+
+def test_yandex_art_authorized_key_can_reuse_billing_source(monkeypatch):
+    iam.clear_yandex_art_iam_cache()
+    monkeypatch.delenv("YANDEX_ART_AUTHORIZED_KEY_JSON", raising=False)
+    monkeypatch.delenv("YANDEX_ART_AUTHORIZED_KEY_FILE", raising=False)
+    monkeypatch.delenv("YANDEX_ART_IAM_TOKEN", raising=False)
+    monkeypatch.setenv("YANDEX_BILLING_AUTHORIZED_KEY_JSON", _key_json())
+    monkeypatch.setattr(iam, "_create_jwt", lambda _key: "jwt-token")
+    monkeypatch.setattr(
+        iam,
+        "_exchange_jwt",
+        lambda _jwt: ("renewable-art-token", time.time() + 3600),
+    )
+
+    result = iam.get_yandex_art_iam_token()
+
+    assert iam.yandex_art_renewable_auth_configured() is True
+    assert result.available is True
+    assert result.token == "renewable-art-token"
+
+
+def test_yandex_art_invalid_authorized_key_fails_closed(monkeypatch):
+    iam.clear_yandex_art_iam_cache()
+    monkeypatch.delenv("YANDEX_ART_IAM_TOKEN", raising=False)
+    monkeypatch.setenv("YANDEX_ART_AUTHORIZED_KEY_JSON", '{"id":"broken"}')
+    monkeypatch.delenv("YANDEX_ART_AUTHORIZED_KEY_FILE", raising=False)
+
+    result = iam.get_yandex_art_iam_token()
+
+    assert result.configured is True
+    assert result.available is False
+    assert result.error_code == "yandex_art_invalid_authorized_key"
+
+def _clear_art_auth_env(monkeypatch):
+    for name in (
+        "YANDEX_ART_IAM_TOKEN",
+        "YANDEX_ART_AUTHORIZED_KEY_JSON",
+        "YANDEX_ART_AUTHORIZED_KEY_FILE",
+        "YANDEX_BILLING_AUTHORIZED_KEY_JSON",
+        "YANDEX_BILLING_AUTHORIZED_KEY_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_yandex_art_static_iam_token_and_absent_configuration(monkeypatch):
+    iam.clear_yandex_art_iam_cache()
+    _clear_art_auth_env(monkeypatch)
+
+    absent = iam.get_yandex_art_iam_token()
+    assert absent.configured is False
+    assert absent.available is False
+    assert iam.yandex_art_renewable_auth_configured() is False
+
+    monkeypatch.setenv("YANDEX_ART_IAM_TOKEN", "static-art-token")
+    static = iam.get_yandex_art_iam_token()
+    assert static.configured is True
+    assert static.available is True
+    assert static.auth_mode == "static_iam_token"
+    assert static.token == "static-art-token"
+    assert iam.yandex_art_renewable_auth_configured() is True
+
+
+def test_yandex_art_iam_signer_failures_are_bounded(monkeypatch):
+    iam.clear_yandex_art_iam_cache()
+    _clear_art_auth_env(monkeypatch)
+    monkeypatch.setenv("YANDEX_ART_AUTHORIZED_KEY_JSON", _key_json())
+
+    failures = [
+        (FileNotFoundError("openssl"), "yandex_art_iam_signer_unavailable"),
+        (
+            subprocess.TimeoutExpired(cmd="openssl", timeout=10),
+            "yandex_art_iam_sign_timeout",
+        ),
+    ]
+    for exc, expected in failures:
+        iam.clear_yandex_art_iam_cache()
+
+        def broken(_key, _exc=exc):
+            raise _exc
+
+        monkeypatch.setattr(iam, "_create_jwt", broken)
+        result = iam.get_yandex_art_iam_token()
+        assert result.configured is True
+        assert result.available is False
+        assert result.error_code == expected
+
+
+def test_yandex_art_iam_exchange_errors_are_normalized(monkeypatch):
+    iam.clear_yandex_art_iam_cache()
+    _clear_art_auth_env(monkeypatch)
+    monkeypatch.setenv("YANDEX_ART_AUTHORIZED_KEY_JSON", _key_json())
+    monkeypatch.setattr(iam, "_create_jwt", lambda _key: "jwt-token")
+
+    for raw, expected in (
+        ("yandex_billing_iam_http_403", "yandex_art_iam_http_403"),
+        ("unexpected-detail", "yandex_art_iam_unavailable"),
+    ):
+        iam.clear_yandex_art_iam_cache()
+
+        def broken(_jwt, _raw=raw):
+            raise RuntimeError(_raw)
+
+        monkeypatch.setattr(iam, "_exchange_jwt", broken)
+        result = iam.get_yandex_art_iam_token()
+        assert result.configured is True
+        assert result.available is False
+        assert result.error_code == expected
+
+
+def test_clear_yandex_art_iam_cache_forces_refresh(monkeypatch):
+    iam.clear_yandex_art_iam_cache()
+    _clear_art_auth_env(monkeypatch)
+    monkeypatch.setenv("YANDEX_ART_AUTHORIZED_KEY_JSON", _key_json())
+    monkeypatch.setattr(iam, "_create_jwt", lambda _key: "jwt-token")
+    calls = 0
+
+    def exchange(_jwt):
+        nonlocal calls
+        calls += 1
+        return f"art-token-{calls}", time.time() + 3600
+
+    monkeypatch.setattr(iam, "_exchange_jwt", exchange)
+    first = iam.get_yandex_art_iam_token()
+    cached = iam.get_yandex_art_iam_token()
+    iam.clear_yandex_art_iam_cache()
+    refreshed = iam.get_yandex_art_iam_token()
+
+    assert first.token == cached.token == "art-token-1"
+    assert refreshed.token == "art-token-2"
+    assert calls == 2
+

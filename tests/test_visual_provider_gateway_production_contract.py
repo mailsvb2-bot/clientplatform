@@ -19,6 +19,10 @@ class VisualProviderGatewayProductionContractTests(unittest.TestCase):
             "${CLIENTPLATFORM_VISUAL_PROVIDER_DATA_DIR:-/opt/visual-creative-gateway/data}:/data",
             compose,
         )
+        self.assertIn(
+            "${CLIENTPLATFORM_YANDEX_BILLING_SECRET_HOST_DIR:-/var/lib/clientplatform/yandex-billing-secrets}:/run/secrets/clientplatform-yandex-billing:ro",
+            compose,
+        )
         self.assertNotIn("VISUAL_GATEWAY_UPSTREAM_URL: http://visual-creative-gateway:8097", compose)
         provider_section = compose.split("  visual-provider-gateway:", 1)[1].split("\n  visual-gateway:", 1)[0]
         self.assertIn('expose: ["8097"]', provider_section)
@@ -63,9 +67,25 @@ class VisualProviderGatewayProductionContractTests(unittest.TestCase):
 
         self.assertIn("ARG VCS_REF=unknown", dockerfile)
         self.assertIn('org.opencontainers.image.revision="$VCS_REF"', dockerfile)
+        self.assertIn("apt-get install -y --no-install-recommends ffmpeg openssl", dockerfile)
+        self.assertIn("COPY services/yandex_iam_token.py /app/services/yandex_iam_token.py", dockerfile)
         self.assertIn("COPY visual_provider_gateway /app/visual_provider_gateway", dockerfile)
         self.assertIn('"visual_provider_gateway.app:app"', run_module)
         self.assertNotIn('"visual_gateway.app:app"', run_module)
+
+    def test_production_visual_diagnostic_fails_closed_when_provider_is_unavailable(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/production-visual-provider-diagnostic.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('and safe["configured_video"]', workflow)
+        self.assertIn('and not safe["runtime_image_error"]', workflow)
+        self.assertIn('and not safe["runtime_video_error"]', workflow)
+        self.assertIn('if readiness != "ready":', workflow)
+        self.assertIn("raise SystemExit(28)", workflow)
+        self.assertIn("YANDEX_ART_AUTHORIZED_KEY_FILE", workflow)
+        self.assertIn("YANDEX_BILLING_AUTHORIZED_KEY_FILE", workflow)
 
 
 if __name__ == "__main__":

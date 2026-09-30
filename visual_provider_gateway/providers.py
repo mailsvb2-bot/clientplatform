@@ -19,6 +19,11 @@ import uuid
 from pathlib import Path
 from typing import Any, Protocol
 
+from services.yandex_iam_token import (
+    get_yandex_art_iam_token,
+    yandex_art_renewable_auth_configured,
+)
+
 from .models import CreativeBrief, CreativeJob, ProviderConfig, ensure_output_dir
 
 
@@ -268,11 +273,16 @@ class YandexArtProvider:
         return kind == "image"
 
     def configured(self, kind: str) -> bool:
+        credential_ready = bool(
+            self.config.api_key or yandex_art_renewable_auth_configured()
+        )
         return self.supports(kind) and bool(
-            self.config.api_key and (self.config.folder_id or self.config.model_image)
+            credential_ready and (self.config.folder_id or self.config.model_image)
         )
 
-    def _authorization(self) -> str:
+    def _primary_authorization(self) -> str:
+        if not self.config.api_key:
+            return ""
         scheme = str(os.getenv("YANDEX_ART_AUTH_SCHEME", "") or "").strip()
         if not scheme:
             scheme = (
@@ -284,8 +294,30 @@ class YandexArtProvider:
             )
         return f"{scheme} {self.config.api_key}"
 
-    def _headers(self) -> dict[str, str]:
-        return {"Authorization": self._authorization()}
+    def _renewable_authorization(self) -> str:
+        result = get_yandex_art_iam_token()
+        if not result.available or not result.token:
+            return ""
+        return f"Bearer {result.token}"
+
+    def _authorization(self) -> str:
+        primary = self._primary_authorization()
+        if primary:
+            return primary
+        renewable = self._renewable_authorization()
+        if renewable:
+            return renewable
+        raise ProviderTransportError("provider_not_configured")
+
+    @staticmethod
+    def _auth_rejected(exc: BaseException) -> bool:
+        return isinstance(exc, ProviderTransportError) and str(exc or "").strip() in {
+            "http_401",
+            "http_403",
+        }
+
+    def _headers(self, authorization: str = "") -> dict[str, str]:
+        return {"Authorization": authorization or self._authorization()}
 
     def _generation_url(self) -> str:
         return (
@@ -352,7 +384,12 @@ class YandexArtProvider:
         job.error_code = ""
         return _store_asset(self.config, job, raw)
 
-    def _submit_compat(self, brief: CreativeBrief) -> CreativeJob:
+    def _submit_compat(
+        self,
+        brief: CreativeBrief,
+        *,
+        authorization: str,
+    ) -> CreativeJob:
         last_error: BaseException | None = None
         for model_uri in _yandex_image_model_candidates(self.config):
             try:
@@ -360,7 +397,7 @@ class YandexArtProvider:
                     "POST",
                     self.config.base_url.rstrip("/") + "/v1/images/generations",
                     headers={
-                        "Authorization": self._authorization(),
+                        "Authorization": authorization,
                         "OpenAI-Project": self.config.folder_id,
                     },
                     payload={
@@ -409,10 +446,12 @@ class YandexArtProvider:
             raise last_error
         raise ProviderTransportError("provider_not_configured")
 
-    def submit(self, brief: CreativeBrief) -> CreativeJob:
-        if not self.configured(brief.kind):
-            raise ProviderTransportError("provider_not_configured")
-
+    def _submit_with_authorization(
+        self,
+        brief: CreativeBrief,
+        *,
+        authorization: str,
+    ) -> CreativeJob:
         width, height = _ratio_pair(brief.aspect_ratio)
         messages: list[dict[str, Any]] = [{"text": brief.prompt, "weight": "1"}]
         if brief.negative_prompt:
@@ -433,7 +472,7 @@ class YandexArtProvider:
                 operation = _json_request(
                     "POST",
                     self._generation_url(),
-                    headers=self._headers(),
+                    headers=self._headers(authorization),
                     payload={
                         "modelUri": model_uri,
                         "messages": messages,
@@ -462,21 +501,69 @@ class YandexArtProvider:
             return self._materialize_operation(job, operation)
 
         if last_error is not None and _definitive_model_rejection(last_error):
-            return self._submit_compat(brief)
+            return self._submit_compat(brief, authorization=authorization)
         if last_error is not None:
             raise last_error
+        raise ProviderTransportError("provider_not_configured")
+
+    def submit(self, brief: CreativeBrief) -> CreativeJob:
+        if not self.configured(brief.kind):
+            raise ProviderTransportError("provider_not_configured")
+
+        primary = self._primary_authorization()
+        if primary:
+            try:
+                return self._submit_with_authorization(
+                    brief,
+                    authorization=primary,
+                )
+            except ProviderTransportError as exc:
+                if not self._auth_rejected(exc):
+                    raise
+                renewable = self._renewable_authorization()
+                if not renewable or renewable == primary:
+                    raise
+                return self._submit_with_authorization(
+                    brief,
+                    authorization=renewable,
+                )
+
+        renewable = self._renewable_authorization()
+        if renewable:
+            return self._submit_with_authorization(
+                brief,
+                authorization=renewable,
+            )
         raise ProviderTransportError("provider_not_configured")
 
     def poll(self, job: CreativeJob) -> CreativeJob:
         if job.done:
             return job
-        operation = _json_request(
-            "GET",
-            self._operation_url(job.external_id),
-            headers=self._headers(),
-            timeout=self.config.timeout_seconds,
-            max_bytes=self.config.max_json_bytes,
-        )
+        primary = self._primary_authorization()
+        authorization = primary or self._renewable_authorization()
+        if not authorization:
+            raise ProviderTransportError("provider_not_configured")
+        try:
+            operation = _json_request(
+                "GET",
+                self._operation_url(job.external_id),
+                headers=self._headers(authorization),
+                timeout=self.config.timeout_seconds,
+                max_bytes=self.config.max_json_bytes,
+            )
+        except ProviderTransportError as exc:
+            if not primary or not self._auth_rejected(exc):
+                raise
+            renewable = self._renewable_authorization()
+            if not renewable or renewable == primary:
+                raise
+            operation = _json_request(
+                "GET",
+                self._operation_url(job.external_id),
+                headers=self._headers(renewable),
+                timeout=self.config.timeout_seconds,
+                max_bytes=self.config.max_json_bytes,
+            )
         return self._materialize_operation(job, operation)
 
 
@@ -564,8 +651,11 @@ class YandexArtMotionVideoProvider(YandexArtProvider):
         return kind == "video"
 
     def configured(self, kind: str) -> bool:
+        credential_ready = bool(
+            self.config.api_key or yandex_art_renewable_auth_configured()
+        )
         return self.supports(kind) and bool(
-            self.config.api_key and (self.config.folder_id or self.config.model_image)
+            credential_ready and (self.config.folder_id or self.config.model_image)
         )
 
     def _render_ready_image(
