@@ -384,7 +384,7 @@ def build_ad_visual_brief(
     if visual_kind not in {"image", "video"}:
         raise ValueError("kind must be image or video")
     service = normalize_business_image_request(str(title or ""))
-    context = " ".join(str(body or "").replace("\\x00", " ").split()).strip()
+    context = " ".join(str(body or "").replace("\x00", " ").split()).strip()
     owner_request = f"Create an advertising visual for {service}."
     if context:
         owner_request += f" Context: {context}"
