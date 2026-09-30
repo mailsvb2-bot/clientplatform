@@ -426,6 +426,7 @@ def build_ad_visual_brief(
     kind: str,
     country_code: str = "",
     preferred_provider: str = "",
+    style_intent: VisualStyleIntent | None = None,
 ) -> VisualCreativeBrief:
     visual_kind = str(kind or "image").strip().lower()
     if visual_kind not in {"image", "video"}:
@@ -440,6 +441,7 @@ def build_ad_visual_brief(
         kind=visual_kind,
         brand_context=f"Service or offering: {service}. {context}".strip()[:1200],
         purpose="advertising",
+        style_intent=style_intent,
     )
     return VisualCreativeBrief(
         kind=visual_kind,
@@ -463,6 +465,7 @@ def create_ad_visual(
     country_code: str = "",
     preferred_provider: str = "",
     wait_seconds: int = 20,
+    style_intent: VisualStyleIntent | None = None,
 ) -> VisualCreativeJob:
     try:
         return submit_visual(
@@ -472,6 +475,7 @@ def create_ad_visual(
                 kind=kind,
                 country_code=country_code,
                 preferred_provider=preferred_provider,
+                style_intent=style_intent,
             ),
             scope_id=scope_id,
             idempotency_key=idempotency_key,
