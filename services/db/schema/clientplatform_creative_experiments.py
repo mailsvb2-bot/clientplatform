@@ -64,6 +64,9 @@ def ensure(c: sqlite3.Connection) -> None:
             idempotency_key TEXT NOT NULL,
             source_job_id TEXT NOT NULL DEFAULT '',
             delivery_claimed_at TEXT NOT NULL DEFAULT '',
+            semantic_review_json TEXT NOT NULL DEFAULT '',
+            semantic_reviewed_at TEXT NOT NULL DEFAULT '',
+            semantic_review_override_at TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
@@ -78,6 +81,9 @@ def ensure(c: sqlite3.Connection) -> None:
             CHECK(length(provider_payload_json) BETWEEN 1 AND 10000),
             CHECK(length(idempotency_key) BETWEEN 8 AND 200),
             CHECK(length(source_job_id) <= 128),
+            CHECK(length(semantic_review_json) <= 4000),
+            CHECK(length(semantic_reviewed_at) <= 64),
+            CHECK(length(semantic_review_override_at) <= 64),
             CHECK(status IN (
                 'prepared', 'submitting', 'queued', 'running',
                 'succeeded', 'failed', 'delivered'
@@ -93,6 +99,22 @@ def ensure(c: sqlite3.Connection) -> None:
         c.execute(
             "ALTER TABLE creative_generation_receipts "
             "ADD COLUMN delivery_claimed_at TEXT NOT NULL DEFAULT ''"
+        )
+
+    if "semantic_review_json" not in columns:
+        c.execute(
+            "ALTER TABLE creative_generation_receipts "
+            "ADD COLUMN semantic_review_json TEXT NOT NULL DEFAULT ''"
+        )
+    if "semantic_reviewed_at" not in columns:
+        c.execute(
+            "ALTER TABLE creative_generation_receipts "
+            "ADD COLUMN semantic_reviewed_at TEXT NOT NULL DEFAULT ''"
+        )
+    if "semantic_review_override_at" not in columns:
+        c.execute(
+            "ALTER TABLE creative_generation_receipts "
+            "ADD COLUMN semantic_review_override_at TEXT NOT NULL DEFAULT ''"
         )
 
     c.execute(
