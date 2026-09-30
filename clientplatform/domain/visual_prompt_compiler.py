@@ -11,6 +11,12 @@ same request into the same provider prompt and never require a second LLM call.
 from dataclasses import dataclass
 import re
 
+from clientplatform.domain.visual_style_intent import (
+    VisualStyleIntent,
+    resolve_visual_style_intent,
+    visual_style_prompt_directives,
+)
+
 
 _MAX_REQUEST_CHARS = 1500
 _MAX_BRAND_CONTEXT_CHARS = 1200
@@ -80,6 +86,7 @@ class CompiledVisualPrompt:
     prompt: str
     negative_prompt: str
     semantic_flags: tuple[str, ...]
+    style_intent: VisualStyleIntent
 
 
 def _clean(value: str, *, field: str, limit: int) -> str:
@@ -206,6 +213,7 @@ def compile_visual_prompt(
     kind: str,
     brand_context: str = "",
     purpose: str = "owner_visual",
+    style_intent: VisualStyleIntent | None = None,
 ) -> CompiledVisualPrompt:
     owner_request = _clean(
         request,
@@ -229,6 +237,10 @@ def compile_visual_prompt(
         raise ValueError("visual purpose is invalid")
 
     flags = _semantic_flags(owner_request)
+    resolved_style = resolve_visual_style_intent(
+        request=owner_request,
+        selected=style_intent,
+    )
     explicit_text = "explicit_text" in flags
     if visual_kind == "video":
         medium = (
@@ -259,6 +271,9 @@ def compile_visual_prompt(
         *_transformation_directives(visual_kind, flags),
         *_sequence_directives(visual_kind, flags),
         *_business_context_directive(brand),
+        "Style choices may shape presentation but must never remove or contradict "
+        "mandatory subjects, actions, relationships, chronology or state changes.",
+        *visual_style_prompt_directives(resolved_style, kind=visual_kind),
     ]
 
     if "comparison" in flags and "transformation" not in flags:
@@ -350,6 +365,7 @@ def compile_visual_prompt(
         prompt=prompt,
         negative_prompt=negative_prompt,
         semantic_flags=flags,
+        style_intent=resolved_style,
     )
 
 
