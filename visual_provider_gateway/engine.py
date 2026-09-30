@@ -8,7 +8,7 @@ from datetime import date
 from dataclasses import replace
 
 from .models import CreativeBrief, CreativeJob, ProviderConfig
-from .prompt_adapter import adapt_visual_brief_for_provider
+from .prompt_adapter import PROMPT_ADAPTER_VERSION, adapt_visual_brief_for_provider
 from .providers import (
     CreativeProvider,
     GigaChatImageProvider,
@@ -489,6 +489,10 @@ class VisualCreativeEngine:
                     provider=name,
                 )
                 job = provider.submit(provider_brief)
+                job.provider_payload.setdefault(
+                    "prompt_adapter_version",
+                    PROMPT_ADAPTER_VERSION,
+                )
                 self._circuit_open_until.pop(name, None)
                 self._record_runtime(
                     kind=normalized.kind,
