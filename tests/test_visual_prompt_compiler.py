@@ -30,6 +30,10 @@ class VisualPromptCompilerTests(unittest.TestCase):
         self.assertIn("same subject", compiled.prompt)
         self.assertIn("Brand name: Метротерапия", compiled.prompt)
         self.assertIn("unfamiliar names", compiled.prompt)
+        self.assertLess(
+            compiled.prompt.index("listening unmistakable"),
+            compiled.prompt.index("Business grounding"),
+        )
         self.assertIn("generic isolated portrait", compiled.negative_prompt)
         self.assertIn(
             "single-state image with no visible transformation",
@@ -58,6 +62,7 @@ class VisualPromptCompilerTests(unittest.TestCase):
 
         self.assertNotIn("transformation", compiled.semantic_flags)
         self.assertNotIn("listening", compiled.semantic_flags)
+        self.assertNotIn("reading", compiled.semantic_flags)
         self.assertNotIn(
             "single-state image with no visible transformation",
             compiled.negative_prompt,
