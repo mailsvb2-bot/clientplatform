@@ -298,3 +298,88 @@ def test_mobile_form_factor_adapter_fails_closed_on_external_evidence() -> None:
     assert "resume_verified" in source
     assert "completed.stdout" not in source
     assert "shell=True" not in source
+
+
+def test_staging_fixture_is_cli_only_staging_and_delete_free() -> None:
+    source = (ROOT / "scripts" / "clientplatform_live_e2e_fixture.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'APP_ENV_must_be_staging' in source
+    assert 'synthetic_staging_database_attestation_required' in source
+    assert 'production_credentials_forbidden' in source
+    assert 'real_money_forbidden' in source
+    assert 'dedicated_test_accounts_not_confirmed' in source
+    assert 'archive_business' in source
+    assert 'business.name.startswith(config.prefix + " ")' in source
+    assert "DELETE FROM" not in source.upper()
+    assert "DROP TABLE" not in source.upper()
+    assert "TRUNCATE" not in source.upper()
+    assert "FastAPI" not in source
+    assert "APIRouter" not in source
+    assert "aiohttp" not in source
+    assert "requests." not in source
+
+
+def test_staging_fixture_uses_canonical_idempotent_entities() -> None:
+    source = (ROOT / "scripts" / "clientplatform_live_e2e_fixture.py").read_text(
+        encoding="utf-8"
+    )
+    for call in (
+        "create_business_offering(",
+        "create_program(",
+        "add_program_lesson(",
+        "create_publication_draft(",
+        "record_payment(",
+        "set_offering_price(",
+        "create_booking_slot(",
+        "attach_customer_identity(",
+        "set_owner_control_workspace(",
+    ):
+        assert call in source
+    assert 'idempotency_key=f"e2e:{config.namespace}:{config.run_key}:offering"' in source
+    assert 'idempotency_key=f"e2e:{config.namespace}:{config.run_key}:program"' in source
+    assert 'idempotency_key=f"e2e:{config.namespace}:{config.run_key}:publication"' in source
+    assert 'idempotency_key=f"e2e:{config.namespace}:{config.run_key}:payment"' in source
+    assert '_FIXED_BOOKING_START_UTC' in source
+    assert 'include_unavailable=True' in source
+
+
+def test_staging_fixture_guard_rejects_production_and_unsafe_flags() -> None:
+    from scripts.clientplatform_live_e2e_fixture import (
+        FixtureSafetyError,
+        validate_fixture_environment,
+    )
+
+    safe = {
+        "APP_ENV": "staging",
+        "CLIENTPLATFORM_LIVE_E2E": "1",
+        "CLIENTPLATFORM_LIVE_E2E_TEST_ACCOUNTS": "1",
+        "CLIENTPLATFORM_LIVE_E2E_PRODUCTION_CREDENTIALS": "0",
+        "CLIENTPLATFORM_LIVE_E2E_REAL_MONEY": "0",
+        "CLIENTPLATFORM_E2E_FIXTURE_DATABASE_ATTESTATION": "synthetic-staging",
+        "CLIENTPLATFORM_E2E_FIXTURE_NAMESPACE": "canonical",
+        "CLIENTPLATFORM_E2E_FIXTURE_RUN_KEY": "run-123",
+        "CLIENTPLATFORM_E2E_FIXTURE_OWNER_USER_ID": "910001",
+        "CLIENTPLATFORM_E2E_FIXTURE_MEMBER_USER_ID": "910002",
+        "CLIENTPLATFORM_E2E_FIXTURE_CUSTOMER_TELEGRAM_SUBJECT": "tg-e2e-customer",
+        "CLIENTPLATFORM_E2E_FIXTURE_CUSTOMER_VK_SUBJECT": "vk-e2e-customer",
+        "CLIENTPLATFORM_E2E_FIXTURE_CUSTOMER_MAX_SUBJECT": "max-e2e-customer",
+    }
+    config = validate_fixture_environment(safe)
+    assert config.namespace == "canonical"
+    assert config.run_key == "run-123"
+
+    for key, value in (
+        ("APP_ENV", "production"),
+        ("CLIENTPLATFORM_LIVE_E2E_PRODUCTION_CREDENTIALS", "1"),
+        ("CLIENTPLATFORM_LIVE_E2E_REAL_MONEY", "1"),
+        ("CLIENTPLATFORM_E2E_FIXTURE_DATABASE_ATTESTATION", "production"),
+    ):
+        unsafe = dict(safe)
+        unsafe[key] = value
+        try:
+            validate_fixture_environment(unsafe)
+        except FixtureSafetyError:
+            pass
+        else:
+            raise AssertionError(f"unsafe fixture environment accepted: {key}")

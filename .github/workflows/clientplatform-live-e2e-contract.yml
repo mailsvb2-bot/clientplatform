@@ -41,6 +41,10 @@ jobs:
           python -m py_compile scripts/live_e2e/mobile/appium_driver.py
           python -m py_compile scripts/live_e2e/mobile/hypium_adapter.py
           python -m py_compile scripts/live_e2e/mobile/form_factor_adapter.py
+          python -m py_compile scripts/clientplatform_live_e2e_fixture.py
+
+      - name: Validate staging fixture plan
+        run: python scripts/clientplatform_live_e2e_fixture.py --plan
 
       - name: Parse Windows E2E scripts
         shell: powershell
