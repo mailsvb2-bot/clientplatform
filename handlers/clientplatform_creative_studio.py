@@ -97,9 +97,12 @@ class ClientPlatformCreativeStudioState(StatesGroup):
 def _receipt_kind(receipt: CreativeGenerationReceipt | None) -> str:
     if receipt is None:
         return "image"
+    payload = str(getattr(receipt, "provider_payload_json", "") or "").strip()
+    if not payload:
+        return "image"
     try:
-        return frozen_business_visual_kind(receipt.provider_payload_json)
-    except ValueError:
+        return frozen_business_visual_kind(payload)
+    except (TypeError, ValueError):
         return "image"
 
 
@@ -717,6 +720,9 @@ async def _prepare_styled_generation(
         )
     except TenantPermissionDenied:
         await target.answer("Создание визуалов недоступно для Вашей роли.")
+        return
+    except OSError:
+        await target.answer("Не удалось безопасно подготовить генерацию. Попробуйте позже.")
         return
     except (KeyError, TypeError, ValueError):
         await target.answer("Не удалось безопасно подготовить генерацию. Попробуйте позже.")
@@ -1692,11 +1698,11 @@ def install_creative_studio_safety(safety: ModuleType) -> None:
 
     original_state_local = cast(
         Callable[[str, str], bool],
-        getattr(safety, "_state_local_callback_allowed"),
+        getattr(safety, "_state_local_callback_allowed", lambda _state, _data: False),
     )
     original_escape = cast(
         Callable[[str, str], bool],
-        getattr(safety, "_callback_can_escape_state"),
+        getattr(safety, "_callback_can_escape_state", lambda _state, _data: False),
     )
 
     def state_local_callback_allowed(current_state: str, callback_data: str) -> bool:
