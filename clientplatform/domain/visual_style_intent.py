@@ -254,8 +254,24 @@ def infer_visual_style_intent(request: str) -> VisualStyleInference:
         ("color_temperature", "warm", (r"\bт[её]пл\w*", r"\bwarm\w*")),
         ("color_temperature", "cool", (r"\bхолодн\w*", r"\bcool\b", r"\bcold\b")),
         ("color_temperature", "neutral", (r"\bнейтральн\w*", r"\bneutral\b")),
-        ("emotional_tone", "friendly", (r"\bдобр\w*", r"\bдружелюб\w*", r"\bfriendly\b")),
-        ("emotional_tone", "calm", (r"\bспокойн\w*", r"\bумиротвор\w*", r"\bcalm\w*")),
+        (
+            "emotional_tone",
+            "friendly",
+            (
+                r"\bдоброжелательн\w*",
+                r"\bдружелюбн\w*(?:\s+\w+){0,3}\s+(?:сцен|картин|визуал|атмосфер)\w*",
+                r"\bfriendly\s+(?:scene|image|visual|mood)\b",
+            ),
+        ),
+        (
+            "emotional_tone",
+            "calm",
+            (
+                r"\bспокойн\w*(?:\s+\w+){0,3}\s+(?:сцен|картин|фотограф|визуал|атмосфер)\w*",
+                r"\bумиротвор[её]нн\w*",
+                r"\bcalm\s+(?:scene|image|visual|mood)\b",
+            ),
+        ),
         ("emotional_tone", "dramatic", (r"\bдрамат\w*", r"\bdramatic\w*", r"\bcinematic\w*")),
         ("emotional_tone", "aggressive", (r"\bагрессив\w*", r"\baggressive\w*")),
         ("emotional_tone", "playful", (r"\bигрив\w*", r"\bвес[её]л\w*", r"\bplayful\w*")),
@@ -267,7 +283,15 @@ def infer_visual_style_intent(request: str) -> VisualStyleInference:
         ("realism", "illustrative", (r"\bиллюстрац\w*", r"\bрисован\w*", r"\billustrat\w*")),
         ("lighting", "bright", (r"\bсветл\w*", r"\bярк(?:ий|ая|ое|о)\b", r"\bbright\w*")),
         ("lighting", "dark", (r"\bт[её]мн\w*", r"\bmрачн\w*", r"\bdark\w*")),
-        ("contrast", "soft", (r"\bмягк\w*", r"\bsoft\b", r"\blow[- ]contrast\b")),
+        (
+            "contrast",
+            "soft",
+            (
+                r"\bмягк\w*(?:\s+\w+){0,3}\s+(?:свет|контраст|тон|палитр|цвет|сцен|картин|визуал)\w*",
+                r"\bsoft\s+(?:light|lighting|contrast|tones?|palette|image|visual)\b",
+                r"\blow[- ]contrast\b",
+            ),
+        ),
         ("contrast", "strong", (r"\bконтрастн\w*", r"\bstrong[- ]contrast\b")),
         ("detail", "minimal", (r"\bминималист\w*", r"\bminimal\w*")),
         ("detail", "detailed", (r"\bдетальн\w*", r"\bподробн\w*", r"\bdetailed\w*")),
