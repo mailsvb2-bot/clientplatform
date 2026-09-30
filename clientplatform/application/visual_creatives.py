@@ -251,6 +251,22 @@ def frozen_business_visual_kind(value: str) -> str:
     return brief.kind
 
 
+def frozen_business_visual_style(value: str) -> VisualStyleIntent | None:
+    """Return the exact style snapshot for v2 receipts; legacy v1 has none."""
+
+    _load_frozen_business_visual_payload(value)
+    raw = json.loads(str(value or ""))
+    if int(raw.get("version") or 0) < 2:
+        return None
+    intent = raw.get("intent")
+    if not isinstance(intent, dict):
+        raise ValueError("frozen business visual intent is invalid")
+    style = intent.get("style")
+    if not isinstance(style, dict):
+        raise ValueError("frozen business visual style is invalid")
+    return VisualStyleIntent.from_mapping(style)
+
+
 def frozen_business_visual_binding(value: str) -> dict[str, str] | None:
     raw = json.loads(str(value or ""))
     if not isinstance(raw, dict):
