@@ -151,3 +151,20 @@ def ensure(c: sqlite3.Connection) -> None:
         ON editable_ad_projects(business_id, publication_job_id, kind, updated_at)
         """
     )
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS visual_style_preferences(
+            business_id TEXT NOT NULL,
+            member_id TEXT NOT NULL,
+            style_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(business_id, member_id),
+            FOREIGN KEY(business_id) REFERENCES businesses(id) ON DELETE CASCADE,
+            FOREIGN KEY(member_id, business_id)
+                REFERENCES business_members(id, business_id) ON DELETE CASCADE,
+            CHECK(length(style_json) BETWEEN 2 AND 2048)
+        )
+        """
+    )
