@@ -23,6 +23,12 @@ class VisualProviderGatewayProductionContractTests(unittest.TestCase):
             "${CLIENTPLATFORM_YANDEX_BILLING_SECRET_HOST_DIR:-/var/lib/clientplatform/yandex-billing-secrets}:/run/secrets/clientplatform-yandex-billing:ro",
             compose,
         )
+        self.assertEqual(
+            compose.count(
+                "YANDEX_BILLING_AUTHORIZED_KEY_FILE: ${YANDEX_BILLING_AUTHORIZED_KEY_FILE:-/run/secrets/clientplatform-yandex-billing/authorized-key.json}"
+            ),
+            2,
+        )
         self.assertNotIn("VISUAL_GATEWAY_UPSTREAM_URL: http://visual-creative-gateway:8097", compose)
         provider_section = compose.split("  visual-provider-gateway:", 1)[1].split("\n  visual-gateway:", 1)[0]
         self.assertIn('expose: ["8097"]', provider_section)

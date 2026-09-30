@@ -37,6 +37,7 @@ services:
       VISUAL_TRANSIENT_ASSET_CLEANUP_LIMIT: ${VISUAL_TRANSIENT_ASSET_CLEANUP_LIMIT:-200}
       VISUAL_CREATIVE_ENABLED: "1"
       VISUAL_DEPLOYMENT_COUNTRY: ${VISUAL_DEPLOYMENT_COUNTRY:-RU}
+      YANDEX_BILLING_AUTHORIZED_KEY_FILE: ${YANDEX_BILLING_AUTHORIZED_KEY_FILE:-/run/secrets/clientplatform-yandex-billing/authorized-key.json}
     read_only: true
     tmpfs:
       - /tmp:size=256m,mode=1777
@@ -122,6 +123,7 @@ services:
       HEALTHCHECK_HOST: 0.0.0.0
       CLIENTPLATFORM_MEDIA_GATEWAY_HOST: 0.0.0.0
       VISUAL_GATEWAY_URL: http://visual-gateway:8080
+      YANDEX_BILLING_AUTHORIZED_KEY_FILE: ${YANDEX_BILLING_AUTHORIZED_KEY_FILE:-/run/secrets/clientplatform-yandex-billing/authorized-key.json}
     extra_hosts:
       - "api.telegram.org:${CLIENTPLATFORM_TELEGRAM_API_IPV4:-149.154.167.220}"
     depends_on:
