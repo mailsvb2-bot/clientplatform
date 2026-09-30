@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -720,3 +721,599 @@ async def test_succeeded_but_expired_editable_source_is_bound_before_recovery(
     )
     show.assert_awaited_once()
     assert state.data["editable_generation_active"] is False
+
+
+
+@pytest.mark.asyncio
+async def test_editable_editor_preview_success_and_recovery_messages(monkeypatch) -> None:
+    target = _goal_target()
+    actor = SimpleNamespace(business_id=_project().business_id)
+    preview = AsyncMock()
+
+    monkeypatch.setattr(goal, "_preview_editable_project", preview)
+    await goal._show_editable_editor(
+        target,
+        actor=actor,
+        data={"business_token": "business-token"},
+        project_id=_project().id,
+        kind="image",
+    )
+    preview.assert_awaited_once()
+    assert "Это превью" in target.answer.await_args.args[0]
+
+    target.answer.reset_mock()
+    preview.side_effect = goal.EditableAdvertisingSourceExpired("expired")
+    await goal._show_editable_editor(
+        target,
+        actor=actor,
+        data={"business_token": "business-token"},
+        project_id=_project().id,
+        kind="video",
+    )
+    assert "AI-основа уже исчезла" in target.answer.await_args.args[0]
+    buttons = [
+        button.callback_data
+        for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert "cpo:editgen:video:business-token" in buttons
+
+    target.answer.reset_mock()
+    preview.side_effect = goal.EditableAdvertisingError("temporary")
+    await goal._show_editable_editor(
+        target,
+        actor=actor,
+        data={"business_token": "business-token"},
+        project_id=_project().id,
+        kind="image",
+    )
+    assert "не удалось пересобрать" in target.answer.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_editable_video_preview_uses_streaming_delivery(monkeypatch, tmp_path: Path) -> None:
+    asset = tmp_path / "preview.mp4"
+    asset.write_bytes(b"mp4")
+    project = replace(_project(), kind="video")
+    target = _goal_target()
+
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(
+        goal,
+        "render_editable_ad_project",
+        lambda **_kwargs: (project, SimpleNamespace(status="succeeded")),
+    )
+    monkeypatch.setattr(goal, "download_render_asset", lambda *_args, **_kwargs: asset)
+
+    await goal._preview_editable_project(
+        target,
+        actor=SimpleNamespace(business_id=project.business_id),
+        data={"business_token": "business-token"},
+        project_id=project.id,
+        kind="video",
+    )
+
+    target.answer_video.assert_awaited_once()
+    assert target.answer_video.await_args.kwargs["supports_streaming"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("callback_data", "state_data", "expected_text"),
+    [
+        ("cpo:editask", _goal_data(), "Кнопка устарела"),
+        ("cpo:editask:audio:business-token", _goal_data(), "Кнопка устарела"),
+        (
+            "cpo:editask:image:other-token",
+            _goal_data(),
+            "Этот черновик уже устарел",
+        ),
+    ],
+)
+async def test_editable_entry_rejects_invalid_callbacks(
+    callback_data,
+    state_data,
+    expected_text,
+) -> None:
+    callback = _goal_callback(callback_data)
+    state = _State(state_data)
+
+    await goal.ask_editable_ad_confirmation(callback, state)
+
+    assert callback.answer.await_args.args[0] == expected_text
+    assert callback.answer.await_args.kwargs["show_alert"] is True
+
+
+@pytest.mark.asyncio
+async def test_editable_entry_surfaces_project_open_failure(monkeypatch) -> None:
+    callback = _goal_callback("cpo:editask:image:business-token")
+    state = _State(_goal_data())
+
+    monkeypatch.setattr(
+        goal.control,
+        "_actor",
+        AsyncMock(return_value=SimpleNamespace(business_id=_project().business_id)),
+    )
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(
+        goal,
+        "load_goal_visual_brand",
+        lambda **_kwargs: SimpleNamespace(render_brand=lambda: BRAND),
+    )
+    monkeypatch.setattr(
+        goal,
+        "create_editable_ad_project",
+        Mock(side_effect=ValueError("invalid")),
+    )
+
+    await goal.ask_editable_ad_confirmation(callback, state)
+
+    assert callback.answer.await_args.args[0] == "Не удалось открыть редактор рекламы"
+    assert callback.answer.await_args.kwargs["show_alert"] is True
+
+
+@pytest.mark.asyncio
+async def test_fresh_editable_video_project_requires_explicit_paid_confirmation(
+    monkeypatch,
+) -> None:
+    project = replace(
+        _project(status=EditableAdProjectStatus.DRAFT),
+        kind="video",
+        source_job_id="",
+        revision=1,
+    )
+    state = _State(_goal_data())
+    target = _goal_target()
+    callback = _goal_callback("cpo:editask:video:business-token", target)
+
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(
+        goal.control,
+        "_actor",
+        AsyncMock(return_value=SimpleNamespace(business_id=project.business_id)),
+    )
+    monkeypatch.setattr(goal.control, "_callback_message", lambda _callback: target)
+    monkeypatch.setattr(
+        goal,
+        "load_goal_visual_brand",
+        lambda **_kwargs: SimpleNamespace(render_brand=lambda: BRAND),
+    )
+    monkeypatch.setattr(goal, "create_editable_ad_project", lambda **_kwargs: project)
+
+    await goal.ask_editable_ad_confirmation(callback, state)
+
+    assert state.state == goal.GoalFirstAutopilotState.confirming_generation
+    assert "AI-основа видео" in target.answer.await_args.args[0]
+    assert "отдельный платный AI-вызов" in target.answer.await_args.args[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "callback_data",
+    [
+        "cpo:editgen",
+        "cpo:editgen:audio:business-token",
+        "cpo:editgen:image:wrong-token",
+    ],
+)
+async def test_generate_editable_source_rejects_invalid_callback(
+    callback_data,
+) -> None:
+    data = {
+        **_goal_data(),
+        "editable_ad_project_id": _project().id,
+        "editable_ad_kind": "image",
+    }
+    callback = _goal_callback(callback_data)
+    state = _State(data)
+
+    await goal.generate_editable_ad_source(callback, state)
+
+    expected = "Кнопка устарела" if callback_data == "cpo:editgen" else "Редактируемый макет уже недоступен"
+    assert callback.answer.await_args.args[0] == expected
+    assert callback.answer.await_args.kwargs["show_alert"] is True
+
+
+@pytest.mark.asyncio
+async def test_generate_editable_source_reuses_ready_source(monkeypatch) -> None:
+    project = _project(status=EditableAdProjectStatus.SOURCE_READY)
+    data = {
+        **_goal_data(),
+        "editable_ad_project_id": project.id,
+        "editable_ad_kind": "image",
+    }
+    state = _State(data)
+    callback = _goal_callback("cpo:editgen:image:business-token")
+    show = AsyncMock()
+    prepare = Mock()
+
+    monkeypatch.setattr(
+        goal.control,
+        "_actor",
+        AsyncMock(return_value=SimpleNamespace(business_id=project.business_id)),
+    )
+    monkeypatch.setattr(goal.control, "_callback_message", lambda cb: cb.message)
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(goal, "get_editable_ad_project", lambda **_kwargs: project)
+    monkeypatch.setattr(goal, "prepare_editable_ad_source", prepare)
+    monkeypatch.setattr(goal, "_show_editable_editor", show)
+
+    await goal.generate_editable_ad_source(callback, state)
+
+    prepare.assert_not_called()
+    show.assert_awaited_once()
+    assert callback.answer.await_args.args[0] == "AI-основа уже готова"
+    assert state.state == goal.GoalFirstAutopilotState.customizing
+
+
+@pytest.mark.asyncio
+async def test_generate_editable_source_rejects_project_mismatch(monkeypatch) -> None:
+    project = _project()
+    data = {
+        **_goal_data(),
+        "editable_ad_project_id": project.id,
+        "editable_ad_kind": "video",
+    }
+    callback = _goal_callback("cpo:editgen:video:business-token")
+    state = _State(data)
+
+    monkeypatch.setattr(
+        goal.control,
+        "_actor",
+        AsyncMock(return_value=SimpleNamespace(business_id=project.business_id)),
+    )
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(goal, "get_editable_ad_project", lambda **_kwargs: project)
+
+    await goal.generate_editable_ad_source(callback, state)
+
+    assert callback.answer.await_args.args[0] == "Не удалось подготовить AI-основу"
+    assert callback.answer.await_args.kwargs["show_alert"] is True
+
+
+@pytest.mark.asyncio
+async def test_finish_editable_source_generation_negative_paths(monkeypatch) -> None:
+    project = _project()
+    state = _State(_goal_data())
+    callback = _goal_callback("unused")
+
+    assert (
+        await goal._finish_editable_source_generation(
+            callback,
+            state,
+            data=_goal_data(),
+            kind="image",
+            project_id=project.id,
+            job=SimpleNamespace(status="running", id="job-1"),
+        )
+        is False
+    )
+    assert (
+        await goal._finish_editable_source_generation(
+            callback,
+            state,
+            data=_goal_data(),
+            kind="image",
+            project_id=project.id,
+            job=SimpleNamespace(status="succeeded", id="", job_id=""),
+        )
+        is False
+    )
+
+    monkeypatch.setattr(
+        goal.control,
+        "_actor",
+        AsyncMock(return_value=SimpleNamespace(business_id=project.business_id)),
+    )
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(
+        goal,
+        "bind_editable_ad_source",
+        Mock(side_effect=ValueError("state changed")),
+    )
+    assert (
+        await goal._finish_editable_source_generation(
+            callback,
+            state,
+            data=_goal_data(),
+            kind="image",
+            project_id=project.id,
+            job=SimpleNamespace(status="succeeded", id="job-1"),
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "expected_state", "needle"),
+    [
+        ("headline", goal.GoalFirstAutopilotState.waiting_editable_headline, "новый заголовок"),
+        ("body", goal.GoalFirstAutopilotState.waiting_editable_body, "новый основной текст"),
+        ("cta", goal.GoalFirstAutopilotState.waiting_editable_cta, "новую надпись CTA"),
+    ],
+)
+async def test_editable_field_prompt_routes_each_field(
+    field,
+    expected_state,
+    needle,
+    monkeypatch,
+) -> None:
+    state = _State(
+        {
+            **_goal_data(),
+            "editable_ad_project_id": _project().id,
+        }
+    )
+    target = _goal_target()
+    callback = _goal_callback(f"cpo:editfield:{field}:business-token", target)
+    monkeypatch.setattr(goal.control, "_callback_message", lambda _callback: target)
+
+    await goal.ask_editable_field(callback, state)
+
+    assert state.state == expected_state
+    assert needle in target.answer.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_editable_field_prompt_rejects_invalid_or_stale_request() -> None:
+    callback = _goal_callback("cpo:editfield")
+    await goal.ask_editable_field(callback, _State(_goal_data()))
+    assert callback.answer.await_args.args[0] == "Кнопка устарела"
+
+    callback = _goal_callback("cpo:editfield:other:business-token")
+    await goal.ask_editable_field(callback, _State(_goal_data()))
+    assert callback.answer.await_args.args[0] == "Редактируемый макет уже недоступен"
+
+
+@pytest.mark.asyncio
+async def test_receive_editable_field_success_missing_and_validation_failure(monkeypatch) -> None:
+    project = _project()
+    actor = SimpleNamespace(business_id=project.business_id)
+    show = AsyncMock()
+    message = SimpleNamespace(
+        text="Новый текст",
+        from_user=SimpleNamespace(id=101),
+        answer=AsyncMock(),
+    )
+
+    missing_state = _State(_goal_data())
+    await goal._receive_editable_field(message, missing_state, field="body")
+    assert missing_state.state == goal.GoalFirstAutopilotState.customizing
+    assert "уже недоступен" in message.answer.await_args.args[0]
+
+    state = _State(
+        {
+            **_goal_data(),
+            "editable_ad_project_id": project.id,
+        }
+    )
+    monkeypatch.setattr(goal.control, "_user_id", lambda _message: 101)
+    monkeypatch.setattr(goal.control, "_actor", AsyncMock(return_value=actor))
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(
+        goal,
+        "update_editable_ad_composition",
+        lambda **_kwargs: replace(project, revision=4),
+    )
+    monkeypatch.setattr(goal, "_show_editable_editor", show)
+
+    await goal._receive_editable_field(message, state, field="body")
+    assert state.data["editable_source_revision"] == 4
+    assert state.state == goal.GoalFirstAutopilotState.customizing
+    show.assert_awaited_once()
+
+    show.reset_mock()
+    message.answer.reset_mock()
+    monkeypatch.setattr(
+        goal,
+        "update_editable_ad_composition",
+        Mock(side_effect=ValueError("too long")),
+    )
+    await goal._receive_editable_field(message, state, field="body")
+    assert "Не удалось сохранить правку" in message.answer.await_args.args[0]
+    show.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_receive_editable_field_wrappers_delegate(monkeypatch) -> None:
+    delegate = AsyncMock()
+    monkeypatch.setattr(goal, "_receive_editable_field", delegate)
+    message = SimpleNamespace()
+    state = _State({})
+
+    await goal.receive_editable_headline(message, state)
+    await goal.receive_editable_body(message, state)
+    await goal.receive_editable_cta(message, state)
+
+    assert [call.kwargs["field"] for call in delegate.await_args_list] == [
+        "headline",
+        "body",
+        "cta",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_editable_layout_toggle_and_failure_paths(monkeypatch) -> None:
+    project = _project()
+    actor = SimpleNamespace(business_id=project.business_id)
+    state = _State(
+        {
+            **_goal_data(),
+            "editable_ad_project_id": project.id,
+        }
+    )
+    callback = _goal_callback("cpo:editlayout:business-token")
+    show = AsyncMock()
+    update = Mock(return_value=replace(project, layout="top_card", revision=4))
+
+    monkeypatch.setattr(goal.control, "_actor", AsyncMock(return_value=actor))
+    monkeypatch.setattr(goal.control, "_callback_message", lambda cb: cb.message)
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(goal, "get_editable_ad_project", lambda **_kwargs: project)
+    monkeypatch.setattr(goal, "update_editable_ad_composition", update)
+    monkeypatch.setattr(goal, "_show_editable_editor", show)
+
+    await goal.toggle_editable_layout(callback, state)
+    assert update.call_args.kwargs["layout"] == "top_card"
+    assert state.data["editable_source_revision"] == 4
+    assert callback.answer.await_args.args[0] == "Положение блока изменено"
+    show.assert_awaited_once()
+
+    stale = _goal_callback("cpo:editlayout:other-token")
+    await goal.toggle_editable_layout(stale, state)
+    assert stale.answer.await_args.args[0] == "Редактируемый макет уже недоступен"
+
+    callback.answer.reset_mock()
+    monkeypatch.setattr(
+        goal,
+        "get_editable_ad_project",
+        Mock(side_effect=LookupError("gone")),
+    )
+    await goal.toggle_editable_layout(callback, state)
+    assert callback.answer.await_args.args[0] == "Не удалось переместить текстовый блок"
+
+
+@pytest.mark.asyncio
+async def test_refresh_editable_preview_success_and_missing_project(monkeypatch) -> None:
+    project = _project()
+    actor = SimpleNamespace(business_id=project.business_id)
+    state = _State(
+        {
+            **_goal_data(),
+            "editable_ad_project_id": project.id,
+        }
+    )
+    callback = _goal_callback("cpo:editpreview:business-token")
+    show = AsyncMock()
+
+    monkeypatch.setattr(goal.control, "_actor", AsyncMock(return_value=actor))
+    monkeypatch.setattr(goal.control, "_callback_message", lambda cb: cb.message)
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(goal, "get_editable_ad_project", lambda **_kwargs: project)
+    monkeypatch.setattr(goal, "_show_editable_editor", show)
+
+    await goal.refresh_editable_preview(callback, state)
+    assert callback.answer.await_args.args[0] == "Обновляю превью…"
+    show.assert_awaited_once()
+
+    callback.answer.reset_mock()
+    monkeypatch.setattr(
+        goal,
+        "get_editable_ad_project",
+        Mock(side_effect=LookupError("gone")),
+    )
+    await goal.refresh_editable_preview(callback, state)
+    assert callback.answer.await_args.args[0] == "Редактируемый макет уже недоступен"
+
+
+@pytest.mark.asyncio
+async def test_finish_editable_video_commits_exact_render_and_delivers_owner_copy(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    asset = tmp_path / "final.mp4"
+    asset.write_bytes(b"video")
+    project = replace(_project(), kind="video")
+    finished = replace(project, status=EditableAdProjectStatus.FINISHED)
+    pack = SimpleNamespace(status="succeeded")
+    target = _goal_target()
+    callback = _goal_callback("cpo:editdone:business-token", target)
+    state = _State(
+        {
+            **_goal_data(),
+            "editable_ad_project_id": project.id,
+            "editable_ad_kind": "video",
+        }
+    )
+    attach_video = Mock()
+
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(
+        goal.control,
+        "_actor",
+        AsyncMock(return_value=SimpleNamespace(business_id=project.business_id)),
+    )
+    monkeypatch.setattr(goal.control, "_callback_message", lambda _callback: target)
+    monkeypatch.setattr(goal, "render_editable_ad_project", lambda **_kwargs: (project, pack))
+    monkeypatch.setattr(goal, "download_render_asset", lambda *_args, **_kwargs: asset)
+    monkeypatch.setattr(goal, "attach_video_bytes", attach_video)
+    monkeypatch.setattr(goal, "finish_editable_ad_project", lambda **_kwargs: finished)
+
+    await goal.finish_editable_ad(callback, state)
+
+    attach_video.assert_called_once()
+    assert attach_video.call_args.kwargs["content_type"] == "video/mp4"
+    target.answer_video.assert_awaited_once()
+    assert state.data["editable_ad_project_id"] == ""
+
+
+@pytest.mark.asyncio
+async def test_finish_editable_ad_recovery_and_provider_error_messages(monkeypatch) -> None:
+    project = _project()
+    actor = SimpleNamespace(business_id=project.business_id)
+    state_data = {
+        **_goal_data(),
+        "editable_ad_project_id": project.id,
+        "editable_ad_kind": "image",
+    }
+    target = _goal_target()
+
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(goal.control, "_actor", AsyncMock(return_value=actor))
+    monkeypatch.setattr(goal.control, "_callback_message", lambda _callback: target)
+
+    callback = _goal_callback("cpo:editdone:business-token", target)
+    monkeypatch.setattr(
+        goal,
+        "render_editable_ad_project",
+        Mock(side_effect=goal.EditableAdvertisingSourceExpired("expired")),
+    )
+    await goal.finish_editable_ad(callback, _State(state_data))
+    assert "AI-основа уже удалена" in target.answer.await_args.args[0]
+
+    target.answer.reset_mock()
+    callback.answer.reset_mock()
+    monkeypatch.setattr(
+        goal,
+        "render_editable_ad_project",
+        Mock(side_effect=goal.AdPublicationAssetError("ambiguous provider outcome")),
+    )
+    await goal.finish_editable_ad(callback, _State(state_data))
+    assert "не повторяет upload автоматически" in target.answer.await_args.args[0]
+
+    target.answer.reset_mock()
+    callback.answer.reset_mock()
+    monkeypatch.setattr(
+        goal,
+        "render_editable_ad_project",
+        Mock(side_effect=goal.AdPublicationAssetError("rejected")),
+    )
+    await goal.finish_editable_ad(callback, _State(state_data))
+    assert "Не удалось подтвердить загрузку" in target.answer.await_args.args[0]
+
+    callback.answer.reset_mock()
+    monkeypatch.setattr(
+        goal,
+        "render_editable_ad_project",
+        Mock(side_effect=goal.EditableAdvertisingError("broken")),
+    )
+    await goal.finish_editable_ad(callback, _State(state_data))
+    assert callback.answer.await_args.args[0] == "Не удалось завершить редактирование"
+
+
+@pytest.mark.asyncio
+async def test_finish_editable_ad_rejects_stale_editor() -> None:
+    callback = _goal_callback("cpo:editdone:wrong-token")
+    state = _State(
+        {
+            **_goal_data(),
+            "editable_ad_project_id": _project().id,
+            "editable_ad_kind": "image",
+        }
+    )
+
+    await goal.finish_editable_ad(callback, state)
+
+    assert callback.answer.await_args.args[0] == "Редактируемый макет уже недоступен"
+    assert callback.answer.await_args.kwargs["show_alert"] is True
