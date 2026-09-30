@@ -52,6 +52,14 @@ _RENDER_PACK_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _RENDER_IDEMPOTENCY_RE = re.compile(r"[A-Za-z0-9_.:@/-]{8,200}")
 _RENDER_SHA_RE = re.compile(r"[0-9a-f]{64}")
 _RENDER_FORMATS = frozenset({"square", "feed", "story", "landscape"})
+_TRANSIENT_CONTENT_ERRORS = frozenset({
+    "visual_gateway_http_404",
+    "visual_gateway_http_502",
+    "visual_gateway_http_503",
+    "visual_gateway_http_504",
+})
+_CONTENT_RETRY_DELAYS = (0.25, 0.5, 1.0, 2.0)
+
 _RENDER_DIMENSIONS = {"square": (1080, 1080), "feed": (1080, 1350), "story": (1080, 1920), "landscape": (1200, 628)}
 
 
@@ -342,11 +350,27 @@ def download_visual(job: VisualCreativeJob, *, output_dir: str | None = None) ->
         minimum=1024 * 1024,
         maximum=1024 * 1024 * 1024,
     )
-    headers, raw = _request(
-        "GET",
-        f"/v1/creative/generations/{token}/content?{query}",
-        max_bytes=max_media,
-    )
+    content_path = f"/v1/creative/generations/{token}/content?{query}"
+    last_error: VisualCreativeGatewayError | None = None
+    for attempt in range(len(_CONTENT_RETRY_DELAYS) + 1):
+        try:
+            headers, raw = _request(
+                "GET",
+                content_path,
+                max_bytes=max_media,
+            )
+            break
+        except VisualCreativeGatewayError as exc:
+            code = str(exc or "").strip()
+            transient = code in _TRANSIENT_CONTENT_ERRORS or code.startswith(
+                "visual_gateway_transport_"
+            )
+            if not transient or attempt >= len(_CONTENT_RETRY_DELAYS):
+                raise
+            last_error = exc
+            time.sleep(_CONTENT_RETRY_DELAYS[attempt])
+    else:  # pragma: no cover - loop exits by success or exception
+        raise last_error or VisualCreativeGatewayError("visual_content_not_ready")
     mime = str(headers.get("content-type") or job.mime_type or "").split(";", 1)[0].strip().lower()
     expected = "video/" if job.kind == "video" else "image/"
     if mime and mime != "application/octet-stream" and not mime.startswith(expected):
