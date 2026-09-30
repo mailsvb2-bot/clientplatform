@@ -86,6 +86,13 @@ def slot(status=BookingSlotStatus.OPEN):
 
 
 class GoalScheduleTests(unittest.IsolatedAsyncioTestCase):
+    def test_legacy_schedule_callbacks_do_not_claim_one_click_offer_namespace(self) -> None:
+        source = open(schedule.__file__, encoding="utf-8").read()
+        self.assertNotIn('F.data.startswith("cpo:offer:")', source)
+        self.assertNotIn('F.data.startswith("cpo:offers:")', source)
+        self.assertIn('F.data.startswith("cpgs:offer:")', source)
+        self.assertIn('F.data.startswith("cpgs:offers:")', source)
+
     async def test_start_always_enters_advertising_without_forcing_schedule(self) -> None:
         cb = callback("cpo:start:business-1")
         state = FakeState()
@@ -203,7 +210,7 @@ class GoalScheduleTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_offering_page_callback_reloads_current_list_and_rejects_bad_page(self) -> None:
         out = FakeMessage()
-        cb = callback("cpo:offers:business-1:1", out)
+        cb = callback("cpgs:offers:business-1:1", out)
         offerings = [offering(f"off-{index}", f"Услуга {index:02d}") for index in range(10)]
         with (
             patch.object(schedule.control, "_token_uuid", side_effect=lambda value: value),
@@ -216,7 +223,7 @@ class GoalScheduleTests(unittest.IsolatedAsyncioTestCase):
         cb.answer.assert_awaited_once_with()
         self.assertIn("страница 2/2", out.answers[-1][0])
 
-        bad = callback("cpo:offers:business-1:-1", FakeMessage())
+        bad = callback("cpgs:offers:business-1:-1", FakeMessage())
         with patch.object(schedule.control, "_token_uuid", side_effect=lambda value: value):
             await schedule.change_goal_offering_page(bad)
         bad.answer.assert_awaited_once_with(
@@ -226,7 +233,7 @@ class GoalScheduleTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_offering_selection_reloads_by_id_and_stale_choice_fails_closed(self) -> None:
         out = FakeMessage()
-        cb = callback("cpo:offer:business-1:offering-1", out)
+        cb = callback("cpgs:offer:business-1:offering-1", out)
         state = FakeState()
         selected = offering()
         with (
@@ -239,7 +246,7 @@ class GoalScheduleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.state, schedule.GoalScheduleState.waiting_booking_start)
         cb.answer.assert_awaited_once_with()
 
-        stale = callback("cpo:offer:business-1:missing", FakeMessage())
+        stale = callback("cpgs:offer:business-1:missing", FakeMessage())
         with (
             patch.object(schedule.control, "_token_uuid", side_effect=lambda value: value),
             patch.object(schedule.control, "_actor", new=AsyncMock(return_value="actor")),

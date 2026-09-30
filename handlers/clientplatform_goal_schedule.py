@@ -110,7 +110,7 @@ async def _show_offering_page(
         [
             (
                 f"🎯 {item.title[:42]}",
-                f"cpo:offer:{business_token}:{control._uuid_token(item.id)}",
+                f"cpgs:offer:{business_token}:{control._uuid_token(item.id)}",
             )
         ]
         for item in current
@@ -118,11 +118,11 @@ async def _show_offering_page(
     navigation = []
     if safe_page > 0:
         navigation.append(
-            ("⬅️ Назад", f"cpo:offers:{business_token}:{safe_page - 1}")
+            ("⬅️ Назад", f"cpgs:offers:{business_token}:{safe_page - 1}")
         )
     if safe_page + 1 < total_pages:
         navigation.append(
-            ("Дальше ➡️", f"cpo:offers:{business_token}:{safe_page + 1}")
+            ("Дальше ➡️", f"cpgs:offers:{business_token}:{safe_page + 1}")
         )
     if navigation:
         rows.append(navigation)
@@ -316,7 +316,7 @@ async def get_clients_goal(callback: CallbackQuery, state: FSMContext) -> None:
     await one_click.get_clients_one_click(callback, state)
 
 
-@router.callback_query(F.data.startswith("cpo:offers:"))
+@router.callback_query(F.data.startswith("cpgs:offers:"))
 async def change_goal_offering_page(callback: CallbackQuery) -> None:
     try:
         _, _, business_token, raw_page = str(callback.data).split(":", 3)
@@ -347,7 +347,7 @@ async def change_goal_offering_page(callback: CallbackQuery) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("cpo:offer:"))
+@router.callback_query(F.data.startswith("cpgs:offer:"))
 async def choose_goal_offering(callback: CallbackQuery, state: FSMContext) -> None:
     try:
         _, _, business_token, offering_token = str(callback.data).split(":", 3)
