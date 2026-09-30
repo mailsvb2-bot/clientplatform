@@ -19,7 +19,7 @@ _MAX_NEGATIVE_PROMPT_CHARS = 1800
 
 _TRANSFORMATION_RE = re.compile(
     r"(?:"
-    r"превращ|станов(?:ит|ов)|меняет(?:ся)?|изменяет(?:ся)?|до\s*(?:и|/|→|->)\s*после|"
+    r"превращ|станов|меняет(?:ся)?|изменяет(?:ся)?|до\s*(?:и|/|→|->)\s*после|"
     r"из\s+.+?\s+в\s+|"
     r"transform|turns?\s+into|becomes?|changes?\s+from|before\s*(?:and|/|→|->)\s*after"
     r")",
