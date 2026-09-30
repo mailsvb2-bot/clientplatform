@@ -805,6 +805,7 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
         for value in saved.to_mapping().values()
     )
     await state.update_data(
+        creative_kind=kind,
         creative_pending_prompt=prompt,
         creative_brand_context=brand_context,
         creative_country_code=country_code,
