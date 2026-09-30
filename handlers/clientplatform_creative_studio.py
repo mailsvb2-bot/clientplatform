@@ -31,6 +31,11 @@ from clientplatform.application.event_content_assets import (
     EventContentAssetError,
     store_generated_event_content_asset,
 )
+from clientplatform.application.visual_style_preferences import (
+    clear_visual_style_preference,
+    load_visual_style_preference,
+    save_visual_style_preference,
+)
 from clientplatform.application.visual_creatives import (
     VisualCreativeError,
     create_business_image_from_frozen_payload,
@@ -52,10 +57,24 @@ from clientplatform.domain.creative_generation import (
 from clientplatform.domain.event_content import EventContentStage
 from clientplatform.domain.programs import ContentKind
 from clientplatform.domain.tenancy import TenantPermissionDenied
+from clientplatform.domain.visual_style_intent import (
+    VisualStyleIntent,
+    infer_visual_style_intent,
+    resolve_visual_style_intent,
+    visual_style_preset,
+)
 from clientplatform.presentation import owner_navigation as nav
 from clientplatform.presentation.visual_generation import (
     visual_failure_message,
     visual_provider_unavailable_message,
+)
+from clientplatform.presentation.visual_style import (
+    style_choice,
+    style_dashboard_rows,
+    style_dashboard_text,
+    style_dimension,
+    style_dimension_rows,
+    style_preset_name,
 )
 
 from . import clientplatform_control as control
@@ -71,6 +90,7 @@ router.callback_query.filter(control.ClientPlatformControlEnabled())
 
 class ClientPlatformCreativeStudioState(StatesGroup):
     waiting_prompt = State()
+    choosing_style = State()
 
 
 def _receipt_kind(receipt: CreativeGenerationReceipt | None) -> str:
