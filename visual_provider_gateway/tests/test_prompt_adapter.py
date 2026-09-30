@@ -93,5 +93,6 @@ def test_engine_applies_adapter_only_after_provider_selection(monkeypatch) -> No
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
+    assert result.provider_payload["prompt_adapter_version"] == 1
     assert "Provider execution priority" in captured["brief"].prompt
     assert "hedgehog listens to an audio session" in captured["brief"].prompt
