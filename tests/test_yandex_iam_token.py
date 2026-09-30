@@ -363,3 +363,63 @@ def test_get_token_normalizes_signer_and_unknown_runtime_failures(monkeypatch):
         result = iam.get_yandex_billing_iam_token()
         assert result.available is False
         assert result.error_code == expected
+
+def test_yandex_art_authorized_key_uses_dedicated_source_and_caches(monkeypatch):
+    iam.clear_yandex_art_iam_cache()
+    monkeypatch.setenv("YANDEX_ART_AUTHORIZED_KEY_JSON", _key_json())
+    monkeypatch.delenv("YANDEX_ART_AUTHORIZED_KEY_FILE", raising=False)
+    monkeypatch.delenv("YANDEX_ART_IAM_TOKEN", raising=False)
+    monkeypatch.setenv("YANDEX_BILLING_AUTHORIZED_KEY_JSON", '{"id":"wrong"}')
+    monkeypatch.setattr(iam, "_create_jwt", lambda key: f"jwt-{key.key_id}")
+    calls = 0
+
+    def exchange(jwt_token):
+        nonlocal calls
+        calls += 1
+        assert jwt_token == "jwt-key-1"
+        return "art-iam-token", time.time() + 3600
+
+    monkeypatch.setattr(iam, "_exchange_jwt", exchange)
+
+    first = iam.get_yandex_art_iam_token()
+    second = iam.get_yandex_art_iam_token()
+
+    assert first.available is True
+    assert first.auth_mode == "authorized_key"
+    assert first.token == "art-iam-token"
+    assert second.token == "art-iam-token"
+    assert calls == 1
+
+
+def test_yandex_art_authorized_key_can_reuse_billing_source(monkeypatch):
+    iam.clear_yandex_art_iam_cache()
+    monkeypatch.delenv("YANDEX_ART_AUTHORIZED_KEY_JSON", raising=False)
+    monkeypatch.delenv("YANDEX_ART_AUTHORIZED_KEY_FILE", raising=False)
+    monkeypatch.delenv("YANDEX_ART_IAM_TOKEN", raising=False)
+    monkeypatch.setenv("YANDEX_BILLING_AUTHORIZED_KEY_JSON", _key_json())
+    monkeypatch.setattr(iam, "_create_jwt", lambda _key: "jwt-token")
+    monkeypatch.setattr(
+        iam,
+        "_exchange_jwt",
+        lambda _jwt: ("renewable-art-token", time.time() + 3600),
+    )
+
+    result = iam.get_yandex_art_iam_token()
+
+    assert iam.yandex_art_renewable_auth_configured() is True
+    assert result.available is True
+    assert result.token == "renewable-art-token"
+
+
+def test_yandex_art_invalid_authorized_key_fails_closed(monkeypatch):
+    iam.clear_yandex_art_iam_cache()
+    monkeypatch.delenv("YANDEX_ART_IAM_TOKEN", raising=False)
+    monkeypatch.setenv("YANDEX_ART_AUTHORIZED_KEY_JSON", '{"id":"broken"}')
+    monkeypatch.delenv("YANDEX_ART_AUTHORIZED_KEY_FILE", raising=False)
+
+    result = iam.get_yandex_art_iam_token()
+
+    assert result.configured is True
+    assert result.available is False
+    assert result.error_code == "yandex_art_invalid_authorized_key"
+
