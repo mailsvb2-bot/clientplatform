@@ -392,6 +392,7 @@ def create_business_image(
     country_code: str = "",
     preferred_provider: str = "",
     wait_seconds: int = 20,
+    style_intent: VisualStyleIntent | None = None,
 ) -> VisualCreativeJob:
     # Compatibility path for existing callers. Restart-safe owner generation freezes
     # the provider brief first and calls create_business_image_from_frozen_payload.
@@ -400,6 +401,7 @@ def create_business_image(
         brand_context=brand_context,
         country_code=country_code,
         preferred_provider=preferred_provider,
+        style_intent=style_intent,
     )
     if int(wait_seconds or 0) != _BUSINESS_IMAGE_WAIT_SECONDS:
         brief, _ = _load_frozen_business_image_payload(payload)
