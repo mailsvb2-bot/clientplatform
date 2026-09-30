@@ -1797,6 +1797,17 @@ def install_creative_studio_safety(safety: ModuleType) -> None:
         "cpc:open:",
         "cpc:check:",
         "cpc:editad:",
+        "cpc:stopen:",
+        "cpc:stmanual:",
+        "cpc:stset:",
+        "cpc:stskip:",
+        "cpc:stpre:",
+        "cpc:stback:",
+        "cpc:strewrite:",
+        "cpc:stgo:",
+        "cpc:stsaved:",
+        "cpc:stfinish:",
+        "cpc:stsave:",
     )
     _extend_tuple(
         safety,
@@ -1814,7 +1825,14 @@ def install_creative_studio_safety(safety: ModuleType) -> None:
     def callback_can_escape_state(current_state: str, callback_data: str) -> bool:
         if current_state.startswith("ClientPlatformCreativeStudioState:"):
             if callback_data.startswith(
-                ("cpc:open:", "cpc:new:", "cpc:video:", "cpj:home:")
+                (
+                    "cpc:open:",
+                    "cpc:new:",
+                    "cpc:video:",
+                    "cpc:stback:",
+                    "cpc:strewrite:",
+                    "cpj:home:",
+                )
             ):
                 return True
         return original_escape(current_state, callback_data)
