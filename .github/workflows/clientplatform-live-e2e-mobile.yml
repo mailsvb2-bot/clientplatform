@@ -64,19 +64,18 @@ jobs:
           ref: main
           clean: true
 
-      - name: Reject non-main source
-        shell: bash
-        run: |
-          if [[ "$GITHUB_REF" != "refs/heads/main" && "$GITHUB_EVENT_NAME" != "schedule" ]]; then
-            echo "Live mobile E2E may execute only from trusted main." >&2
-            exit 1
-          fi
-
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
           cache: pip
+
+      - name: Reject non-main source
+        run: >-
+          python -c "import os,sys;
+          ok=os.environ.get('GITHUB_REF')=='refs/heads/main'
+          or os.environ.get('GITHUB_EVENT_NAME')=='schedule';
+          sys.exit(0 if ok else 1)"
 
       - name: Install hash-locked test dependencies
         run: |

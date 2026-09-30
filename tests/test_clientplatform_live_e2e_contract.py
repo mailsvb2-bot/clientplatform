@@ -186,6 +186,8 @@ def test_mobile_live_e2e_matrix_is_real_device_only_and_never_runs_pr_code() -> 
     assert "matrix.host_label" in workflow
     assert "matrix.device_label" in workflow
     assert "validate_device.py" in workflow
+    assert "shell: bash" not in workflow
+    assert "python -c" in workflow
 
 
 def test_mobile_device_validator_checks_physical_identity_and_form_factor() -> None:
