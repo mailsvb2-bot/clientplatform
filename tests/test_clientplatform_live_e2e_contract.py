@@ -207,7 +207,8 @@ def test_mobile_device_validator_checks_physical_identity_and_form_factor() -> N
     assert "hdc" in source
     assert "CLIENTPLATFORM_E2E_HARMONY_REAL_DEVICE" in source
     assert "sha256" in source
-    assert 'line.replace(udid, "<redacted>")' in source
+    assert '"xcode_real_device_verified": True' in source
+    assert '"device_line"' not in source
     assert "adb_device_not_ready:{udid}" not in source
     assert "output[-800:]" not in source
 
@@ -256,6 +257,8 @@ def test_mobile_orchestrator_never_claims_one_device_as_another() -> None:
     assert "CLIENTPLATFORM_E2E_TELEGRAM_MOBILE_PROFILE" in source
     assert "CLIENTPLATFORM_E2E_COCKPIT_MOBILE_PROFILE" in source
     assert "completed.stdout" not in source
+    assert "_SECRET_PROFILE_VALUE_PATTERNS" in source
+    assert "Bearer" in source
     assert '"device_compatibility"' in source
     assert '"form_factor"' in source
     assert "FORM_FACTOR_ADAPTER" in source

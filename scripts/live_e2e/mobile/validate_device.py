@@ -194,7 +194,10 @@ def _validate_apple(target: dict[str, Any], udid: str) -> dict[str, Any]:
             f"apple_form_factor_mismatch:expected={expected_model}:actual={line}"
         )
     _appium_status()
-    return {"device_line": line.replace(udid, "<redacted>")[:240]}
+    return {
+        "model_family": expected_model,
+        "xcode_real_device_verified": True,
+    }
 
 
 def _validate_harmony(target: dict[str, Any], udid: str) -> dict[str, Any]:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess  # nosec B404 - fixed repository-owned drivers
 import sys
 import tempfile
@@ -27,6 +28,11 @@ _PROFILE_ENV = {
     "max": "CLIENTPLATFORM_E2E_MAX_MOBILE_PROFILE",
     "cockpit": "CLIENTPLATFORM_E2E_COCKPIT_MOBILE_PROFILE",
 }
+_SECRET_PROFILE_VALUE_PATTERNS = (
+    re.compile(r"\b\d{8,12}:[A-Za-z0-9_-]{25,}\b"),
+    re.compile(r"\blive_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"^\s*Bearer\s+\S+", re.IGNORECASE),
+)
 _FORBIDDEN_PROFILE_KEYS = {
     "password",
     "passwd",
@@ -62,6 +68,8 @@ def _require(name: str) -> str:
 
 
 def _contains_forbidden_key(value: object) -> bool:
+    if isinstance(value, str):
+        return any(pattern.search(value) for pattern in _SECRET_PROFILE_VALUE_PATTERNS)
     if isinstance(value, dict):
         for key, item in value.items():
             folded = str(key).casefold()
