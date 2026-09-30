@@ -31,6 +31,10 @@ from clientplatform.application.event_content_assets import (
     EventContentAssetError,
     store_generated_event_content_asset,
 )
+from clientplatform.application.visual_style_preferences import (
+    load_visual_style_preference,
+    save_visual_style_preference,
+)
 from clientplatform.application.visual_creatives import (
     VisualCreativeError,
     create_business_image_from_frozen_payload,
@@ -51,6 +55,14 @@ from clientplatform.domain.creative_generation import (
 )
 from clientplatform.domain.event_content import EventContentStage
 from clientplatform.domain.programs import ContentKind
+from clientplatform.domain.visual_style_intent import (
+    VisualStyleIntent,
+    infer_visual_style,
+    merge_visual_styles,
+    style_missing_fields,
+    visual_style_from_json,
+    visual_style_preset,
+)
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.presentation import owner_navigation as nav
 from clientplatform.presentation.visual_generation import (
@@ -71,6 +83,328 @@ router.callback_query.filter(control.ClientPlatformControlEnabled())
 
 class ClientPlatformCreativeStudioState(StatesGroup):
     waiting_prompt = State()
+    choosing_style = State()
+
+
+_STYLE_FIELDS = (
+    "color_temperature",
+    "emotional_tone",
+    "realism",
+    "composition",
+)
+_STYLE_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
+    "color_temperature": (
+        ("☀️ Тёплые", "warm"),
+        ("⚪ Нейтральные", "neutral"),
+        ("❄️ Холодные", "cool"),
+    ),
+    "emotional_tone": (
+        ("😊 Доброжелательно", "friendly"),
+        ("🧘 Спокойно", "calm"),
+        ("🎭 Драматично", "dramatic"),
+        ("⚡ Дерзко", "bold"),
+    ),
+    "realism": (
+        ("📷 Фотореалистично", "photorealistic"),
+        ("🌿 Реалистично", "realistic"),
+        ("✨ Стилизованно", "semi_stylized"),
+        ("🎨 Иллюстрация", "illustrative"),
+    ),
+    "composition": (
+        ("👤 Крупный план", "close_up"),
+        ("🖼 Средний план", "medium"),
+        ("🌍 Общая сцена", "wide"),
+        ("🎬 Сюжетная сцена", "story_scene"),
+    ),
+}
+_STYLE_FIELD_TITLES = {
+    "color_temperature": "Какая цветовая температура?",
+    "emotional_tone": "Какое настроение?",
+    "realism": "Какой визуальный язык?",
+    "composition": "Какая композиция?",
+}
+_STYLE_PRESETS = (
+    ("🤗 Тёпло и дружелюбно", "warm_friendly"),
+    ("🧘 Мягко и спокойно", "soft_calm"),
+    ("🏢 Чисто и профессионально", "clean_professional"),
+    ("💎 Премиально", "premium"),
+    ("🔥 Ярко и энергично", "bright_energy"),
+    ("🎬 Кинематографично", "cinematic"),
+    ("🎨 Сказочно", "fairytale"),
+    ("📷 Натуральное фото", "natural_photo"),
+)
+
+
+def _style_from_state(data: dict) -> VisualStyleIntent:
+    raw = str(data.get("creative_style_json") or "").strip()
+    return visual_style_from_json(raw) if raw else VisualStyleIntent()
+
+
+def _style_summary(style: VisualStyleIntent) -> str:
+    value = style.normalized()
+    labels = {
+        "color_temperature": {"warm": "тёплые", "neutral": "нейтральные", "cool": "холодные"},
+        "emotional_tone": {
+            "friendly": "доброжелательно",
+            "calm": "спокойно",
+            "playful": "игриво",
+            "bold": "дерзко",
+            "dramatic": "драматично",
+            "aggressive": "агрессивно",
+            "premium": "статусно",
+        },
+        "energy": {"low": "спокойная динамика", "medium": "умеренная динамика", "high": "энергично"},
+        "realism": {
+            "photorealistic": "фотореализм",
+            "realistic": "реализм",
+            "semi_stylized": "стилизация",
+            "illustrative": "иллюстрация",
+        },
+        "lighting": {"bright": "светло", "balanced": "естественный свет", "dark": "темно"},
+        "contrast": {"soft": "мягкий контраст", "balanced": "сбалансированный контраст", "strong": "сильный контраст"},
+        "composition": {
+            "close_up": "крупный план",
+            "medium": "средний план",
+            "wide": "общий план",
+            "story_scene": "сюжетная сцена",
+            "before_after": "до/после",
+            "transformation": "плавное превращение",
+        },
+        "motion": {"static": "статично", "gentle": "плавно", "dynamic": "динамично"},
+        "commercial_tone": {
+            "natural": "натуральная подача",
+            "friendly": "дружелюбная подача",
+            "professional": "профессиональная подача",
+            "premium": "премиальная подача",
+            "promotional": "рекламная подача",
+        },
+        "copy_space": {
+            "none": "без места под текст",
+            "small": "немного места под текст",
+            "medium": "место под текст",
+            "large": "много места под текст",
+        },
+    }
+    selected = [
+        labels.get(field, {}).get(choice, choice)
+        for field, choice in value.to_mapping().items()
+        if choice != "auto"
+    ]
+    return " · ".join(selected) if selected else "автоматически"
+
+
+def _style_entry_rows(token: str, *, has_saved: bool):
+    rows: list[list[tuple[str, str]]] = [
+        [("✨ Создать сразу", f"cpc:stgo:{token}")],
+        [("🎨 Уточнить стиль", f"cpc:stopen:{token}")],
+    ]
+    if has_saved:
+        rows.append([("⭐ Мой обычный стиль", f"cpc:stsaved:{token}")])
+    rows.append([("✏️ Изменить идею", f"cpc:strewrite:{token}")])
+    return control._keyboard(rows)
+
+
+def _preset_rows(token: str):
+    rows = [
+        [(label, f"cpc:stpre:{name}:{token}")]
+        for label, name in _STYLE_PRESETS
+    ]
+    rows.extend(
+        [
+            [("⚙️ Настроить вручную", f"cpc:stmanual:{token}")],
+            [("✨ Автоматически", f"cpc:stgo:{token}")],
+            [("⬅️ Назад", f"cpc:stback:{token}")],
+        ]
+    )
+    return control._keyboard(rows)
+
+
+def _manual_style_rows(token: str, field: str):
+    rows = [
+        [(label, f"cpc:stset:{field}:{value}:{token}")]
+        for label, value in _STYLE_CHOICES[field]
+    ]
+    rows.extend(
+        [
+            [("⏭ Пропустить", f"cpc:stskip:{field}:{token}")],
+            [("⬅️ К пресетам", f"cpc:stopen:{token}")],
+        ]
+    )
+    return control._keyboard(rows)
+
+
+def _final_style_rows(token: str):
+    return control._keyboard(
+        [
+            [("✨ Создать с этим стилем", f"cpc:stfinish:{token}")],
+            [("💾 Создать и запомнить стиль", f"cpc:stsave:{token}")],
+            [("🎨 Изменить стиль", f"cpc:stopen:{token}")],
+            [("✏️ Изменить идею", f"cpc:strewrite:{token}")],
+        ]
+    )
+
+
+async def _style_context(state: FSMContext, callback: CallbackQuery):
+    data = await state.get_data()
+    token = str(data.get("creative_business_token") or "")
+    callback_token = str(callback.data or "").split(":")[-1]
+    if not token or callback_token != token:
+        await callback.answer("Эта настройка уже устарела", show_alert=True)
+        return None
+    try:
+        actor = await control._actor(
+            int(getattr(callback.from_user, "id", 0) or 0),
+            str(data["creative_business_id"]),
+        )
+        actor.assert_can_manage_promotions()
+        request = normalize_business_image_request(str(data["creative_prompt"]))
+    except (KeyError, TypeError, ValueError, TenantPermissionDenied):
+        await callback.answer("Сессия генерации устарела", show_alert=True)
+        return None
+    saved = await asyncio.to_thread(load_visual_style_preference, actor=actor)
+    return data, token, actor, request, saved
+
+
+async def _show_next_manual_style(
+    target,
+    *,
+    state: FSMContext,
+    token: str,
+    request: str,
+) -> None:
+    data = await state.get_data()
+    explicit = _style_from_state(data)
+    missing = style_missing_fields(
+        request=request,
+        explicit=explicit,
+        saved=None,
+    )
+    field = next((item for item in _STYLE_FIELDS if item in missing), "")
+    if not field:
+        await target.answer(
+            "Стиль уточнён.\n\nВаш выбор: " + _style_summary(
+                merge_visual_styles(
+                    explicit=explicit,
+                    inferred=infer_visual_style(request),
+                )
+            ),
+            reply_markup=_final_style_rows(token),
+        )
+        return
+    await target.answer(
+        _STYLE_FIELD_TITLES[field],
+        reply_markup=_manual_style_rows(token, field),
+    )
+
+
+async def _prepare_creative_with_style(
+    target,
+    state: FSMContext,
+    *,
+    actor,
+    token: str,
+    request: str,
+    saved: VisualStyleIntent,
+    explicit: VisualStyleIntent,
+    remember_style: bool,
+) -> None:
+    data = await state.get_data()
+    kind = str(data.get("creative_kind") or "image").strip().lower()
+    if kind not in {"image", "video"}:
+        await target.answer("Сессия генерации устарела.")
+        await state.clear()
+        return
+    resolved = merge_visual_styles(
+        explicit=explicit,
+        inferred=infer_visual_style(request),
+        saved=saved,
+    )
+    try:
+        country_code = os.getenv("VISUAL_DEPLOYMENT_COUNTRY", "")
+        ready = await asyncio.to_thread(
+            visual_generation_ready,
+            kind=kind,
+            country_code=country_code,
+        )
+        if not ready:
+            await target.answer(
+                visual_provider_unavailable_message(kind),
+                reply_markup=control._keyboard(_studio_navigation_rows(token)),
+            )
+            return
+        brand = await asyncio.to_thread(load_goal_visual_brand, actor=actor)
+        brand_context = brand.prompt_context()
+        freezer = (
+            freeze_business_video_payload
+            if kind == "video"
+            else freeze_business_image_payload
+        )
+        provider_payload_json = freezer(
+            request=request,
+            brand_context=brand_context,
+            country_code=country_code,
+            style_intent=resolved,
+        )
+        receipt = await asyncio.to_thread(
+            prepare_creative_generation,
+            actor=actor,
+            request_text=request,
+            brand_context=brand_context,
+            country_code=country_code,
+            provider_payload_json=provider_payload_json,
+        )
+        if remember_style:
+            await asyncio.to_thread(
+                save_visual_style_preference,
+                actor=actor,
+                style=resolved,
+            )
+    except VisualCreativeError:
+        await target.answer(
+            "Не удалось проверить доступность генератора. Платный запрос не запускался. "
+            "Попробуйте ещё раз после восстановления шлюза генерации."
+        )
+        return
+    except (OSError, ValueError):
+        await target.answer("Не удалось безопасно подготовить генерацию. Попробуйте позже.")
+        return
+
+    await state.clear()
+    if receipt.request_text != request:
+        await target.answer(
+            "У Вас уже есть незавершённая генерация. Продолжите её — новый платный "
+            "job автоматически не создаётся.",
+            reply_markup=_menu_rows(token, receipt),
+        )
+        return
+    noun = "видео" if _receipt_kind(receipt) == "video" else "картинку"
+    edit_callback = (
+        f"cpc:video:{token}"
+        if _receipt_kind(receipt) == "video"
+        else f"cpc:new:{token}"
+    )
+    await target.answer(
+        "✨ Всё готово к генерации\n\n"
+        f"Задача: {receipt.request_text}\n"
+        f"Стиль: {_style_summary(resolved)}\n\n"
+        "Смысл запроса и выбранный стиль уже зафиксированы. Генерация может "
+        "расходовать платную AI-квоту только после кнопки ниже; retry/restart "
+        "продолжит этот же frozen intent, а не перепишет его."
+        + (
+            "\n\nДля видео ClientPlatform сначала использует полноценный генератор "
+            "движущейся сцены. Если такой провайдер недоступен до принятия задания, "
+            "может быть использован явно обозначенный motion fallback из AI-кадра."
+            if _receipt_kind(receipt) == "video"
+            else ""
+        ),
+        reply_markup=control._keyboard(
+            [
+                [(f"✅ Создать 1 {noun}", _receipt_callback("generate", token, receipt))],
+                [("✏️ Изменить описание", edit_callback)],
+                [("⬅️ Не создавать", f"cpc:open:{token}")],
+            ]
+        ),
+    )
 
 
 def _receipt_kind(receipt: CreativeGenerationReceipt | None) -> str:
@@ -578,6 +912,7 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
         actor = await control._actor(control._user_id(message), business_id)
         actor.assert_can_manage_promotions()
         prompt = normalize_business_image_request(str(message.text or ""))
+        saved = await asyncio.to_thread(load_visual_style_preference, actor=actor)
     except KeyError:
         await state.clear()
         await message.answer(
@@ -596,83 +931,295 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
             reply_markup=control._keyboard(_studio_navigation_rows(token)),
         )
         return
-    try:
-        country_code = os.getenv("VISUAL_DEPLOYMENT_COUNTRY", "")
-        ready = await asyncio.to_thread(
-            visual_generation_ready,
-            kind=kind,
-            country_code=country_code,
-        )
-        if not ready:
-            await message.answer(
-                visual_provider_unavailable_message(kind),
-                reply_markup=control._keyboard(_studio_navigation_rows(token)),
-            )
-            return
-        brand = await asyncio.to_thread(load_goal_visual_brand, actor=actor)
-        brand_context = brand.prompt_context()
-        freezer = (
-            freeze_business_video_payload
-            if kind == "video"
-            else freeze_business_image_payload
-        )
-        provider_payload_json = freezer(
-            request=prompt,
-            brand_context=brand_context,
-            country_code=country_code,
-        )
-        receipt = await asyncio.to_thread(
-            prepare_creative_generation,
-            actor=actor,
-            request_text=prompt,
-            brand_context=brand_context,
-            country_code=country_code,
-            provider_payload_json=provider_payload_json,
-        )
-    except VisualCreativeError:
-        await message.answer(
-            "Не удалось проверить доступность генератора. Платный запрос не запускался. "
-            "Попробуйте ещё раз после восстановления шлюза генерации."
-        )
-        return
-    except (OSError, ValueError):
-        await message.answer("Не удалось безопасно подготовить генерацию. Попробуйте позже.")
-        return
-    await state.clear()
-    if receipt.request_text != prompt:
-        await message.answer(
-            "У Вас уже есть незавершённая генерация. Продолжите её — новый платный "
-            "job автоматически не создаётся.",
-            reply_markup=_menu_rows(token, receipt),
-        )
-        return
-    noun = "видео" if _receipt_kind(receipt) == "video" else "картинку"
-    edit_callback = (
-        f"cpc:video:{token}"
-        if _receipt_kind(receipt) == "video"
-        else f"cpc:new:{token}"
+
+    await state.set_state(ClientPlatformCreativeStudioState.choosing_style)
+    await state.update_data(
+        creative_prompt=prompt,
+        creative_style_json=VisualStyleIntent().to_json(),
+    )
+    inferred = infer_visual_style(prompt)
+    inferred_note = (
+        "\n\nИз Вашего текста уже понял стиль: " + _style_summary(inferred) + "."
+        if not inferred.is_auto()
+        else ""
+    )
+    saved_note = (
+        "\nСохранённый стиль тоже можно применить одной кнопкой."
+        if not saved.is_auto()
+        else ""
     )
     await message.answer(
-        "✨ Всё готово к генерации\n\n"
-        f"Задача: {receipt.request_text}\n\n"
-        "Генерация может расходовать платную AI-квоту. Платный вызов начнётся "
-        "только после кнопки ниже. Даже после перезапуска ClientPlatform продолжит "
-        "этот же запрос, а не создаст новый платный job."
-        + (
-            "\n\nДля видео ClientPlatform сначала использует полноценный генератор "
-            "движущейся сцены. Если такой провайдер недоступен до принятия задания, "
-            "может быть использован явно обозначенный motion fallback из AI-кадра."
-            if _receipt_kind(receipt) == "video"
-            else ""
-        ),
-        reply_markup=control._keyboard(
-            [
-                [(f"✅ Создать 1 {noun}", _receipt_callback("generate", token, receipt))],
-                [("✏️ Изменить описание", edit_callback)],
-                [("⬅️ Не создавать", f"cpc:open:{token}")],
-            ]
-        ),
+        "Идею понял. Технический промпт ClientPlatform составит сам."
+        + inferred_note
+        + saved_note
+        + "\n\nМожно сразу создавать или уточнить визуальный стиль.",
+        reply_markup=_style_entry_rows(token, has_saved=not saved.is_auto()),
     )
+
+
+@router.callback_query(
+    ClientPlatformCreativeStudioState.choosing_style,
+    F.data.startswith("cpc:stgo:"),
+)
+async def create_creative_with_auto_style(callback: CallbackQuery, state: FSMContext) -> None:
+    context = await _style_context(state, callback)
+    if context is None:
+        return
+    _data, token, actor, request, saved = context
+    await callback.answer()
+    await _prepare_creative_with_style(
+        control._callback_message(callback),
+        state,
+        actor=actor,
+        token=token,
+        request=request,
+        saved=saved,
+        explicit=VisualStyleIntent(),
+        remember_style=False,
+    )
+
+
+@router.callback_query(
+    ClientPlatformCreativeStudioState.choosing_style,
+    F.data.startswith("cpc:stsaved:"),
+)
+async def create_creative_with_saved_style(callback: CallbackQuery, state: FSMContext) -> None:
+    context = await _style_context(state, callback)
+    if context is None:
+        return
+    _data, token, actor, request, saved = context
+    if saved.is_auto():
+        await callback.answer("Сохранённого стиля пока нет", show_alert=True)
+        return
+    await callback.answer()
+    await _prepare_creative_with_style(
+        control._callback_message(callback),
+        state,
+        actor=actor,
+        token=token,
+        request=request,
+        saved=saved,
+        explicit=VisualStyleIntent(),
+        remember_style=False,
+    )
+
+
+@router.callback_query(
+    ClientPlatformCreativeStudioState.choosing_style,
+    F.data.startswith("cpc:stopen:"),
+)
+async def open_creative_style(callback: CallbackQuery, state: FSMContext) -> None:
+    context = await _style_context(state, callback)
+    if context is None:
+        return
+    _data, token, _actor, request, saved = context
+    await callback.answer()
+    inferred = infer_visual_style(request)
+    note = (
+        "\n\nУже следует из Вашего описания: " + _style_summary(inferred) + "."
+        if not inferred.is_auto()
+        else ""
+    )
+    saved_note = (
+        "\nВаш сохранённый стиль: " + _style_summary(saved) + "."
+        if not saved.is_auto()
+        else ""
+    )
+    await control._callback_message(callback).answer(
+        "Выберите готовый характер картинки или настройте вручную."
+        + note
+        + saved_note,
+        reply_markup=_preset_rows(token),
+    )
+
+
+@router.callback_query(
+    ClientPlatformCreativeStudioState.choosing_style,
+    F.data.startswith("cpc:stpre:"),
+)
+async def choose_creative_style_preset(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = str(callback.data or "").split(":")
+    if len(parts) != 4:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    context = await _style_context(state, callback)
+    if context is None:
+        return
+    _data, token, _actor, request, saved = context
+    try:
+        explicit = visual_style_preset(parts[2])
+    except ValueError:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    await state.update_data(creative_style_json=explicit.to_json())
+    resolved = merge_visual_styles(
+        explicit=explicit,
+        inferred=infer_visual_style(request),
+        saved=saved,
+    )
+    await callback.answer("Стиль выбран")
+    await control._callback_message(callback).answer(
+        "Выбран стиль: " + _style_summary(resolved),
+        reply_markup=_final_style_rows(token),
+    )
+
+
+@router.callback_query(
+    ClientPlatformCreativeStudioState.choosing_style,
+    F.data.startswith("cpc:stmanual:"),
+)
+async def manual_creative_style(callback: CallbackQuery, state: FSMContext) -> None:
+    context = await _style_context(state, callback)
+    if context is None:
+        return
+    _data, token, _actor, request, _saved = context
+    await callback.answer()
+    await _show_next_manual_style(
+        control._callback_message(callback),
+        state=state,
+        token=token,
+        request=request,
+    )
+
+
+@router.callback_query(
+    ClientPlatformCreativeStudioState.choosing_style,
+    F.data.startswith("cpc:stset:"),
+)
+async def set_creative_style_choice(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = str(callback.data or "").split(":")
+    if len(parts) != 5:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    context = await _style_context(state, callback)
+    if context is None:
+        return
+    data, token, _actor, request, _saved = context
+    try:
+        explicit = _style_from_state(data).with_choice(parts[2], parts[3])
+    except ValueError:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    await state.update_data(creative_style_json=explicit.to_json())
+    await callback.answer("Учёл")
+    await _show_next_manual_style(
+        control._callback_message(callback),
+        state=state,
+        token=token,
+        request=request,
+    )
+
+
+@router.callback_query(
+    ClientPlatformCreativeStudioState.choosing_style,
+    F.data.startswith("cpc:stskip:"),
+)
+async def skip_creative_style_choice(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = str(callback.data or "").split(":")
+    if len(parts) != 4 or parts[2] not in _STYLE_FIELDS:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    context = await _style_context(state, callback)
+    if context is None:
+        return
+    data, token, _actor, request, _saved = context
+    skipped = set(data.get("creative_style_skipped") or ())
+    skipped.add(parts[2])
+    await state.update_data(creative_style_skipped=sorted(skipped))
+    explicit = _style_from_state(data)
+    missing = [
+        field
+        for field in style_missing_fields(request=request, explicit=explicit, saved=None)
+        if field not in skipped
+    ]
+    await callback.answer()
+    next_field = next((item for item in _STYLE_FIELDS if item in missing), "")
+    target = control._callback_message(callback)
+    if next_field:
+        await target.answer(
+            _STYLE_FIELD_TITLES[next_field],
+            reply_markup=_manual_style_rows(token, next_field),
+        )
+        return
+    await target.answer(
+        "Готово. Неуказанные параметры ClientPlatform подберёт автоматически.",
+        reply_markup=_final_style_rows(token),
+    )
+
+
+async def _finish_style_selection(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    remember_style: bool,
+) -> None:
+    context = await _style_context(state, callback)
+    if context is None:
+        return
+    data, token, actor, request, saved = context
+    explicit = _style_from_state(data)
+    await callback.answer()
+    await _prepare_creative_with_style(
+        control._callback_message(callback),
+        state,
+        actor=actor,
+        token=token,
+        request=request,
+        saved=saved,
+        explicit=explicit,
+        remember_style=remember_style,
+    )
+
+
+@router.callback_query(
+    ClientPlatformCreativeStudioState.choosing_style,
+    F.data.startswith("cpc:stfinish:"),
+)
+async def finish_creative_style(callback: CallbackQuery, state: FSMContext) -> None:
+    await _finish_style_selection(callback, state, remember_style=False)
+
+
+@router.callback_query(
+    ClientPlatformCreativeStudioState.choosing_style,
+    F.data.startswith("cpc:stsave:"),
+)
+async def save_and_finish_creative_style(callback: CallbackQuery, state: FSMContext) -> None:
+    await _finish_style_selection(callback, state, remember_style=True)
+
+
+@router.callback_query(
+    ClientPlatformCreativeStudioState.choosing_style,
+    F.data.startswith("cpc:strewrite:"),
+)
+async def rewrite_creative_idea(callback: CallbackQuery, state: FSMContext) -> None:
+    context = await _style_context(state, callback)
+    if context is None:
+        return
+    data, token, _actor, _request, _saved = context
+    kind = str(data.get("creative_kind") or "image")
+    await state.set_state(ClientPlatformCreativeStudioState.waiting_prompt)
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "Опишите идею заново обычными словами.",
+        reply_markup=control._keyboard(_studio_navigation_rows(token)),
+    )
+
+
+@router.callback_query(
+    ClientPlatformCreativeStudioState.choosing_style,
+    F.data.startswith("cpc:stback:"),
+)
+async def back_from_creative_style(callback: CallbackQuery, state: FSMContext) -> None:
+    context = await _style_context(state, callback)
+    if context is None:
+        return
+    _data, token, _actor, request, saved = context
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "Идея: " + request,
+        reply_markup=_style_entry_rows(token, has_saved=not saved.is_auto()),
+    )
+
 
 
 def _owner_requested_copy_space(request_text: str) -> bool:
