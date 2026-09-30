@@ -715,7 +715,10 @@ async def _prepare_styled_generation(
             country_code=country_code,
             provider_payload_json=provider_payload_json,
         )
-    except (KeyError, TypeError, ValueError, TenantPermissionDenied):
+    except TenantPermissionDenied:
+        await target.answer("Создание визуалов недоступно для Вашей роли.")
+        return
+    except (KeyError, TypeError, ValueError):
         await target.answer("Не удалось безопасно подготовить генерацию. Попробуйте позже.")
         return
     await state.clear()
@@ -934,7 +937,10 @@ async def save_current_visual_style(callback: CallbackQuery, state: FSMContext) 
             actor=actor,
             style=style,
         )
-    except (KeyError, TypeError, ValueError, TenantPermissionDenied):
+    except TenantPermissionDenied:
+        await callback.answer("Настройка стиля недоступна для Вашей роли", show_alert=True)
+        return
+    except (KeyError, TypeError, ValueError):
         await callback.answer("Не удалось запомнить стиль", show_alert=True)
         return
     await state.update_data(
@@ -957,7 +963,10 @@ async def clear_current_visual_style(callback: CallbackQuery, state: FSMContext)
             str(data["creative_business_id"]),
         )
         await asyncio.to_thread(clear_visual_style_preference, actor=actor)
-    except (KeyError, TypeError, ValueError, TenantPermissionDenied):
+    except TenantPermissionDenied:
+        await callback.answer("Настройка стиля недоступна для Вашей роли", show_alert=True)
+        return
+    except (KeyError, TypeError, ValueError):
         await callback.answer("Не удалось сбросить сохранённый стиль", show_alert=True)
         return
     await state.update_data(
@@ -1399,7 +1408,10 @@ async def accept_creative_result(callback: CallbackQuery, state: FSMContext) -> 
     try:
         actor = await _actor_for_callback(callback, token)
         await _receipt_for_callback(actor, receipt_token)
-    except (LookupError, TypeError, ValueError, TenantPermissionDenied):
+    except TenantPermissionDenied:
+        await callback.answer("Этот результат недоступен для Вашей роли", show_alert=True)
+        return
+    except (LookupError, TypeError, ValueError):
         await callback.answer("Этот результат уже недоступен", show_alert=True)
         return
     await callback.answer("Хорошо — оставляем этот вариант")
@@ -1421,7 +1433,10 @@ async def restyle_creative_result(callback: CallbackQuery, state: FSMContext) ->
             selected=frozen_style,
         )
         inference = infer_visual_style_intent(receipt.request_text)
-    except (LookupError, TypeError, ValueError, TenantPermissionDenied):
+    except TenantPermissionDenied:
+        await callback.answer("Этот результат недоступен для Вашей роли", show_alert=True)
+        return
+    except (LookupError, TypeError, ValueError):
         await callback.answer("Этот результат уже недоступен", show_alert=True)
         return
 
@@ -1466,7 +1481,10 @@ async def create_another_visual_variant(
             country_code=receipt.country_code,
             provider_payload_json=receipt.provider_payload_json,
         )
-    except (LookupError, TypeError, ValueError, TenantPermissionDenied):
+    except TenantPermissionDenied:
+        await callback.answer("Создание визуалов недоступно для Вашей роли", show_alert=True)
+        return
+    except (LookupError, TypeError, ValueError):
         await callback.answer("Не удалось подготовить другой вариант", show_alert=True)
         return
     await callback.answer()
