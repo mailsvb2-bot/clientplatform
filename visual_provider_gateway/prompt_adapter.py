@@ -12,6 +12,8 @@ from dataclasses import replace
 from .models import CreativeBrief
 
 
+PROMPT_ADAPTER_VERSION = 1
+
 _RUNWAY_PROMPT_LIMIT = 1000
 _YANDEX_PROMPT_LIMIT = 4800
 
@@ -135,4 +137,4 @@ def adapt_visual_brief_for_provider(
     return value
 
 
-__all__ = ["adapt_visual_brief_for_provider"]
+__all__ = ["PROMPT_ADAPTER_VERSION", "adapt_visual_brief_for_provider"]
