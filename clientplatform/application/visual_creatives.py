@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import os
 
+from clientplatform.domain.visual_prompt_compiler import compile_visual_prompt
 
 from services.visual_creative_gateway import (
     VisualCreativeBrief,
@@ -252,32 +253,20 @@ def build_business_visual_brief(
     visual_kind = str(kind or "").strip().lower()
     if visual_kind not in {"image", "video"}:
         raise ValueError("business visual kind must be image or video")
-    medium = (
-        "Create one polished short vertical video for an independent professional or small business. "
-        "Use natural motion, a clear subject and a calm final frame. "
-        if visual_kind == "video"
-        else "Create one polished visual for an independent professional or small business. "
-    )
-    prompt = (
-        medium
-        + f"Owner request: {owner_request}. "
-        "Use credible natural details, human proportions and realistic lighting. "
-        "Keep the main subject fully inside the frame with comfortable margins and "
-        "use the whole canvas. Do not crop the important subject against an edge or "
-        "leave a large empty, solid or transparent band unless the owner explicitly "
-        "asked for intentional copy space. "
-        "No fake awards, fake reviews, invented statistics, before/after claims, "
-        "medical guarantees, money guarantees or manipulative urgency. "
-        "Do not bake readable advertising text into the pixels unless the owner "
-        "explicitly asked for text as part of the visual concept."
+    compiled = compile_visual_prompt(
+        request=owner_request,
+        kind=visual_kind,
+        brand_context=str(brand_context or "").strip()[:1200],
+        purpose="owner_visual",
     )
     return VisualCreativeBrief(
         kind=visual_kind,
-        prompt=prompt,
+        prompt=compiled.prompt,
         country_code=str(country_code or ""),
         preferred_provider=str(preferred_provider or ""),
         aspect_ratio="9:16" if visual_kind == "video" else "4:5",
         duration_seconds=8,
+        negative_prompt=compiled.negative_prompt,
         brand_context=str(brand_context or "").strip()[:2500],
     )
 
@@ -394,33 +383,25 @@ def build_ad_visual_brief(
     visual_kind = str(kind or "image").strip().lower()
     if visual_kind not in {"image", "video"}:
         raise ValueError("kind must be image or video")
-    motion = (
-        "Short polished vertical advertising video, natural movement, strong subject "
-        "hierarchy and a calm final frame with clean copy space."
-        if visual_kind == "video"
-        else "Premium advertising key visual, credible real-world lighting, strong "
-        "subject hierarchy and generous clean copy space."
-    )
-    prompt = (
-        "Create a trustworthy advertising creative for an independent professional "
-        "or small service business. "
-        f"Service: {str(title or '').strip()}. Context: {str(body or '').strip()}. "
-        f"{motion} "
-        "Keep the primary subject fully inside the frame. Any copy space must look "
-        "intentional and visually balanced, never like a blank technical band or "
-        "unfinished canvas. "
-        "No fake awards, fake reviews, invented statistics, before/after claims, "
-        "medical guarantees, money guarantees or manipulative urgency. "
-        "Do not bake readable advertising text into the pixels; typography will be "
-        "handled separately."
+    service = normalize_business_image_request(str(title or ""))
+    context = " ".join(str(body or "").replace("\x00", " ").split()).strip()
+    owner_request = f"Create an advertising visual for {service}."
+    if context:
+        owner_request += f" Context: {context}"
+    compiled = compile_visual_prompt(
+        request=owner_request,
+        kind=visual_kind,
+        brand_context=f"Service or offering: {service}. {context}".strip()[:1200],
+        purpose="advertising",
     )
     return VisualCreativeBrief(
         kind=visual_kind,
-        prompt=prompt,
+        prompt=compiled.prompt,
         country_code=str(country_code or ""),
         preferred_provider=str(preferred_provider or ""),
         aspect_ratio="4:5" if visual_kind == "image" else "9:16",
         duration_seconds=8,
+        negative_prompt=compiled.negative_prompt,
         brand_context="ClientPlatform: clean, modern, trustworthy, human and useful.",
     )
 

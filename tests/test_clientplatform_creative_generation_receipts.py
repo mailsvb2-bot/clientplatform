@@ -39,7 +39,7 @@ class FrozenBusinessImagePayloadTests(unittest.TestCase):
         self.assertEqual(value["version"], 1)
         self.assertEqual(value["wait_seconds"], 20)
         self.assertEqual(value["brief"]["kind"], "image")
-        self.assertIn("Owner request: calm office", value["brief"]["prompt"])
+        self.assertIn('Owner request, preserve its meaning exactly: "calm office"', value["brief"]["prompt"])
 
     def test_video_payload_preserves_event_binding_and_vertical_brief(self) -> None:
         frozen = freeze_business_visual_payload(
@@ -102,7 +102,7 @@ class FrozenBusinessImagePayloadTests(unittest.TestCase):
             )
         self.assertIs(result, expected)
         brief = submit.call_args.args[0]
-        self.assertIn("Owner request: original request", brief.prompt)
+        self.assertIn('Owner request, preserve its meaning exactly: "original request"', brief.prompt)
         self.assertEqual(brief.brand_context, "Tone: calm")
         self.assertEqual(submit.call_args.kwargs["wait_seconds"], 20)
 
