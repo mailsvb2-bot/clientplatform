@@ -173,6 +173,34 @@ class AppiumClient:
     def navigate(self, url: str) -> None:
         self._request("POST", f"/session/{self.session_id}/url", {"url": url})
 
+    def execute_mobile(self, name: str, args: dict[str, Any] | None = None) -> Any:
+        response = self._request(
+            "POST",
+            f"/session/{self.session_id}/execute/sync",
+            {"script": f"mobile: {name}", "args": [args or {}]},
+            timeout=60,
+        )
+        return response.get("value") if isinstance(response, dict) else None
+
+    def orientation(self) -> str:
+        response = self._request("GET", f"/session/{self.session_id}/orientation")
+        value = response.get("value") if isinstance(response, dict) else ""
+        orientation = str(value or "").strip().upper()
+        if orientation not in {"PORTRAIT", "LANDSCAPE"}:
+            raise AppiumProbeError("appium_orientation_invalid")
+        return orientation
+
+    def set_orientation(self, orientation: str) -> None:
+        value = orientation.strip().upper()
+        if value not in {"PORTRAIT", "LANDSCAPE"}:
+            raise AppiumProbeError("requested_orientation_invalid")
+        self._request(
+            "POST",
+            f"/session/{self.session_id}/orientation",
+            {"orientation": value},
+            timeout=60,
+        )
+
 
 def _hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -241,6 +269,96 @@ def _poll_expected(
     raise AppiumProbeError("provider_response_assertion_timeout")
 
 
+def _assert_anchor(source: str, anchor: str, stage: str) -> None:
+    if not anchor or _count(source, anchor) <= 0:
+        raise AppiumProbeError(f"compatibility_state_anchor_missing:{stage}")
+
+
+def _run_compatibility(
+    client: AppiumClient,
+    *,
+    plan: dict[str, Any],
+    profile: dict[str, Any],
+    evidence_dir: Path,
+) -> list[dict[str, Any]]:
+    anchor = str(plan.get("state_anchor") or "").strip()
+    if not anchor:
+        raise AppiumProbeError("compatibility_state_anchor_required")
+
+    _open_native_chat(client, profile)
+    records: list[dict[str, Any]] = []
+    for index, probe in enumerate(plan["probes"], start=1):
+        probe_id = str(probe.get("id") or "")
+        kind = str(probe.get("kind") or "")
+        before = client.source()
+        _assert_anchor(before, anchor, f"{probe_id}:before")
+        before_hash = _hash(before)
+
+        if kind == "background-resume":
+            client.execute_mobile("backgroundApp", {"seconds": 3})
+            after = client.source()
+            _assert_anchor(after, anchor, f"{probe_id}:after")
+            shot = evidence_dir / f"compatibility-{index:02d}-{probe_id}.png"
+            client.screenshot(shot)
+            records.append(
+                {
+                    "id": probe_id,
+                    "status": "ok",
+                    "expected_text_asserted": True,
+                    "state_preserved": True,
+                    "background_restored": True,
+                    "before_hash": before_hash,
+                    "after_hash": _hash(after),
+                    "screenshot": shot.name,
+                }
+            )
+            continue
+
+        if kind == "orientation-roundtrip":
+            initial = client.orientation()
+            requested = "LANDSCAPE" if initial == "PORTRAIT" else "PORTRAIT"
+            client.set_orientation(requested)
+            time.sleep(1.0)
+            observed = client.orientation()
+            changed = observed == requested
+            if probe.get("require_change") is True and not changed:
+                raise AppiumProbeError("orientation_change_required_but_not_observed")
+            rotated_source = client.source()
+            _assert_anchor(rotated_source, anchor, f"{probe_id}:rotated")
+            if changed:
+                client.set_orientation(initial)
+                time.sleep(1.0)
+            final_orientation = client.orientation()
+            if changed and final_orientation != initial:
+                raise AppiumProbeError("orientation_restore_failed")
+            final_source = client.source()
+            _assert_anchor(final_source, anchor, f"{probe_id}:restored")
+            shot = evidence_dir / f"compatibility-{index:02d}-{probe_id}.png"
+            client.screenshot(shot)
+            records.append(
+                {
+                    "id": probe_id,
+                    "status": "ok",
+                    "expected_text_asserted": True,
+                    "state_preserved": True,
+                    "orientation_verified": True,
+                    "orientation_changed": changed,
+                    "initial_orientation": initial,
+                    "requested_orientation": requested,
+                    "observed_orientation": observed,
+                    "final_orientation": final_orientation,
+                    "before_hash": before_hash,
+                    "after_hash": _hash(final_source),
+                    "screenshot": shot.name,
+                }
+            )
+            continue
+
+        raise AppiumProbeError(f"unsupported_compatibility_probe:{kind}")
+
+    return records
+
+
 def execute(plan: dict[str, Any]) -> dict[str, Any]:
     profile = plan.get("profile")
     if not isinstance(profile, dict):
@@ -260,10 +378,20 @@ def execute(plan: dict[str, Any]) -> dict[str, Any]:
     )
     client = AppiumClient(base_url)
     channel = str(plan["channel"])
+    mode = str(plan.get("mode") or "transport")
     records: list[dict[str, Any]] = []
     try:
         client.create_session(_capabilities(plan, profile))
-        if channel == "cockpit":
+        if mode == "compatibility":
+            records.extend(
+                _run_compatibility(
+                    client,
+                    plan=plan,
+                    profile=profile,
+                    evidence_dir=evidence_dir,
+                )
+            )
+        elif channel == "cockpit":
             url = str(profile.get("url") or "").strip()
             if not url:
                 raise AppiumProbeError("cockpit_profile_url_missing")
@@ -342,6 +470,7 @@ def execute(plan: dict[str, Any]) -> dict[str, Any]:
     result = {
         "target_id": plan["target"]["id"],
         "channel": channel,
+        "mode": mode,
         "probes": records,
     }
     result_path.write_text(

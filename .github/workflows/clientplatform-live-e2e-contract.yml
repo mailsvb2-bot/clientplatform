@@ -40,6 +40,7 @@ jobs:
           python -m py_compile scripts/live_e2e/mobile/validate_device.py
           python -m py_compile scripts/live_e2e/mobile/appium_driver.py
           python -m py_compile scripts/live_e2e/mobile/hypium_adapter.py
+          python -m py_compile scripts/live_e2e/mobile/form_factor_adapter.py
 
       - name: Parse Windows E2E scripts
         shell: powershell

@@ -20,6 +20,7 @@ from scripts.check_live_e2e_manifest import load_manifest, validate_manifest  # 
 
 APPIUM_DRIVER = ROOT / "scripts" / "live_e2e" / "mobile" / "appium_driver.py"
 HYPIUM_ADAPTER = ROOT / "scripts" / "live_e2e" / "mobile" / "hypium_adapter.py"
+FORM_FACTOR_ADAPTER = ROOT / "scripts" / "live_e2e" / "mobile" / "form_factor_adapter.py"
 _PROFILE_ENV = {
     "telegram": "CLIENTPLATFORM_E2E_TELEGRAM_MOBILE_PROFILE",
     "vk": "CLIENTPLATFORM_E2E_VK_MOBILE_PROFILE",
@@ -227,6 +228,92 @@ def _run_surface(
     )
 
 
+def _run_behavior_plan(
+    *,
+    target: dict[str, Any],
+    group: str,
+    mode: str,
+    probes: list[dict[str, Any]],
+    profile: dict[str, Any],
+    state_anchor: str,
+    evidence_dir: Path,
+    driver: Path,
+) -> SurfaceProbe:
+    group_dir = evidence_dir / group
+    group_dir.mkdir(parents=True, exist_ok=True)
+    result_path = group_dir / "result.json"
+    plan = {
+        "target": target,
+        "channel": group,
+        "mode": mode,
+        "probes": probes,
+        "profile": profile,
+        "state_anchor": state_anchor,
+        "evidence_dir": str(group_dir),
+        "result_path": str(result_path),
+    }
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", suffix=".json", delete=False
+    ) as handle:
+        json.dump(plan, handle, ensure_ascii=False)
+        plan_path = Path(handle.name)
+
+    try:
+        completed = subprocess.run(  # nosec B603 - fixed repository driver
+            [sys.executable, str(driver), "--plan", str(plan_path)],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            timeout=660,
+            check=False,
+        )
+    finally:
+        plan_path.unlink(missing_ok=True)
+
+    if completed.returncode or not result_path.is_file():
+        return SurfaceProbe(
+            channel=group,
+            status="failed",
+            actions_checked=0,
+            detail=f"driver_failed:{completed.returncode}",
+        )
+    try:
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return SurfaceProbe(
+            channel=group,
+            status="failed",
+            actions_checked=0,
+            detail="driver_result_invalid",
+        )
+    rows = result.get("probes") if isinstance(result, dict) else None
+    if not isinstance(rows, list) or len(rows) != len(probes):
+        return SurfaceProbe(
+            channel=group,
+            status="failed",
+            actions_checked=0,
+            detail="driver_probe_count_mismatch",
+        )
+    passed = all(
+        isinstance(row, dict)
+        and row.get("status") == "ok"
+        and row.get("state_preserved") is True
+        for row in rows
+    )
+    if mode == "compatibility":
+        passed = passed and all(
+            row.get("expected_text_asserted") is True
+            for row in rows
+            if isinstance(row, dict)
+        )
+    return SurfaceProbe(
+        channel=group,
+        status="ok" if passed else "failed",
+        actions_checked=len(probes) if passed else 0,
+        detail="behavior_evidence_ok" if passed else "behavior_evidence_failed",
+    )
+
+
 def execute(evidence_dir: Path) -> int:
     raw = load_manifest()
     contract = validate_manifest(raw)
@@ -246,7 +333,36 @@ def execute(evidence_dir: Path) -> int:
             )
         )
 
+    state_anchor = str(raw["live_transport_probes"]["telegram"][0]["expect"])
+    compatibility = _run_behavior_plan(
+        target=target,
+        group="device-compatibility",
+        mode="compatibility",
+        probes=list(target["compatibility_probes"]),
+        profile=profiles["telegram"],
+        state_anchor=state_anchor,
+        evidence_dir=evidence_dir,
+        driver=_driver_for(target),
+    )
+    form_factor_probes = list(target.get("form_factor_probes") or ())
+    form_factor = None
+    if form_factor_probes:
+        form_factor = _run_behavior_plan(
+            target=target,
+            group="form-factor",
+            mode="form-factor",
+            probes=form_factor_probes,
+            profile=profiles["telegram"],
+            state_anchor=state_anchor,
+            evidence_dir=evidence_dir,
+            driver=FORM_FACTOR_ADAPTER,
+        )
+
     failed = [item for item in probes if item.status != "ok"]
+    if compatibility.status != "ok":
+        failed.append(compatibility)
+    if form_factor is not None and form_factor.status != "ok":
+        failed.append(form_factor)
     report = {
         "suite": raw["suite"],
         "target_id": target["id"],
@@ -262,10 +378,25 @@ def execute(evidence_dir: Path) -> int:
             "claim": "hermetic_registry_coverage",
         },
         "live_transport": [asdict(item) for item in probes],
+        "device_compatibility": asdict(compatibility),
+        "form_factor": (
+            asdict(form_factor)
+            if form_factor is not None
+            else {
+                "channel": "form-factor",
+                "status": "not-required",
+                "actions_checked": 0,
+                "detail": "no_form_factor_probes_for_target",
+            }
+        ),
         "summary": {
             "surfaces": len(probes),
-            "failed_surfaces": len(failed),
+            "failed_evidence_groups": len(failed),
             "asserted_live_probes": sum(item.actions_checked for item in probes),
+            "compatibility_probes": compatibility.actions_checked,
+            "form_factor_probes": (
+                form_factor.actions_checked if form_factor is not None else 0
+            ),
         },
     }
     (evidence_dir / "mobile-live-e2e-report.json").write_text(
@@ -292,7 +423,9 @@ def print_plan() -> int:
         print(
             f"- {target['id']}: host={target['host_label']} "
             f"os={target['device_os']} form_factor={target['form_factor']} "
-            f"driver={target['driver']} surfaces={','.join(target['required_surfaces'])}"
+            f"driver={target['driver']} surfaces={','.join(target['required_surfaces'])} "
+            f"compatibility={len(target.get('compatibility_probes') or ())} "
+            f"form_factor={len(target.get('form_factor_probes') or ())}"
         )
     return 0
 

@@ -89,6 +89,24 @@ _REQUIRED_MOBILE_TARGETS = {
         "driver": "appium-uiautomator2",
     },
 }
+_REQUIRED_COMPATIBILITY_BASE = [
+    {"id": "background-resume", "kind": "background-resume"},
+]
+_REQUIRED_FORM_FACTOR_PROBES = {
+    "android-phone": [],
+    "android-tablet": [{"id": "split-screen-state", "kind": "multiwindow-state"}],
+    "ios-iphone": [],
+    "ipados-ipad": [{"id": "split-view-state", "kind": "multiwindow-state"}],
+    "harmonyos-phone": [],
+    "harmonyos-tablet": [{"id": "multiwindow-state", "kind": "multiwindow-state"}],
+    "fireos-tablet": [{"id": "multiwindow-state", "kind": "multiwindow-state"}],
+    "chromeos-tablet": [
+        {"id": "window-resize", "kind": "window-resize"},
+        {"id": "touchview-transition", "kind": "touchview-transition"},
+        {"id": "physical-keyboard", "kind": "physical-keyboard"},
+        {"id": "suspend-resume", "kind": "suspend-resume"},
+    ],
+}
 _REQUIRED_EVIDENCE = {
     "cross_tenant_denial",
     "duplicate_event_replay",
@@ -233,6 +251,23 @@ def validate_manifest(raw: dict[str, Any]) -> dict[str, Any]:
         surfaces = set(target.get("required_surfaces") or ())
         if surfaces != _REQUIRED_MOBILE_SURFACES:
             problems.append(f"mobile_target_surfaces_mismatch:{target_id}")
+
+        compatibility = target.get("compatibility_probes")
+        expected_orientation = {
+            "id": "orientation-roundtrip",
+            "kind": "orientation-roundtrip",
+            "require_change": (
+                target.get("form_factor") == "tablet"
+                and target_id != "chromeos-tablet"
+            ),
+        }
+        expected_compatibility = [*_REQUIRED_COMPATIBILITY_BASE, expected_orientation]
+        if compatibility != expected_compatibility:
+            problems.append(f"mobile_target_compatibility_mismatch:{target_id}")
+
+        expected_form_factor = _REQUIRED_FORM_FACTOR_PROBES[target_id]
+        if target.get("form_factor_probes") != expected_form_factor:
+            problems.append(f"mobile_target_form_factor_mismatch:{target_id}")
     for target_id in sorted(set(mobile_targets) - set(_REQUIRED_MOBILE_TARGETS)):
         problems.append(f"mobile_target_unknown:{target_id}")
 
@@ -329,6 +364,14 @@ def validate_manifest(raw: dict[str, Any]) -> dict[str, Any]:
         "roles": sorted(covered_roles),
         "windows_variants": sorted(variants),
         "mobile_targets": sorted(mobile_targets),
+        "mobile_compatibility_probes": sum(
+            len(target.get("compatibility_probes") or ())
+            for target in mobile_targets.values()
+        ),
+        "mobile_form_factor_probes": sum(
+            len(target.get("form_factor_probes") or ())
+            for target in mobile_targets.values()
+        ),
         "live_probes": sum(len(live_probes.get(channel) or ()) for channel in _REQUIRED_CHANNELS),
     }
 

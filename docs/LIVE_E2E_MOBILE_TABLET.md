@@ -141,3 +141,31 @@ The mobile contour inherits the Windows safety boundary:
 
 The repository is public. Treat every attached device and its host as an exposed
 synthetic test worker, never as a production administration machine.
+
+
+## Lifecycle, orientation and form-factor gates
+
+Transport success is not sufficient for a device target. Every phone/tablet leg
+also runs a compatibility plan against the dedicated Telegram test session:
+
+- background the active application and restore it, then prove the same
+  ClientPlatform state anchor remains visible;
+- request an orientation round trip and prove the session remains usable;
+- tablet targets require an actual orientation change, except ChromeOS where
+  window/touchview behavior is evidenced separately.
+
+Tablet-only hardware transitions use a runner-local executor named by
+`CLIENTPLATFORM_E2E_FORM_FACTOR_RUNNER`. It is deliberately outside the
+repository and must emit the exact requested probe set with screenshots and
+`state_preserved=true`. The repository adapter rejects exit-code-only success.
+
+Required form-factor evidence is:
+
+- Android tablet: split-screen state preservation;
+- iPad: Split View state preservation;
+- HarmonyOS tablet and Fire OS tablet: multi-window state preservation;
+- ChromeOS tablet/convertible: window resize, clamshell↔touchview transition,
+  physical-keyboard input, and suspend/resume.
+
+A missing hardware executor leaves that target BLOCKED-LIVE. The suite never
+downgrades these requirements to a mock or marks another device as equivalent.

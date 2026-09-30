@@ -28,6 +28,8 @@ def test_live_e2e_manifest_covers_current_native_parity_registry() -> None:
         "ios-iphone",
         "ipados-ipad",
     ]
+    assert summary["mobile_compatibility_probes"] == 16
+    assert summary["mobile_form_factor_probes"] == 8
     assert {"telegram", "vk", "max"} <= set(summary["channels"])
 
 
@@ -70,6 +72,7 @@ def test_live_e2e_contract_is_checked_on_hosted_windows_without_credentials() ->
     assert "scripts/live_e2e/mobile/validate_device.py" in workflow
     assert "scripts/live_e2e/mobile/appium_driver.py" in workflow
     assert "scripts/live_e2e/mobile/hypium_adapter.py" in workflow
+    assert "scripts/live_e2e/mobile/form_factor_adapter.py" in workflow
     assert "secrets." not in workflow
 
 
@@ -222,6 +225,10 @@ def test_mobile_appium_driver_requires_expected_text_and_changed_ui() -> None:
     assert 'client.navigate("about:blank")' in source
     assert "Bearer" in source
     assert "value.get('message'" not in source
+    assert 'execute_mobile("backgroundApp"' in source
+    assert "/orientation" in source
+    assert "orientation_change_required_but_not_observed" in source
+    assert "compatibility_state_anchor_missing" in source
 
 
 def test_harmony_adapter_requires_structured_hypium_evidence() -> None:
@@ -234,6 +241,8 @@ def test_harmony_adapter_requires_structured_hypium_evidence() -> None:
     assert "shell=True" not in source
     assert "hypium_runner_must_be_runner_local" in source
     assert "completed.stdout" not in source
+    assert "hypium_state_not_preserved" in source
+    assert "hypium_orientation_not_verified" in source
 
 
 def test_mobile_orchestrator_never_claims_one_device_as_another() -> None:
@@ -247,3 +256,42 @@ def test_mobile_orchestrator_never_claims_one_device_as_another() -> None:
     assert "CLIENTPLATFORM_E2E_TELEGRAM_MOBILE_PROFILE" in source
     assert "CLIENTPLATFORM_E2E_COCKPIT_MOBILE_PROFILE" in source
     assert "completed.stdout" not in source
+    assert '"device_compatibility"' in source
+    assert '"form_factor"' in source
+    assert "FORM_FACTOR_ADAPTER" in source
+
+
+def test_mobile_manifest_requires_lifecycle_orientation_and_form_factor_evidence() -> None:
+    raw = load_manifest()
+    targets = {item["id"]: item for item in raw["mobile_runner"]["targets"]}
+    for target in targets.values():
+        kinds = {item["kind"] for item in target["compatibility_probes"]}
+        assert kinds == {"background-resume", "orientation-roundtrip"}
+    assert targets["android-tablet"]["form_factor_probes"] == [
+        {"id": "split-screen-state", "kind": "multiwindow-state"}
+    ]
+    assert targets["ipados-ipad"]["form_factor_probes"] == [
+        {"id": "split-view-state", "kind": "multiwindow-state"}
+    ]
+    assert {item["kind"] for item in targets["chromeos-tablet"]["form_factor_probes"]} == {
+        "window-resize",
+        "touchview-transition",
+        "physical-keyboard",
+        "suspend-resume",
+    }
+
+
+def test_mobile_form_factor_adapter_fails_closed_on_external_evidence() -> None:
+    source = (
+        ROOT / "scripts" / "live_e2e" / "mobile" / "form_factor_adapter.py"
+    ).read_text(encoding="utf-8")
+    assert "CLIENTPLATFORM_E2E_FORM_FACTOR_RUNNER" in source
+    assert "form_factor_runner_must_be_runner_local" in source
+    assert "state_preserved" in source
+    assert "multiwindow_verified" in source
+    assert "window_resized" in source
+    assert "mode_transition_verified" in source
+    assert "physical_keyboard_verified" in source
+    assert "resume_verified" in source
+    assert "completed.stdout" not in source
+    assert "shell=True" not in source

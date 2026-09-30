@@ -16,6 +16,8 @@ class HypiumAdapterError(RuntimeError):
 
 def _validate_result(plan: dict[str, Any], result: dict[str, Any]) -> None:
     expected = {str(item["id"]) for item in plan["probes"]}
+    probe_by_id = {str(item["id"]): item for item in plan["probes"]}
+    mode = str(plan.get("mode") or "transport")
     rows = result.get("probes")
     if not isinstance(rows, list):
         raise HypiumAdapterError("hypium_result_probes_missing")
@@ -30,6 +32,19 @@ def _validate_result(plan: dict[str, Any], result: dict[str, Any]) -> None:
             raise HypiumAdapterError(f"hypium_probe_failed:{probe_id}")
         if row.get("expected_text_asserted") is not True:
             raise HypiumAdapterError(f"hypium_expected_text_not_asserted:{probe_id}")
+        if mode == "compatibility":
+            if row.get("state_preserved") is not True:
+                raise HypiumAdapterError(f"hypium_state_not_preserved:{probe_id}")
+            probe = probe_by_id.get(probe_id) or {}
+            if probe.get("kind") == "orientation-roundtrip":
+                if row.get("orientation_verified") is not True:
+                    raise HypiumAdapterError(
+                        f"hypium_orientation_not_verified:{probe_id}"
+                    )
+                if probe.get("require_change") is True and row.get("orientation_changed") is not True:
+                    raise HypiumAdapterError(
+                        f"hypium_orientation_change_not_observed:{probe_id}"
+                    )
         screenshot = str(row.get("screenshot") or "")
         if not screenshot:
             raise HypiumAdapterError(f"hypium_screenshot_missing:{probe_id}")

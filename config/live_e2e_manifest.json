@@ -552,7 +552,19 @@
           "vk",
           "max",
           "cockpit"
-        ]
+        ],
+        "compatibility_probes": [
+          {
+            "id": "background-resume",
+            "kind": "background-resume"
+          },
+          {
+            "id": "orientation-roundtrip",
+            "kind": "orientation-roundtrip",
+            "require_change": false
+          }
+        ],
+        "form_factor_probes": []
       },
       {
         "id": "android-tablet",
@@ -566,6 +578,23 @@
           "vk",
           "max",
           "cockpit"
+        ],
+        "compatibility_probes": [
+          {
+            "id": "background-resume",
+            "kind": "background-resume"
+          },
+          {
+            "id": "orientation-roundtrip",
+            "kind": "orientation-roundtrip",
+            "require_change": true
+          }
+        ],
+        "form_factor_probes": [
+          {
+            "id": "split-screen-state",
+            "kind": "multiwindow-state"
+          }
         ]
       },
       {
@@ -580,7 +609,19 @@
           "vk",
           "max",
           "cockpit"
-        ]
+        ],
+        "compatibility_probes": [
+          {
+            "id": "background-resume",
+            "kind": "background-resume"
+          },
+          {
+            "id": "orientation-roundtrip",
+            "kind": "orientation-roundtrip",
+            "require_change": false
+          }
+        ],
+        "form_factor_probes": []
       },
       {
         "id": "ipados-ipad",
@@ -594,6 +635,23 @@
           "vk",
           "max",
           "cockpit"
+        ],
+        "compatibility_probes": [
+          {
+            "id": "background-resume",
+            "kind": "background-resume"
+          },
+          {
+            "id": "orientation-roundtrip",
+            "kind": "orientation-roundtrip",
+            "require_change": true
+          }
+        ],
+        "form_factor_probes": [
+          {
+            "id": "split-view-state",
+            "kind": "multiwindow-state"
+          }
         ]
       },
       {
@@ -608,7 +666,19 @@
           "vk",
           "max",
           "cockpit"
-        ]
+        ],
+        "compatibility_probes": [
+          {
+            "id": "background-resume",
+            "kind": "background-resume"
+          },
+          {
+            "id": "orientation-roundtrip",
+            "kind": "orientation-roundtrip",
+            "require_change": false
+          }
+        ],
+        "form_factor_probes": []
       },
       {
         "id": "harmonyos-tablet",
@@ -622,6 +692,23 @@
           "vk",
           "max",
           "cockpit"
+        ],
+        "compatibility_probes": [
+          {
+            "id": "background-resume",
+            "kind": "background-resume"
+          },
+          {
+            "id": "orientation-roundtrip",
+            "kind": "orientation-roundtrip",
+            "require_change": true
+          }
+        ],
+        "form_factor_probes": [
+          {
+            "id": "multiwindow-state",
+            "kind": "multiwindow-state"
+          }
         ]
       },
       {
@@ -636,6 +723,23 @@
           "vk",
           "max",
           "cockpit"
+        ],
+        "compatibility_probes": [
+          {
+            "id": "background-resume",
+            "kind": "background-resume"
+          },
+          {
+            "id": "orientation-roundtrip",
+            "kind": "orientation-roundtrip",
+            "require_change": true
+          }
+        ],
+        "form_factor_probes": [
+          {
+            "id": "multiwindow-state",
+            "kind": "multiwindow-state"
+          }
         ]
       },
       {
@@ -650,6 +754,35 @@
           "vk",
           "max",
           "cockpit"
+        ],
+        "compatibility_probes": [
+          {
+            "id": "background-resume",
+            "kind": "background-resume"
+          },
+          {
+            "id": "orientation-roundtrip",
+            "kind": "orientation-roundtrip",
+            "require_change": false
+          }
+        ],
+        "form_factor_probes": [
+          {
+            "id": "window-resize",
+            "kind": "window-resize"
+          },
+          {
+            "id": "touchview-transition",
+            "kind": "touchview-transition"
+          },
+          {
+            "id": "physical-keyboard",
+            "kind": "physical-keyboard"
+          },
+          {
+            "id": "suspend-resume",
+            "kind": "suspend-resume"
+          }
         ]
       }
     ]
