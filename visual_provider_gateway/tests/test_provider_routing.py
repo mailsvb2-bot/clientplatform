@@ -338,7 +338,7 @@ def test_yandexart_motion_waits_for_native_image_operation(monkeypatch):
     assert result.provider_payload["motion_duration_seconds"] == 5
 
 
-def test_yandexart_native_model_fallback_only_after_definitive_rejection(monkeypatch):
+def test_current_alice_model_failure_is_not_masked_by_deprecated_fallback(monkeypatch):
     from visual_provider_gateway.providers import (
         ProviderTransportError,
         YandexArtProvider,
@@ -347,13 +347,12 @@ def test_yandexart_native_model_fallback_only_after_definitive_rejection(monkeyp
     calls = []
 
     def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0):
-        calls.append(payload["modelUri"])
-        if len(calls) == 1:
-            raise ProviderTransportError("http_400")
-        return {"id": "operation-fallback", "done": False}
+        calls.append((url, payload))
+        raise ProviderTransportError("http_400")
 
     monkeypatch.setattr(providers, "_json_request", fake_json_request)
     monkeypatch.setenv("YANDEX_API_KEY", "key")
+    monkeypatch.delenv("YANDEX_ART_MODEL_CANDIDATES", raising=False)
     provider = YandexArtProvider(
         ProviderConfig(
             name="yandexart",
@@ -364,13 +363,12 @@ def test_yandexart_native_model_fallback_only_after_definitive_rejection(monkeyp
         )
     )
 
-    job = provider.submit(CreativeBrief(kind="image", prompt="product"))
+    with pytest.raises(ProviderTransportError, match="http_400"):
+        provider.submit(CreativeBrief(kind="image", prompt="product"))
 
-    assert job.external_id == "operation-fallback"
-    assert calls == [
-        "art://folder/aliceai-image-art-3.0",
-        "art://folder/yandex-art/latest",
-    ]
+    assert len(calls) == 1
+    assert calls[0][0].endswith("/v1/images/generations")
+    assert calls[0][1]["model"] == "art://folder/aliceai-image-art-3.0"
 
 
 def test_yandexart_falls_back_to_compat_api_after_native_authorization_rejection(tmp_path, monkeypatch):
