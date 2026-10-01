@@ -122,20 +122,52 @@ def test_short_prompt_enters_optional_style_step_before_any_paid_preparation(
     assert "cpc:st:open:business-token" in buttons
 
 
-def test_style_preset_changes_only_preparation_state_not_provider(monkeypatch) -> None:
+def test_quick_style_buttons_are_additive_multi_select_and_do_not_call_provider(
+    monkeypatch,
+) -> None:
     target = _message()
-    callback = _callback("cpc:st:p:sc:business-token", target)
     state = FakeState(_style_state())
     monkeypatch.setattr(studio.control, "_callback_message", lambda _callback: target)
     prepare = Mock()
     monkeypatch.setattr(studio, "prepare_creative_generation", prepare)
 
-    asyncio.run(studio.choose_visual_style_preset(callback, state))
+    for callback_data in (
+        "cpc:st:p:wf:business-token",
+        "cpc:st:p:il:business-token",
+        "cpc:st:p:pr:business-token",
+    ):
+        asyncio.run(
+            studio.choose_visual_style_preset(
+                _callback(callback_data, target),
+                state,
+            )
+        )
 
     prepare.assert_not_called()
-    assert state.data["creative_style_intent"]["emotional_tone"] == "calm"
-    assert state.data["creative_style_intent"]["contrast"] == "soft"
-    assert "Как Вы представляете" in target.answer.await_args.args[0]
+    style = VisualStyleIntent.from_mapping(state.data["creative_style_intent"])
+    assert style.quick_style_names() == (
+        "warm_friendly",
+        "premium",
+        "illustrative",
+    )
+    labels = [
+        button.text
+        for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert "✅ 🤗 Тёпло и дружелюбно" in labels
+    assert "✅ 💎 Премиально" in labels
+    assert "✅ 🎨 Художественно" in labels
+    assert "Акценты:" in target.answer.await_args.args[0]
+
+    asyncio.run(
+        studio.choose_visual_style_preset(
+            _callback("cpc:st:p:pr:business-token", target),
+            state,
+        )
+    )
+    style = VisualStyleIntent.from_mapping(state.data["creative_style_intent"])
+    assert style.quick_style_names() == ("warm_friendly", "illustrative")
 
 
 def test_style_rows_show_checkmark_for_current_choice_and_compact_finish_action() -> None:
@@ -209,6 +241,42 @@ def test_save_style_is_explicit_and_does_not_start_generation(monkeypatch) -> No
     prepare.assert_not_called()
     assert state.data["creative_saved_style_applied"] is True
     assert "следующих визуалах" in callback.answer.await_args.args[0]
+
+
+def test_paid_confirmation_replace_always_sends_fresh_keyboard_message(monkeypatch) -> None:
+    target = _message()
+    target.edit_reply_markup = AsyncMock()
+    receipt = SimpleNamespace(
+        id="receipt-id",
+        request_text="ёж слушает аудиосессию",
+        provider_payload_json='{"version":2}',
+    )
+    monkeypatch.setattr(studio, "_receipt_kind", lambda _receipt: "image")
+    monkeypatch.setattr(
+        studio,
+        "_receipt_callback",
+        lambda action, token, _receipt: f"receipt:{action}:{token}",
+    )
+
+    asyncio.run(
+        studio._show_paid_generation_confirmation(
+            target,
+            token="business-token",
+            receipt=receipt,
+            replace=True,
+        )
+    )
+
+    target.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
+    target.answer.assert_awaited_once()
+    labels = [
+        button.text
+        for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert "✅ Создать 1 картинку" in labels
+    assert "✏️ Изменить описание" in labels
+    assert "⬅️ Не создавать" in labels
 
 
 def test_continue_freezes_selected_style_before_paid_confirmation(monkeypatch) -> None:
