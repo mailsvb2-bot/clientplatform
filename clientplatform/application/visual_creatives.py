@@ -20,6 +20,7 @@ from services.visual_creative_gateway import (
     download_visual,
     poll_visual,
     submit_visual,
+    wait_visual,
 )
 
 
@@ -681,6 +682,24 @@ def poll_ad_visual(*, job_id: str, scope_id: str) -> VisualCreativeJob:
         raise VisualCreativeError("visual_creative_poll_failed") from exc
 
 
+def wait_ad_visual(
+    job: VisualCreativeJob,
+    *,
+    wait_seconds: int = 60,
+    poll_interval: float = 2.0,
+) -> VisualCreativeJob:
+    """Wait for the exact existing visual job without creating a second paid job."""
+
+    try:
+        return wait_visual(
+            job,
+            wait_seconds=wait_seconds,
+            poll_interval=poll_interval,
+        )
+    except VisualCreativeGatewayError as exc:
+        raise VisualCreativeError("visual_creative_poll_failed") from exc
+
+
 __all__ = [
     "VisualCreativeError",
     "visual_generation_ready",
@@ -702,4 +721,5 @@ __all__ = [
     "create_ad_visual",
     "materialize_ad_visual",
     "poll_ad_visual",
+    "wait_ad_visual",
 ]
