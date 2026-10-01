@@ -63,7 +63,6 @@ from clientplatform.domain.visual_style_intent import (
     VisualStyleIntent,
     infer_visual_style_intent,
     resolve_visual_style_intent,
-    visual_style_preset,
 )
 from clientplatform.presentation import owner_navigation as nav
 from clientplatform.presentation.visual_generation import (
@@ -693,9 +692,23 @@ async def _show_paid_generation_confirmation(
         ]
     )
     if replace:
-        await _replace_or_answer(target, text, reply_markup=reply_markup)
-    else:
-        await target.answer(text, reply_markup=reply_markup)
+        # Paid consent must always be a fresh, explicit message with its own
+        # keyboard.  Reusing the large style-dashboard message proved fragile in
+        # real Telegram clients: the text could be edited while the new inline
+        # keyboard was not rendered, leaving no way to start the paid job.
+        edit_reply_markup = getattr(target, "edit_reply_markup", None)
+        if callable(edit_reply_markup):
+            try:
+                await edit_reply_markup(reply_markup=None)
+            except TelegramAPIError:
+                # A stale dashboard keyboard is harmless; the new consent message
+                # below is the canonical action surface. Keep the failure visible
+                # for transport diagnostics without blocking the owner action.
+                logger.debug(
+                    "Could not clear stale creative-style keyboard before paid confirmation",
+                    exc_info=True,
+                )
+    await target.answer(text, reply_markup=reply_markup)
 
 
 async def _prepare_styled_generation(
@@ -874,7 +887,7 @@ async def open_visual_style(callback: CallbackQuery, state: FSMContext) -> None:
 async def choose_visual_style_preset(callback: CallbackQuery, state: FSMContext) -> None:
     try:
         _, _, _, preset_code, token = str(callback.data).split(":", 4)
-        preset = visual_style_preset(style_preset_name(preset_code))
+        quick_style = style_preset_name(preset_code)
     except ValueError:
         await callback.answer("Кнопка устарела", show_alert=True)
         return
@@ -882,12 +895,18 @@ async def choose_visual_style_preset(callback: CallbackQuery, state: FSMContext)
     if not _style_session_matches(data, token):
         await callback.answer("Эта настройка уже устарела", show_alert=True)
         return
+    try:
+        style = _style_intent_from_state(data).with_quick_style(quick_style)
+        selected = style.has_quick_style(quick_style)
+    except ValueError:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
     await state.update_data(
-        creative_style_intent=preset.to_mapping(),
+        creative_style_intent=style.to_mapping(),
         creative_saved_style_applied=False,
     )
     data = await state.get_data()
-    await callback.answer("Стиль выбран")
+    await callback.answer("Акцент добавлен" if selected else "Акцент снят")
     await _show_style_dashboard(control._callback_message(callback), data, token)
 
 

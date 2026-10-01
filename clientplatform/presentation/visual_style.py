@@ -176,7 +176,12 @@ def style_dashboard_rows(
 
     def preset(index: int) -> tuple[str, str]:
         label, name, code = _PRESETS[index]
-        selected = current_mapping == visual_style_preset(name).to_mapping()
+        # New sessions treat these as independent additive accents.  The exact
+        # legacy preset comparison keeps old/saved v1 styles visually recognizable.
+        selected = (
+            current.has_quick_style(name)
+            or current_mapping == visual_style_preset(name).to_mapping()
+        )
         return (
             _checked_label(label, selected=selected),
             f"cpc:st:p:{code}:{token}",
@@ -256,7 +261,9 @@ def style_dashboard_text(
     suffix = "\n\n" + "\n".join(notes) if notes else ""
     return (
         "🎨 Как Вы представляете будущий визуал?\n\n"
-        "Можно выбрать готовый характер или уточнить отдельные параметры. "
+        "Можно поставить несколько галочек на готовых акцентах — например, "
+        "«тёпло и дружелюбно» + «художественно» + «премиально» — и отдельно "
+        "уточнить параметры. Все выбранные акценты попадут в итоговый промпт. "
         "Это не меняет смысл Вашей идеи — только то, как она будет выглядеть.\n\n"
         + style_summary_ru(intent)
         + suffix

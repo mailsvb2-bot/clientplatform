@@ -7,6 +7,7 @@ import os
 from clientplatform.domain.visual_prompt_compiler import compile_visual_prompt
 from clientplatform.domain.visual_style_intent import (
     STYLE_SCHEMA_VERSION,
+    SUPPORTED_STYLE_SCHEMA_VERSIONS,
     VisualStyleIntent,
     resolve_visual_style_intent,
 )
@@ -205,7 +206,7 @@ def _load_frozen_business_visual_payload(value: str) -> tuple[VisualCreativeBrie
             raise ValueError("frozen business visual intent is invalid")
         if intent.get("prompt_compiler_version") != _PROMPT_COMPILER_VERSION:
             raise ValueError("unsupported visual prompt compiler version")
-        if intent.get("style_schema_version") != STYLE_SCHEMA_VERSION:
+        if intent.get("style_schema_version") not in SUPPORTED_STYLE_SCHEMA_VERSIONS:
             raise ValueError("unsupported visual style schema version")
         style = intent.get("style")
         if not isinstance(style, dict):
