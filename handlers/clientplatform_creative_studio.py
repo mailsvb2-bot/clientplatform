@@ -393,13 +393,13 @@ async def send_creative_studio_menu(
         )
     await message.answer(
         body,
-        reply_markup=control._keyboard(_menu_rows(
+        reply_markup=_menu_rows(
             token,
             active,
             image_ready=image_ready,
             video_ready=video_ready,
             video_mode=video_mode,
-        )),
+        ),
     )
 
 
@@ -537,7 +537,7 @@ async def _ask_creative_prompt(
         await target.answer(
             "У Вас уже есть незавершённая генерация. Продолжите её или завершите "
             "этот результат, чтобы начать новый.",
-            reply_markup=control._keyboard(_menu_rows(token, active)),
+            reply_markup=_menu_rows(token, active),
         )
         return
 
@@ -762,7 +762,7 @@ async def _prepare_styled_generation(
         await target.answer(
             "У Вас уже есть незавершённая генерация. Продолжите её — новый платный "
             "job автоматически не создаётся.",
-            reply_markup=control._keyboard(_menu_rows(token, receipt)),
+            reply_markup=_menu_rows(token, receipt),
         )
         return
     await _show_paid_generation_confirmation(
