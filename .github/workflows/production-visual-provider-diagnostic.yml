@@ -275,105 +275,88 @@ jobs:
           # inspect safe recent-job metadata without mutating production.
           PY
 
-          privileged docker exec -i "$app_id" python - <<'PY'
-          from __future__ import annotations
-          import json
-          import time
-          from clientplatform.application.visual_creatives import build_business_image_brief
-          from services.visual_creative_gateway import submit_visual
-
-          brief = build_business_image_brief(
-              request="Красный круг на белом фоне, минималистичная иллюстрация",
-              brand_context="",
-              country_code="RU",
-          )
-          safe = {
-              "compiled_prompt_chars": len(str(brief.prompt or "")),
-              "compiled_prompt_utf8_bytes": len(str(brief.prompt or "").encode("utf-8")),
-              "aspect_ratio": str(brief.aspect_ratio),
-          }
-          try:
-              job = submit_visual(
-                  brief,
-                  scope_id="diag-alice-e2e",
-                  idempotency_key=f"diag:alice:e2e:{int(time.time())}",
-                  wait_seconds=60,
-              )
-              safe.update(
-                  {
-                      "status": str(job.status),
-                      "provider": str(job.provider),
-                      "error_code": str(job.error_code or ""),
-                      "model_recorded": bool(str(job.model or "")),
-                      "asset_ready": bool(job.asset_ready),
-                  }
-              )
-          except Exception as exc:
-              safe.update(
-                  {
-                      "status": "exception",
-                      "exception_type": type(exc).__name__,
-                  }
-              )
-          print("CLIENTPLATFORM_PRODUCTION_VISUAL_E2E_SYNTHETIC " + json.dumps(safe, ensure_ascii=False, sort_keys=True))
-          PY
-
           privileged docker exec -i "$provider_id" python - <<'PY'
           from __future__ import annotations
           import json
           import urllib.error
           import urllib.request
-          from visual_provider_gateway.engine import build_provider
 
+          from clientplatform.application.visual_creatives import build_business_image_brief
+          from visual_provider_gateway.engine import build_provider
+          from visual_provider_gateway.models import CreativeBrief
+          from visual_provider_gateway.prompt_adapter import adapt_visual_brief_for_provider
+          from visual_provider_gateway.providers import _openai_image_size
+
+          app_brief = build_business_image_brief(
+              request="Красный круг на белом фоне, минималистичная иллюстрация",
+              brand_context="",
+              country_code="RU",
+          )
+          provider_brief = CreativeBrief(
+              kind=app_brief.kind,
+              prompt=app_brief.prompt,
+              country_code=app_brief.country_code,
+              preferred_provider=app_brief.preferred_provider,
+              aspect_ratio=app_brief.aspect_ratio,
+              duration_seconds=app_brief.duration_seconds,
+              negative_prompt=app_brief.negative_prompt,
+              reference_url=app_brief.reference_url,
+              brand_context=app_brief.brand_context,
+              seed=app_brief.seed,
+          )
+          adapted_brief = adapt_visual_brief_for_provider(provider_brief, provider="yandexart")
           provider = build_provider("yandexart")
-          authorization = provider._primary_authorization()
           payload = {
               "model": provider.config.model_image,
-              "prompt": "кккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккк",
-              "size": "1024x1536",
+              "prompt": adapted_brief.prompt,
+              "size": _openai_image_size(adapted_brief.aspect_ratio),
           }
           request = urllib.request.Request(
               provider.config.base_url.rstrip("/") + "/v1/images/generations",
               data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
               method="POST",
               headers={
-                  "Authorization": authorization,
+                  "Authorization": provider._primary_authorization(),
                   "OpenAI-Project": str(provider.config.folder_id or ""),
                   "Content-Type": "application/json",
                   "Accept": "application/json",
               },
           )
-          safe = {}
+          safe = {
+              "compiled_chars": len(str(app_brief.prompt or "")),
+              "adapted_chars": len(str(adapted_brief.prompt or "")),
+              "adapted_utf8_bytes": len(str(adapted_brief.prompt or "").encode("utf-8")),
+              "adapted_lines": len([x for x in str(adapted_brief.prompt or "").splitlines() if x.strip()]),
+              "size": payload["size"],
+          }
           try:
               with urllib.request.urlopen(request, timeout=90) as response:
                   raw = response.read(32 * 1024 * 1024 + 1)
                   decoded = json.loads(raw.decode("utf-8")) if raw else {}
                   rows = decoded.get("data") if isinstance(decoded, dict) and isinstance(decoded.get("data"), list) else []
                   row = rows[0] if rows and isinstance(rows[0], dict) else {}
-                  safe = {
+                  safe.update({
                       "http_status": int(response.status),
                       "data_count": len(rows),
                       "b64_present": bool(str(row.get("b64_json") or "")),
-                      "url_present": bool(str(row.get("url") or "")),
-                  }
+                  })
           except urllib.error.HTTPError as exc:
               raw = exc.read(64 * 1024)
               try:
                   decoded = json.loads(raw.decode("utf-8"))
-              except Exception:
+              except (UnicodeDecodeError, json.JSONDecodeError):
                   decoded = {}
               err = decoded.get("error") if isinstance(decoded, dict) else {}
               if not isinstance(err, dict):
                   err = {}
-              message = " ".join(str(err.get("message") or decoded.get("message") or "").split())[:240] if isinstance(decoded, dict) else ""
-              safe = {
+              safe.update({
                   "http_status": int(exc.code),
-                  "error_type": str(err.get("type") or decoded.get("type") or "")[:80] if isinstance(decoded, dict) else "",
-                  "error_code": str(err.get("code") or decoded.get("code") or "")[:80] if isinstance(decoded, dict) else "",
-                  "message": message,
+                  "error_code": str(err.get("code") or (decoded.get("code") if isinstance(decoded, dict) else "") or "")[:120],
+                  "error_type": str(err.get("type") or (decoded.get("type") if isinstance(decoded, dict) else "") or "")[:120],
+                  "message": " ".join(str(err.get("message") or (decoded.get("message") if isinstance(decoded, dict) else "") or "").split())[:500],
                   "top_level_keys": sorted(str(k)[:64] for k in decoded.keys())[:20] if isinstance(decoded, dict) else [],
-              }
-          print("CLIENTPLATFORM_PRODUCTION_VISUAL_500_CYRILLIC_SMOKE " + json.dumps(safe, ensure_ascii=False, sort_keys=True))
+              })
+          print("CLIENTPLATFORM_PRODUCTION_VISUAL_ADAPTED_PAYLOAD_PROBE " + json.dumps(safe, ensure_ascii=False, sort_keys=True))
           PY
 
           privileged docker exec -i "$provider_id" python - <<'PY'
