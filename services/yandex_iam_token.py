@@ -89,6 +89,30 @@ def _read_authorized_key(raw_env: str, file_env: str) -> _AuthorizedKey | None:
     return _parse_authorized_key(raw)
 
 
+def _authorized_key_source_error(
+    raw_env: str,
+    file_env: str,
+    *,
+    prefix: str,
+) -> str:
+    """Classify a configured-but-unusable authorized-key source without exposing it."""
+
+    raw = str(os.getenv(raw_env, "") or "").strip()
+    path = str(os.getenv(file_env, "") or "").strip()
+    if raw:
+        return f"{prefix}_invalid_authorized_key"
+    if not path:
+        return ""
+    try:
+        with Path(path).open("rb") as handle:
+            handle.read(1)
+    except FileNotFoundError:
+        return f"{prefix}_authorized_key_file_missing"
+    except OSError:
+        return f"{prefix}_authorized_key_file_unreadable"
+    return f"{prefix}_invalid_authorized_key"
+
+
 def _load_authorized_key() -> _AuthorizedKey | None:
     return _read_authorized_key(
         "YANDEX_BILLING_AUTHORIZED_KEY_JSON",
@@ -247,14 +271,17 @@ def get_yandex_billing_iam_token() -> YandexIamTokenResult:
                 token=static_token,
                 auth_mode="static_iam_token",
             )
-        key_raw = str(os.getenv("YANDEX_BILLING_AUTHORIZED_KEY_JSON", "") or "").strip()
-        key_file = str(os.getenv("YANDEX_BILLING_AUTHORIZED_KEY_FILE", "") or "").strip()
-        if key_raw or key_file:
+        source_error = _authorized_key_source_error(
+            "YANDEX_BILLING_AUTHORIZED_KEY_JSON",
+            "YANDEX_BILLING_AUTHORIZED_KEY_FILE",
+            prefix="yandex_billing",
+        )
+        if source_error:
             return YandexIamTokenResult(
                 configured=True,
                 available=False,
                 auth_mode="authorized_key",
-                error_code="yandex_billing_invalid_authorized_key",
+                error_code=source_error,
             )
         return YandexIamTokenResult(configured=False, available=False)
 
@@ -348,11 +375,27 @@ def get_yandex_art_iam_token() -> YandexIamTokenResult:
     key = _load_art_authorized_key()
     configured = yandex_art_renewable_auth_configured()
     if key is None:
+        if not configured:
+            return YandexIamTokenResult(configured=False, available=False)
+        dedicated_raw = str(os.getenv("YANDEX_ART_AUTHORIZED_KEY_JSON", "") or "").strip()
+        dedicated_file = str(os.getenv("YANDEX_ART_AUTHORIZED_KEY_FILE", "") or "").strip()
+        if dedicated_raw or dedicated_file:
+            source_error = _authorized_key_source_error(
+                "YANDEX_ART_AUTHORIZED_KEY_JSON",
+                "YANDEX_ART_AUTHORIZED_KEY_FILE",
+                prefix="yandex_art",
+            )
+        else:
+            source_error = _authorized_key_source_error(
+                "YANDEX_BILLING_AUTHORIZED_KEY_JSON",
+                "YANDEX_BILLING_AUTHORIZED_KEY_FILE",
+                prefix="yandex_art",
+            )
         return YandexIamTokenResult(
-            configured=configured,
+            configured=True,
             available=False,
-            auth_mode="authorized_key" if configured else "",
-            error_code="yandex_art_invalid_authorized_key" if configured else "",
+            auth_mode="authorized_key",
+            error_code=source_error or "yandex_art_invalid_authorized_key",
         )
 
     fingerprint = _fingerprint(key)

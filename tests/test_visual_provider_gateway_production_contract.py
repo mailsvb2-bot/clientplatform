@@ -96,6 +96,10 @@ class VisualProviderGatewayProductionContractTests(unittest.TestCase):
         self.assertIn("get_yandex_art_iam_token", workflow)
         self.assertIn("accepted = {400, 422}", workflow)
         self.assertIn("raise SystemExit(29)", workflow)
+        self.assertIn("authorized_key_file", workflow)
+        self.assertIn("json_valid_object", workflow)
+        self.assertIn("json_keys", workflow)
+        self.assertNotIn("print(raw_key", workflow)
 
 
 if __name__ == "__main__":
