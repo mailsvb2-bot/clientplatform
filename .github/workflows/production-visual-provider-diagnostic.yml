@@ -99,6 +99,7 @@ jobs:
           from __future__ import annotations
 
           import json
+          import os
           import urllib.error
           import urllib.request
 
@@ -157,6 +158,35 @@ jobs:
               "renewable_auth_mode": str(renewable_result.auth_mode or ""),
               "renewable_error": str(renewable_result.error_code or ""),
           }
+
+          key_path = str(
+              os.environ.get("YANDEX_ART_AUTHORIZED_KEY_FILE")
+              or os.environ.get("YANDEX_BILLING_AUTHORIZED_KEY_FILE")
+              or ""
+          ).strip()
+          key_file = {
+              "path_configured": bool(key_path),
+              "exists": bool(key_path and os.path.exists(key_path)),
+              "is_file": bool(key_path and os.path.isfile(key_path)),
+              "size_bytes": 0,
+              "json_valid_object": False,
+              "json_keys": [],
+          }
+          if key_file["is_file"]:
+              try:
+                  raw_key = open(key_path, "rb").read(256 * 1024 + 1)
+                  key_file["size_bytes"] = len(raw_key)
+                  if len(raw_key) <= 256 * 1024:
+                      parsed_key = json.loads(raw_key.decode("utf-8"))
+                      if isinstance(parsed_key, dict):
+                          key_file["json_valid_object"] = True
+                          key_file["json_keys"] = sorted(
+                              str(name)[:64] for name in parsed_key.keys()
+                          )[:32]
+              except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                  pass
+          safe["authorized_key_file"] = key_file
+
           print(
               "CLIENTPLATFORM_PRODUCTION_VISUAL_AUTH_PROBE "
               + json.dumps(safe, ensure_ascii=False, sort_keys=True)

@@ -521,3 +521,34 @@ def test_clear_yandex_art_iam_cache_forces_refresh(monkeypatch):
     assert refreshed.token == "art-token-2"
     assert calls == 2
 
+
+
+def test_billing_missing_authorized_key_file_is_explicit(monkeypatch, tmp_path):
+    iam.clear_yandex_billing_iam_cache()
+    monkeypatch.delenv("YANDEX_BILLING_IAM_TOKEN", raising=False)
+    monkeypatch.delenv("YANDEX_BILLING_AUTHORIZED_KEY_JSON", raising=False)
+    monkeypatch.setenv(
+        "YANDEX_BILLING_AUTHORIZED_KEY_FILE",
+        str(tmp_path / "missing-authorized-key.json"),
+    )
+
+    result = iam.get_yandex_billing_iam_token()
+
+    assert result.configured is True
+    assert result.available is False
+    assert result.error_code == "yandex_billing_authorized_key_file_missing"
+
+
+def test_art_missing_billing_fallback_file_is_explicit(monkeypatch, tmp_path):
+    iam.clear_yandex_art_iam_cache()
+    _clear_art_auth_env(monkeypatch)
+    monkeypatch.setenv(
+        "YANDEX_BILLING_AUTHORIZED_KEY_FILE",
+        str(tmp_path / "missing-authorized-key.json"),
+    )
+
+    result = iam.get_yandex_art_iam_token()
+
+    assert result.configured is True
+    assert result.available is False
+    assert result.error_code == "yandex_art_authorized_key_file_missing"
