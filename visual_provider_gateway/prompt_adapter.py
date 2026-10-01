@@ -97,10 +97,17 @@ _STYLE_SECTION_END = "use credible natural details"
 
 
 def _compiled_directives(prompt: str) -> tuple[str, ...]:
+    # CreativeBrief.normalized() intentionally collapses all whitespace before the
+    # provider adapter runs. Compiler v2 output therefore arrives as
+    # "1. ... 2. ... 3. ..." rather than newline-separated directives.
+    text = " ".join(str(prompt or "").split()).strip()
+    if not text:
+        return ()
+    parts = _NUMBERED_DIRECTIVE_SPLIT_RE.split(text)
     return tuple(
-        _NUMBERED_DIRECTIVE_RE.sub("", line).strip()
-        for line in _lines(prompt)
-        if _NUMBERED_DIRECTIVE_RE.sub("", line).strip()
+        cleaned
+        for part in parts
+        if (cleaned := _NUMBERED_DIRECTIVE_RE.sub("", part).strip())
     )
 
 
