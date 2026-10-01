@@ -1270,6 +1270,7 @@ async def _continue_generation(
     *,
     actor,
     receipt: CreativeGenerationReceipt,
+    auto_wait: bool = False,
 ) -> None:
     token = control._uuid_token(actor.business_id)
     if receipt.delivery_claimed_at:
@@ -1301,7 +1302,8 @@ async def _continue_generation(
         return
 
     if (
-        current.status
+        auto_wait
+        and current.status
         in {
             CreativeGenerationReceiptStatus.QUEUED,
             CreativeGenerationReceiptStatus.RUNNING,
@@ -1382,7 +1384,12 @@ async def generate_creative_image(callback: CallbackQuery, state: FSMContext) ->
         f"⏳ Создаю {noun}. Готовый файл отправлю сюда автоматически.",
         reply_markup=None,
     )
-    await _continue_generation(callback, actor=actor, receipt=receipt)
+    await _continue_generation(
+        callback,
+        actor=actor,
+        receipt=receipt,
+        auto_wait=True,
+    )
 
 
 @router.callback_query(F.data.startswith("cpc:abandon:"))
