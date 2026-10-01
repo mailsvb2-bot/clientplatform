@@ -281,35 +281,73 @@ jobs:
           import urllib.error
           import urllib.request
 
+          import re
           from clientplatform.application.visual_creatives import build_business_image_brief
+          from clientplatform.domain.visual_style_intent import VisualStyleIntent
           from visual_provider_gateway.engine import build_provider
-          from visual_provider_gateway.models import CreativeBrief
-          from visual_provider_gateway.prompt_adapter import adapt_visual_brief_for_provider
           from visual_provider_gateway.providers import _openai_image_size
 
           app_brief = build_business_image_brief(
               request="Красный круг на белом фоне, минималистичная иллюстрация",
               brand_context="",
               country_code="RU",
+              style_intent=VisualStyleIntent(
+                  quick_styles="warm_friendly,premium,illustrative"
+              ),
           )
-          provider_brief = CreativeBrief(
-              kind=app_brief.kind,
-              prompt=app_brief.prompt,
-              country_code=app_brief.country_code,
-              preferred_provider=app_brief.preferred_provider,
-              aspect_ratio=app_brief.aspect_ratio,
-              duration_seconds=app_brief.duration_seconds,
-              negative_prompt=app_brief.negative_prompt,
-              reference_url=app_brief.reference_url,
-              brand_context=app_brief.brand_context,
-              seed=app_brief.seed,
+          directives = [
+              re.sub(r"^\\d+\\.\\s*", "", line).strip()
+              for line in str(app_brief.prompt or "").splitlines()
+              if line.strip()
+          ]
+          prefix = 'Owner request, preserve its meaning exactly: "'
+          owner = next(
+              (
+                  line[len(prefix):-1].strip()
+                  for line in directives
+                  if line.startswith(prefix) and line.endswith('"')
+              ),
+              "",
           )
-          adapted_brief = adapt_visual_brief_for_provider(provider_brief, provider="yandexart")
+          style_lines = []
+          inside = False
+          for line in directives:
+              folded = line.casefold()
+              if folded.startswith("style choices may shape presentation"):
+                  inside = True
+                  continue
+              if not inside:
+                  continue
+              if (
+                  folded.startswith("use credible natural details")
+                  or folded.startswith("business grounding")
+                  or folded.startswith("readable text is explicitly")
+                  or folded.startswith("do not rely on readable text")
+              ):
+                  break
+              if folded.startswith("combine every selected quick style accent"):
+                  continue
+              style_lines.append(line)
+          parts = [owner or str(app_brief.prompt or ""), *style_lines]
+          natural_prompt = ""
+          for part in parts:
+              token = " ".join(str(part or "").split()).strip()
+              if not token:
+                  continue
+              candidate = token if not natural_prompt else natural_prompt + "\\n" + token
+              if len(candidate) <= 500:
+                  natural_prompt = candidate
+                  continue
+              remaining = 500 - len(natural_prompt) - (1 if natural_prompt else 0)
+              if remaining > 80:
+                  clipped = token[:remaining].rsplit(" ", 1)[0].rstrip(" ,;:.")
+                  natural_prompt = clipped if not natural_prompt else natural_prompt + "\\n" + clipped
+              break
           provider = build_provider("yandexart")
           payload = {
               "model": provider.config.model_image,
-              "prompt": adapted_brief.prompt,
-              "size": _openai_image_size(adapted_brief.aspect_ratio),
+              "prompt": natural_prompt,
+              "size": _openai_image_size(app_brief.aspect_ratio),
           }
           request = urllib.request.Request(
               provider.config.base_url.rstrip("/") + "/v1/images/generations",
@@ -324,9 +362,9 @@ jobs:
           )
           safe = {
               "compiled_chars": len(str(app_brief.prompt or "")),
-              "adapted_chars": len(str(adapted_brief.prompt or "")),
-              "adapted_utf8_bytes": len(str(adapted_brief.prompt or "").encode("utf-8")),
-              "adapted_lines": len([x for x in str(adapted_brief.prompt or "").splitlines() if x.strip()]),
+              "adapted_chars": len(natural_prompt),
+              "adapted_utf8_bytes": len(natural_prompt.encode("utf-8")),
+              "adapted_lines": len([x for x in natural_prompt.splitlines() if x.strip()]),
               "size": payload["size"],
           }
           try:
@@ -356,7 +394,7 @@ jobs:
                   "message": " ".join(str(err.get("message") or (decoded.get("message") if isinstance(decoded, dict) else "") or "").split())[:500],
                   "top_level_keys": sorted(str(k)[:64] for k in decoded.keys())[:20] if isinstance(decoded, dict) else [],
               })
-          print("CLIENTPLATFORM_PRODUCTION_VISUAL_ADAPTED_PAYLOAD_PROBE " + json.dumps(safe, ensure_ascii=False, sort_keys=True))
+          print("CLIENTPLATFORM_PRODUCTION_VISUAL_NATURAL_ADAPTER_PROBE " + json.dumps(safe, ensure_ascii=False, sort_keys=True))
           PY
 
           privileged docker exec -i "$provider_id" python - <<'PY'
