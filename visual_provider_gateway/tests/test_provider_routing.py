@@ -371,23 +371,33 @@ def test_current_alice_model_failure_is_not_masked_by_deprecated_fallback(monkey
     assert calls[0][1]["model"] == "art://folder/aliceai-image-art-3.0"
 
 
-def test_yandexart_falls_back_to_compat_api_after_native_authorization_rejection(tmp_path, monkeypatch):
+def test_alice_ai_art_auth_rejection_can_use_renewable_iam(tmp_path, monkeypatch):
+    from services.yandex_iam_token import YandexIamTokenResult
     from visual_provider_gateway.providers import (
         ProviderTransportError,
         YandexArtProvider,
     )
 
     calls = []
-    encoded = base64.b64encode(b"compat-image").decode("ascii")
+    encoded = base64.b64encode(b"renewable-image").decode("ascii")
 
     def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0):
-        calls.append((method, url, headers, payload))
-        if url.endswith("/foundationModels/v1/imageGenerationAsync"):
+        calls.append((url, headers))
+        if headers["Authorization"] == "Api-Key durable-api-key":
             raise ProviderTransportError("http_403")
-        assert url.endswith("/v1/images/generations")
         return {"data": [{"b64_json": encoded}]}
 
     monkeypatch.setattr(providers, "_json_request", fake_json_request)
+    monkeypatch.setattr(
+        providers,
+        "get_yandex_art_iam_token",
+        lambda: YandexIamTokenResult(
+            configured=True,
+            available=True,
+            token="renewable-token",
+            auth_mode="authorized_key",
+        ),
+    )
     monkeypatch.setenv("YANDEX_API_KEY", "durable-api-key")
     monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
     monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
@@ -405,12 +415,11 @@ def test_yandexart_falls_back_to_compat_api_after_native_authorization_rejection
     job = provider.submit(CreativeBrief(kind="image", prompt="product"))
 
     assert job.status == "succeeded"
-    assert Path(job.asset_path).read_bytes() == b"compat-image"
-    assert job.provider_payload["transport"] == "openai_compat"
-    compat_calls = [call for call in calls if call[1].endswith("/v1/images/generations")]
-    assert len(compat_calls) == 1
-    assert compat_calls[0][2]["Authorization"] == "Api-Key durable-api-key"
-    assert compat_calls[0][2]["OpenAI-Project"] == "folder"
+    assert Path(job.asset_path).read_bytes() == b"renewable-image"
+    assert [headers["Authorization"] for _url, headers in calls] == [
+        "Api-Key durable-api-key",
+        "Bearer renewable-token",
+    ]
 
 
 def test_yandexart_does_not_retry_model_after_ambiguous_submit(monkeypatch):
@@ -422,7 +431,7 @@ def test_yandexart_does_not_retry_model_after_ambiguous_submit(monkeypatch):
     calls = []
 
     def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0):
-        calls.append(payload["modelUri"])
+        calls.append(payload["model"])
         raise ProviderTransportError("TimeoutError")
 
     monkeypatch.setattr(providers, "_json_request", fake_json_request)
