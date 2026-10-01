@@ -287,7 +287,7 @@ jobs:
           payload = {
               "model": provider.config.model_image,
               "prompt": "Красный круг на белом фоне, минималистичная иллюстрация",
-              "size": "1024x1024",
+              "size": "1024x1536",
           }
           request = urllib.request.Request(
               provider.config.base_url.rstrip("/") + "/v1/images/generations",
@@ -330,7 +330,7 @@ jobs:
                   "message": message,
                   "top_level_keys": sorted(str(k)[:64] for k in decoded.keys())[:20] if isinstance(decoded, dict) else [],
               }
-          print("CLIENTPLATFORM_PRODUCTION_VISUAL_SYNTHETIC_SMOKE " + json.dumps(safe, ensure_ascii=False, sort_keys=True))
+          print("CLIENTPLATFORM_PRODUCTION_VISUAL_PORTRAIT_SMOKE " + json.dumps(safe, ensure_ascii=False, sort_keys=True))
           PY
 
           privileged docker exec -i "$provider_id" python - <<'PY'
