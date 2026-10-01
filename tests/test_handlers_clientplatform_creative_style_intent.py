@@ -122,6 +122,42 @@ def test_short_prompt_enters_optional_style_step_before_any_paid_preparation(
     assert "cpc:st:open:business-token" in buttons
 
 
+def test_receive_prompt_rejects_corrupt_creative_kind_without_paid_call(
+    monkeypatch,
+) -> None:
+    message = _message("обычная идея")
+    state = FakeState(
+        {
+            "creative_business_id": "business-id",
+            "creative_business_token": "business-token",
+            "creative_kind": "corrupt-kind",
+        }
+    )
+    actor = AsyncMock(return_value=_actor())
+    monkeypatch.setattr(studio.control, "_user_id", lambda _message: 101)
+    monkeypatch.setattr(studio.control, "_actor", actor)
+
+    asyncio.run(studio.receive_creative_prompt(message, state))
+
+    actor.assert_not_awaited()
+    assert "безопасно подготовить генерацию" in message.answer.await_args.args[0]
+
+
+def test_quick_style_callback_fails_closed_when_style_mapping_is_invalid(
+    monkeypatch,
+) -> None:
+    target = _message()
+    callback = _callback("cpc:st:p:wf:business-token", target)
+    state = FakeState(_style_state())
+    monkeypatch.setattr(studio, "style_preset_name", lambda _code: "unknown-style")
+
+    asyncio.run(studio.choose_visual_style_preset(callback, state))
+
+    assert callback.answer.await_args.args[0] == "Кнопка устарела"
+    assert callback.answer.await_args.kwargs["show_alert"] is True
+    target.answer.assert_not_awaited()
+
+
 def test_quick_style_buttons_are_additive_multi_select_and_do_not_call_provider(
     monkeypatch,
 ) -> None:
