@@ -955,6 +955,60 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
         finish.assert_awaited_once()
         target.answer.assert_not_awaited()
 
+    async def test_continue_generation_auto_waits_and_delivers_without_manual_refresh(
+        self,
+    ) -> None:
+        target = outbound()
+        cb = callback(f"cpc:generate:{_TOKEN}:{_RECEIPT_TOKEN}", target)
+        prepared = receipt(status=CreativeGenerationReceiptStatus.PREPARED)
+        queued = receipt(
+            status=CreativeGenerationReceiptStatus.QUEUED,
+            source_job_id="provider-job-1",
+        )
+        succeeded = receipt(
+            status=CreativeGenerationReceiptStatus.SUCCEEDED,
+            source_job_id="provider-job-1",
+        )
+        queued_job = job(status="running", asset_ready=False)
+        ready_job = job(status="succeeded", asset_ready=True)
+
+        with (
+            patch.object(creative.asyncio, "to_thread", new=direct),
+            patch.object(
+                creative,
+                "_submit_or_recover",
+                new=AsyncMock(return_value=(queued, queued_job)),
+            ),
+            patch.object(
+                creative,
+                "wait_ad_visual",
+                return_value=ready_job,
+            ) as wait,
+            patch.object(
+                creative,
+                "_remember_job",
+                new=AsyncMock(return_value=succeeded),
+            ) as remember,
+            patch.object(
+                creative,
+                "_finish_image",
+                new=AsyncMock(return_value=True),
+            ) as finish,
+            patch.object(creative.control, "_uuid_token", return_value=_TOKEN),
+        ):
+            await creative._continue_generation(cb, actor=actor(), receipt=prepared)
+
+        wait.assert_called_once_with(queued_job, wait_seconds=60)
+        remember.assert_awaited_once_with(actor(), queued, ready_job)
+        finish.assert_awaited_once_with(
+            cb,
+            actor=actor(),
+            receipt=succeeded,
+            job=ready_job,
+        )
+        target.answer.assert_not_awaited()
+
+
     async def test_succeeded_job_without_ready_asset_retires_stale_receipt(self) -> None:
         target = outbound()
         succeeded = receipt(
