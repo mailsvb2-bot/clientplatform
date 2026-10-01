@@ -149,7 +149,8 @@ def test_resource_monitor_notifies_once_per_crossed_level(monkeypatch):
         sent.append(text)
         return {123}, set()
 
-    monkeypatch.setattr(monitor, "_send_superadmins", fake_send)
+    monkeypatch.setattr(monitor, "_send_resource_operators", fake_send)
+    monkeypatch.setattr(monitor, "_resource_alert_chat_ids", lambda: (123,))
 
     asyncio.run(monitor._tick(object()))
     assert len(sent) == 1
@@ -176,7 +177,8 @@ def test_resource_monitor_realerts_after_limit_is_raised_and_consumed_again(monk
         sent.append(text)
         return {123}, set()
 
-    monkeypatch.setattr(monitor, "_send_superadmins", fake_send)
+    monkeypatch.setattr(monitor, "_send_resource_operators", fake_send)
+    monkeypatch.setattr(monitor, "_resource_alert_chat_ids", lambda: (123,))
 
     asyncio.run(monitor._tick(object()))
     assert len(sent) == 1
@@ -191,7 +193,7 @@ def test_resource_monitor_realerts_after_limit_is_raised_and_consumed_again(monk
     assert "порог 85%" in sent[-1]
 
 
-def test_threshold_alert_retries_only_failed_superadmin(monkeypatch):
+def test_threshold_alert_retries_only_failed_operator_chat(monkeypatch):
     snapshot = _snapshot(used=26)
     saved: dict[str, object] = {}
     calls: list[int] = []
@@ -208,12 +210,13 @@ def test_threshold_alert_retries_only_failed_superadmin(monkeypatch):
     monkeypatch.setattr(monitor, "get_platform_resource_snapshot", lambda: snapshot)
     monkeypatch.setattr(monitor, "_load_state", lambda: dict(saved))
     monkeypatch.setattr(monitor, "_save_state", lambda value: _replace_saved(saved, value))
-    monkeypatch.setattr(monitor, "_superadmin_ids", lambda: (101, 202))
+    monkeypatch.setattr(monitor, "_resource_alert_chat_ids", lambda: (101, 202))
 
     bot = Bot()
     asyncio.run(monitor._tick(bot))
     assert calls == [101, 202]
-    assert saved["threshold_pending"]["pending_admin_ids"] == [202]
+    assert saved["threshold_pending"]["pending_chat_ids"] == [202]
+    assert "pending_admin_ids" not in saved["threshold_pending"]
     assert saved.get("levels", {}) == {}
 
     asyncio.run(monitor._tick(bot))
@@ -246,7 +249,6 @@ def test_telemetry_alert_retries_only_failed_operator_chat(monkeypatch):
     monkeypatch.setattr(monitor, "get_platform_resource_snapshot", lambda: snapshot)
     monkeypatch.setattr(monitor, "_load_state", lambda: dict(saved))
     monkeypatch.setattr(monitor, "_save_state", lambda value: _replace_saved(saved, value))
-    monkeypatch.setattr(monitor, "_superadmin_ids", lambda: (101, 202))
     monkeypatch.setattr(monitor, "_resource_alert_chat_ids", lambda: (operator_chat,))
 
     bot = Bot()
@@ -289,7 +291,6 @@ def test_telemetry_without_operator_chat_never_falls_back_to_admin_ids(monkeypat
     monkeypatch.setattr(monitor, "get_platform_resource_snapshot", lambda: snapshot)
     monkeypatch.setattr(monitor, "_load_state", lambda: dict(saved))
     monkeypatch.setattr(monitor, "_save_state", lambda value: _replace_saved(saved, value))
-    monkeypatch.setattr(monitor, "_superadmin_ids", lambda: (101,))
     monkeypatch.setattr(monitor, "_resource_alert_chat_ids", lambda: ())
 
     asyncio.run(monitor._tick(Bot()))
@@ -297,6 +298,47 @@ def test_telemetry_without_operator_chat_never_falls_back_to_admin_ids(monkeypat
     assert calls == []
     assert "telemetry_pending" not in saved
     assert saved["telemetry_error"] == "visual_gateway_http_502"
+
+
+def test_operational_alerts_never_fall_back_to_user_admin_chat(monkeypatch):
+    snapshot = _snapshot(used=29)
+    saved: dict[str, object] = {}
+    calls: list[int] = []
+
+    class Bot:
+        async def send_message(self, chat_id: int, _text: str) -> None:
+            calls.append(chat_id)
+
+    monkeypatch.setattr(monitor, "get_platform_resource_snapshot", lambda: snapshot)
+    monkeypatch.setattr(monitor, "_load_state", lambda: dict(saved))
+    monkeypatch.setattr(monitor, "_save_state", lambda value: _replace_saved(saved, value))
+    monkeypatch.setattr(monitor, "_resource_alert_chat_ids", lambda: ())
+
+    asyncio.run(monitor._tick(Bot()))
+
+    assert calls == []
+    assert "threshold_pending" not in saved
+    assert saved["levels"]["image"] == 95
+
+
+def test_provider_watch_is_silent_without_explicit_operator_chat(monkeypatch):
+    calls: list[int] = []
+
+    class Bot:
+        async def send_message(self, chat_id: int, _text: str) -> None:
+            calls.append(chat_id)
+
+    monkeypatch.setattr(monitor, "_resource_alert_chat_ids", lambda: ())
+
+    delivered = asyncio.run(
+        monitor._deliver_provider_alerts(
+            Bot(),
+            alerts=["🔴 provider failure"],
+        )
+    )
+
+    assert delivered is True
+    assert calls == []
 
 
 def test_resource_operator_chat_ids_accept_private_and_group_ids(monkeypatch):
