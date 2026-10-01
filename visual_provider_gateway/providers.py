@@ -251,11 +251,15 @@ def _yandex_image_model_candidates(config: ProviderConfig) -> tuple[str, ...]:
         os.getenv("YANDEX_ALLOW_DEPRECATED_ART_MODELS", "0") or "0"
     ).strip().lower() in {"1", "true", "yes", "on"}
     if not allow_deprecated:
-        deprecated = {"yandex-art-2.0", "yandex-art/latest"}
         candidates = [
             item
             for item in candidates
-            if str(item or "").strip().rsplit("/", 1)[-1] not in deprecated
+            if not (
+                str(item or "").strip() == "yandex-art-2.0"
+                or str(item or "").strip() == "yandex-art/latest"
+                or str(item or "").strip().endswith("/yandex-art-2.0")
+                or str(item or "").strip().endswith("/yandex-art/latest")
+            )
         ]
 
     # A stale deprecated fallback must never mask the current Alice model's
