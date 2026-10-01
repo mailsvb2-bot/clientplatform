@@ -50,6 +50,7 @@ from clientplatform.application.visual_creatives import (
     poll_ad_visual,
     visual_generation_ready,
     visual_video_generation_mode,
+    wait_ad_visual,
 )
 from clientplatform.domain.creative_generation import (
     CreativeGenerationReceipt,
@@ -618,6 +619,25 @@ def _style_session_matches(data: dict, token: str) -> bool:
     )
 
 
+async def _replace_or_answer(
+    target: Message,
+    text: str,
+    *,
+    reply_markup=None,
+) -> None:
+    """Prefer editing the current bot message so inline selection never walks the chat."""
+
+    edit_text = getattr(target, "edit_text", None)
+    if callable(edit_text):
+        try:
+            await edit_text(text, reply_markup=reply_markup)
+            return
+        except TelegramAPIError as exc:
+            if "message is not modified" in str(exc).casefold():
+                return
+    await target.answer(text, reply_markup=reply_markup)
+
+
 async def _show_style_dashboard(target: Message, data: dict, token: str) -> None:
     style = _style_intent_from_state(data)
     inferred = tuple(
@@ -625,13 +645,14 @@ async def _show_style_dashboard(target: Message, data: dict, token: str) -> None
         for item in data.get("creative_style_inferred_fields") or ()
         if str(item)
     )
-    await target.answer(
+    await _replace_or_answer(
+        target,
         style_dashboard_text(
             style,
             request_inferred_fields=inferred,
             saved_applied=bool(data.get("creative_saved_style_applied")),
         ),
-        reply_markup=control._keyboard(style_dashboard_rows(token)),
+        reply_markup=control._keyboard(style_dashboard_rows(token, style)),
     )
 
 
@@ -640,6 +661,7 @@ async def _show_paid_generation_confirmation(
     *,
     token: str,
     receipt: CreativeGenerationReceipt,
+    replace: bool = False,
 ) -> None:
     noun = "видео" if _receipt_kind(receipt) == "video" else "картинку"
     edit_callback = (
@@ -647,7 +669,8 @@ async def _show_paid_generation_confirmation(
         if _receipt_kind(receipt) == "video"
         else f"cpc:new:{token}"
     )
-    await target.answer(
+    sender = _replace_or_answer if replace else target.answer
+    await sender(
         "✨ Всё готово к генерации\n\n"
         f"Задача: {receipt.request_text}\n\n"
         "ClientPlatform уже развернула короткое описание в подробное визуальное "
@@ -730,7 +753,12 @@ async def _prepare_styled_generation(
             reply_markup=_menu_rows(token, receipt),
         )
         return
-    await _show_paid_generation_confirmation(target, token=token, receipt=receipt)
+    await _show_paid_generation_confirmation(
+        target,
+        token=token,
+        receipt=receipt,
+        replace=True,
+    )
 
 
 @router.message(ClientPlatformCreativeStudioState.waiting_prompt)
@@ -872,10 +900,12 @@ async def open_visual_style_dimension(callback: CallbackQuery, state: FSMContext
     if not _style_session_matches(data, token):
         await callback.answer("Эта настройка уже устарела", show_alert=True)
         return
+    style = _style_intent_from_state(data)
     await callback.answer()
-    await control._callback_message(callback).answer(
-        f"🎨 {dimension.title}\n\nВыберите вариант:",
-        reply_markup=control._keyboard(style_dimension_rows(token, code)),
+    await _replace_or_answer(
+        control._callback_message(callback),
+        f"🎨 {dimension.title}\n\nВыберите вариант. Текущий отмечен галочкой:",
+        reply_markup=control._keyboard(style_dimension_rows(token, code, style)),
     )
 
 
@@ -897,8 +927,16 @@ async def set_visual_style_dimension(callback: CallbackQuery, state: FSMContext)
         creative_saved_style_applied=False,
     )
     data = await state.get_data()
+    style = _style_intent_from_state(data)
+    dimension = style_dimension(dimension_code)
     await callback.answer("Настройка сохранена")
-    await _show_style_dashboard(control._callback_message(callback), data, token)
+    await _replace_or_answer(
+        control._callback_message(callback),
+        f"🎨 {dimension.title}\n\nВыберите вариант. Текущий отмечен галочкой:",
+        reply_markup=control._keyboard(
+            style_dimension_rows(token, dimension_code, style)
+        ),
+    )
 
 
 @router.callback_query(F.data.startswith("cpc:st:reset:"))
@@ -1259,6 +1297,28 @@ async def _continue_generation(
         )
         return
 
+    if (
+        current.status
+        in {
+            CreativeGenerationReceiptStatus.QUEUED,
+            CreativeGenerationReceiptStatus.RUNNING,
+        }
+        and str(getattr(job, "status", "") or "") in {"queued", "running"}
+    ):
+        try:
+            waited_job = await asyncio.to_thread(
+                wait_ad_visual,
+                job,
+                wait_seconds=60,
+            )
+            current = await _remember_job(actor, current, waited_job)
+            job = waited_job
+        except VisualCreativeError:
+            # The durable receipt/source job remains authoritative. A transient
+            # poll failure must not create another paid job; the recovery button
+            # below can continue the same idempotent generation.
+            pass
+
     if await _retire_unavailable_completed_receipt(actor, current, job=job):
         await control._callback_message(callback).answer(
             "Готовый файл прошлой генерации уже недоступен во временном хранилище. "
@@ -1312,8 +1372,12 @@ async def generate_creative_image(callback: CallbackQuery, state: FSMContext) ->
             show_alert=True,
         )
         return
-    await callback.answer(
-        "Создаю видео…" if _receipt_kind(receipt) == "video" else "Создаю картинку…"
+    await callback.answer()
+    noun = "видео" if _receipt_kind(receipt) == "video" else "картинку"
+    await _replace_or_answer(
+        control._callback_message(callback),
+        f"⏳ Создаю {noun}. Готовый файл отправлю сюда автоматически.",
+        reply_markup=None,
     )
     await _continue_generation(callback, actor=actor, receipt=receipt)
 
