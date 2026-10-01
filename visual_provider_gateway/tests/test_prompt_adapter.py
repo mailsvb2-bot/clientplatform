@@ -31,11 +31,16 @@ def _compiled_brief(*, kind: str = "image") -> CreativeBrief:
     )
 
 
-def test_yandex_adapter_keeps_frozen_semantics_and_strengthens_action_priority() -> None:
+def test_yandex_adapter_uses_natural_owner_description_without_compiler_meta() -> None:
     adapted = adapt_visual_brief_for_provider(_compiled_brief(), provider="yandexart")
 
-    assert "Render the owner's requested scene faithfully" in adapted.prompt
-    assert "hedgehog listens to an audio session" in adapted.prompt
+    assert adapted.prompt.startswith(
+        "a prickly hedgehog listens to an audio session and becomes gentle"
+    )
+    assert "Owner request" not in adapted.prompt
+    assert "Render the owner's requested scene faithfully" not in adapted.prompt
+    assert "mandatory" not in adapted.prompt.casefold()
+    assert "warm color temperature" in adapted.prompt
     assert adapted.negative_prompt == "missing requested action"
     assert len(adapted.prompt) <= 500
 
@@ -93,6 +98,40 @@ def test_engine_applies_adapter_only_after_provider_selection(monkeypatch) -> No
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 2
-    assert "Render the owner's requested scene faithfully" in captured["brief"].prompt
+    assert result.provider_payload["prompt_adapter_version"] == 3
+    assert "Owner request" not in captured["brief"].prompt
     assert "hedgehog listens to an audio session" in captured["brief"].prompt
+
+
+def test_yandex_adapter_keeps_legacy_direct_prompt_natural() -> None:
+    brief = CreativeBrief(
+        kind="image",
+        prompt="Красный круг на белом фоне, минималистичная иллюстрация",
+        country_code="RU",
+        aspect_ratio="4:5",
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
+
+    assert adapted.prompt == brief.prompt
+    assert len(adapted.prompt) <= 500
+
+
+def test_yandex_adapter_prioritizes_owner_request_before_style_and_brand_context() -> None:
+    brief = _compiled_brief()
+    brief = CreativeBrief(
+        kind=brief.kind,
+        prompt=brief.prompt,
+        country_code=brief.country_code,
+        aspect_ratio=brief.aspect_ratio,
+        negative_prompt=brief.negative_prompt,
+        brand_context="Example brand context " * 40,
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
+
+    assert adapted.prompt.startswith(
+        "a prickly hedgehog listens to an audio session and becomes gentle"
+    )
+    assert len(adapted.prompt) <= 500
+    assert "Owner request" not in adapted.prompt
