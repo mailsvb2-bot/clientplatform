@@ -296,7 +296,7 @@ jobs:
               ),
           )
           directives = [
-              re.sub(r"^\\d+\\.\\s*", "", line).strip()
+              re.sub(r"^\d+\.\s*", "", line).strip()
               for line in str(app_brief.prompt or "").splitlines()
               if line.strip()
           ]
@@ -334,14 +334,14 @@ jobs:
               token = " ".join(str(part or "").split()).strip()
               if not token:
                   continue
-              candidate = token if not natural_prompt else natural_prompt + "\\n" + token
+              candidate = token if not natural_prompt else natural_prompt + "\n" + token
               if len(candidate) <= 500:
                   natural_prompt = candidate
                   continue
               remaining = 500 - len(natural_prompt) - (1 if natural_prompt else 0)
               if remaining > 80:
                   clipped = token[:remaining].rsplit(" ", 1)[0].rstrip(" ,;:.")
-                  natural_prompt = clipped if not natural_prompt else natural_prompt + "\\n" + clipped
+                  natural_prompt = clipped if not natural_prompt else natural_prompt + "\n" + clipped
               break
           provider = build_provider("yandexart")
           payload = {
