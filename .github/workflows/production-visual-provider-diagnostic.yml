@@ -92,6 +92,88 @@ jobs:
           app_health="$(privileged docker inspect --format '{{.State.Health.Status}}' "$app_id" 2>/dev/null || true)"
           echo "CLIENTPLATFORM_PRODUCTION_VISUAL_CONTAINERS provider_health=$provider_health gateway_health=$gateway_health app_health=$app_health head_sha=$(git rev-parse HEAD)"
 
+          # Prove that production credentials are actually accepted by Yandex before
+          # declaring the provider ready. Both probes use deliberately invalid bodies,
+          # so an accepted credential returns 400/422 without starting a paid job.
+          privileged docker exec -i "$provider_id" python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import urllib.error
+          import urllib.request
+
+          from services.yandex_iam_token import get_yandex_art_iam_token
+          from visual_provider_gateway.engine import build_provider
+
+          provider = build_provider("yandexart")
+          primary = provider._primary_authorization()
+          renewable_result = get_yandex_art_iam_token()
+          renewable = (
+              f"Bearer {renewable_result.token}"
+              if renewable_result.available and renewable_result.token
+              else ""
+          )
+
+          def probe(url: str, authorization: str, *, project: bool = False):
+              if not authorization:
+                  return "missing"
+              headers = {
+                  "Authorization": authorization,
+                  "Accept": "application/json",
+                  "Content-Type": "application/json",
+              }
+              if project:
+                  headers["OpenAI-Project"] = str(provider.config.folder_id or "")
+              request = urllib.request.Request(
+                  url,
+                  data=b"{}",
+                  headers=headers,
+                  method="POST",
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=10) as response:
+                      return int(response.status)
+              except urllib.error.HTTPError as exc:
+                  return int(exc.code)
+              except urllib.error.URLError as exc:
+                  return "transport_" + type(exc.reason).__name__
+              except TimeoutError:
+                  return "transport_TimeoutError"
+              except OSError as exc:
+                  return "transport_" + type(exc).__name__
+
+          base = provider.config.base_url.rstrip("/")
+          paths = {
+              "native": base + "/foundationModels/v1/imageGenerationAsync",
+              "compat": base + "/v1/images/generations",
+          }
+          safe = {
+              "primary_native": probe(paths["native"], primary),
+              "primary_compat": probe(paths["compat"], primary, project=True),
+              "renewable_native": probe(paths["native"], renewable),
+              "renewable_compat": probe(paths["compat"], renewable, project=True),
+              "renewable_configured": bool(renewable_result.configured),
+              "renewable_available": bool(renewable_result.available),
+              "renewable_auth_mode": str(renewable_result.auth_mode or ""),
+              "renewable_error": str(renewable_result.error_code or ""),
+          }
+          print(
+              "CLIENTPLATFORM_PRODUCTION_VISUAL_AUTH_PROBE "
+              + json.dumps(safe, ensure_ascii=False, sort_keys=True)
+          )
+          accepted = {400, 422}
+          if not any(
+              safe[key] in accepted
+              for key in (
+                  "primary_native",
+                  "primary_compat",
+                  "renewable_native",
+                  "renewable_compat",
+              )
+          ):
+              raise SystemExit(29)
+          PY
+
           privileged docker exec -i "$app_id" python - <<'PY'
           from __future__ import annotations
 
