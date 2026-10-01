@@ -90,7 +90,8 @@ def _priority_lines(brief: CreativeBrief) -> list[str]:
     return list(dict.fromkeys((*opening, *selected)))
 
 
-_NUMBERED_DIRECTIVE_RE = re.compile(r"^\\d+\\.\\s*")
+_NUMBERED_DIRECTIVE_RE = re.compile(r"^\d+\.\s*")
+_NUMBERED_DIRECTIVE_SPLIT_RE = re.compile(r"(?<!\S)(?=\d+\.\s)")
 _OWNER_REQUEST_PREFIX = 'Owner request, preserve its meaning exactly: "'
 _STYLE_SECTION_START = "style choices may shape presentation"
 _STYLE_SECTION_END = "use credible natural details"
