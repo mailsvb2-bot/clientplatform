@@ -36,7 +36,7 @@ def test_yandex_adapter_keeps_frozen_semantics_and_strengthens_action_priority()
 
     assert "Render the owner's requested scene faithfully" in adapted.prompt
     assert "hedgehog listens to an audio session" in adapted.prompt
-     assert adapted.negative_prompt == "missing requested action"
+    assert adapted.negative_prompt == "missing requested action"
     assert len(adapted.prompt) <= 500
 
 
