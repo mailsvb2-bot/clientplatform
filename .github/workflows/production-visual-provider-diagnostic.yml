@@ -286,7 +286,7 @@ jobs:
           authorization = provider._primary_authorization()
           payload = {
               "model": provider.config.model_image,
-              "prompt": "Красный круг на белом фоне, минималистичная иллюстрация",
+              "prompt": "кккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккккк",
               "size": "1024x1536",
           }
           request = urllib.request.Request(
@@ -330,7 +330,7 @@ jobs:
                   "message": message,
                   "top_level_keys": sorted(str(k)[:64] for k in decoded.keys())[:20] if isinstance(decoded, dict) else [],
               }
-          print("CLIENTPLATFORM_PRODUCTION_VISUAL_PORTRAIT_SMOKE " + json.dumps(safe, ensure_ascii=False, sort_keys=True))
+          print("CLIENTPLATFORM_PRODUCTION_VISUAL_500_CYRILLIC_SMOKE " + json.dumps(safe, ensure_ascii=False, sort_keys=True))
           PY
 
           privileged docker exec -i "$provider_id" python - <<'PY'
