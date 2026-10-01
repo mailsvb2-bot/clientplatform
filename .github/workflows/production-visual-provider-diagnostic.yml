@@ -367,6 +367,66 @@ jobs:
           )
           PY
 
+          privileged docker exec -i "$app_id" python - <<'PY'
+          from __future__ import annotations
+          import json, time
+          from clientplatform.application.visual_creatives import (
+              _load_frozen_business_visual_payload,
+          )
+          from services.db import get_db_ro
+          from visual_provider_gateway.models import CreativeBrief
+          from visual_provider_gateway.prompt_adapter import adapt_visual_brief_for_provider
+          from visual_provider_gateway.providers import _openai_image_size
+
+          safe = {"found": False}
+          try:
+              with get_db_ro() as conn:
+                  row = conn.execute(
+                      """
+                      SELECT provider_payload_json,status,created_at,updated_at
+                      FROM creative_generation_receipts
+                      ORDER BY updated_at DESC LIMIT 1
+                      """
+                  ).fetchone()
+              if row is not None:
+                  raw_payload = str(row["provider_payload_json"] if hasattr(row, "keys") else row[0])
+                  brief, wait_seconds = _load_frozen_business_visual_payload(raw_payload)
+                  provider_brief = adapt_visual_brief_for_provider(
+                      CreativeBrief(
+                          kind=brief.kind,
+                          prompt=brief.prompt,
+                          country_code=brief.country_code,
+                          preferred_provider=brief.preferred_provider,
+                          aspect_ratio=brief.aspect_ratio,
+                          duration_seconds=brief.duration_seconds,
+                          negative_prompt=brief.negative_prompt,
+                          reference_url=brief.reference_url,
+                          brand_context=brief.brand_context,
+                          seed=brief.seed,
+                      ),
+                      provider="yandexart",
+                  )
+                  safe = {
+                      "found": True,
+                      "status": str(row["status"] if hasattr(row, "keys") else row[1]),
+                      "kind": str(brief.kind),
+                      "aspect_ratio": str(brief.aspect_ratio),
+                      "images_api_size": _openai_image_size(brief.aspect_ratio),
+                      "wait_seconds": int(wait_seconds),
+                      "compiled_prompt_chars": len(str(brief.prompt or "")),
+                      "compiled_prompt_utf8_bytes": len(str(brief.prompt or "").encode("utf-8")),
+                      "yandex_prompt_chars": len(str(provider_brief.prompt or "")),
+                      "yandex_prompt_utf8_bytes": len(str(provider_brief.prompt or "").encode("utf-8")),
+                      "yandex_prompt_lines": len([x for x in str(provider_brief.prompt or "").splitlines() if x.strip()]),
+                      "negative_prompt_present": bool(str(brief.negative_prompt or "").strip()),
+                      "preferred_provider_present": bool(str(brief.preferred_provider or "").strip()),
+                  }
+          except Exception as exc:
+              safe = {"found": False, "diagnostic_error_type": type(exc).__name__}
+          print("CLIENTPLATFORM_PRODUCTION_VISUAL_LATEST_RECEIPT_META " + json.dumps(safe, sort_keys=True))
+          PY
+
+
           probe_ref="$(privileged docker exec -i "$provider_id" python - <<'PY'
           from __future__ import annotations
 
@@ -432,65 +492,6 @@ jobs:
             echo "CLIENTPLATFORM_PRODUCTION_VISUAL_CONTENT_CHAIN state=no_retained_asset"
             exit 0
           fi
-
-          privileged docker exec -i "$app_id" python - <<'PY'
-          from __future__ import annotations
-          import json, time
-          from clientplatform.application.visual_creatives import (
-              _load_frozen_business_visual_payload,
-          )
-          from services.db import get_db_ro
-          from visual_provider_gateway.models import CreativeBrief
-          from visual_provider_gateway.prompt_adapter import adapt_visual_brief_for_provider
-          from visual_provider_gateway.providers import _openai_image_size
-
-          safe = {"found": False}
-          try:
-              with get_db_ro() as conn:
-                  row = conn.execute(
-                      """
-                      SELECT provider_payload_json,status,created_at,updated_at
-                      FROM creative_generation_receipts
-                      ORDER BY updated_at DESC LIMIT 1
-                      """
-                  ).fetchone()
-              if row is not None:
-                  raw_payload = str(row["provider_payload_json"] if hasattr(row, "keys") else row[0])
-                  brief, wait_seconds = _load_frozen_business_visual_payload(raw_payload)
-                  provider_brief = adapt_visual_brief_for_provider(
-                      CreativeBrief(
-                          kind=brief.kind,
-                          prompt=brief.prompt,
-                          country_code=brief.country_code,
-                          preferred_provider=brief.preferred_provider,
-                          aspect_ratio=brief.aspect_ratio,
-                          duration_seconds=brief.duration_seconds,
-                          negative_prompt=brief.negative_prompt,
-                          reference_url=brief.reference_url,
-                          brand_context=brief.brand_context,
-                          seed=brief.seed,
-                      ),
-                      provider="yandexart",
-                  )
-                  safe = {
-                      "found": True,
-                      "status": str(row["status"] if hasattr(row, "keys") else row[1]),
-                      "kind": str(brief.kind),
-                      "aspect_ratio": str(brief.aspect_ratio),
-                      "images_api_size": _openai_image_size(brief.aspect_ratio),
-                      "wait_seconds": int(wait_seconds),
-                      "compiled_prompt_chars": len(str(brief.prompt or "")),
-                      "compiled_prompt_utf8_bytes": len(str(brief.prompt or "").encode("utf-8")),
-                      "yandex_prompt_chars": len(str(provider_brief.prompt or "")),
-                      "yandex_prompt_utf8_bytes": len(str(provider_brief.prompt or "").encode("utf-8")),
-                      "yandex_prompt_lines": len([x for x in str(provider_brief.prompt or "").splitlines() if x.strip()]),
-                      "negative_prompt_present": bool(str(brief.negative_prompt or "").strip()),
-                      "preferred_provider_present": bool(str(brief.preferred_provider or "").strip()),
-                  }
-          except Exception as exc:
-              safe = {"found": False, "diagnostic_error_type": type(exc).__name__}
-          print("CLIENTPLATFORM_PRODUCTION_VISUAL_LATEST_RECEIPT_META " + json.dumps(safe, sort_keys=True))
-          PY
 
           privileged docker exec \
             -e CLIENTPLATFORM_PROBE_JOB_ID="$job_id" \
