@@ -702,8 +702,12 @@ async def _show_paid_generation_confirmation(
                 await edit_reply_markup(reply_markup=None)
             except TelegramAPIError:
                 # A stale dashboard keyboard is harmless; the new consent message
-                # below is the canonical action surface.
-                pass
+                # below is the canonical action surface. Keep the failure visible
+                # for transport diagnostics without blocking the owner action.
+                logger.debug(
+                    "Could not clear stale creative-style keyboard before paid confirmation",
+                    exc_info=True,
+                )
     await target.answer(text, reply_markup=reply_markup)
 
 
