@@ -138,6 +138,44 @@ def test_style_preset_changes_only_preparation_state_not_provider(monkeypatch) -
     assert "Как Вы представляете" in target.answer.await_args.args[0]
 
 
+def test_style_rows_show_checkmark_for_current_choice_and_compact_finish_action() -> None:
+    style = visual_style_preset("warm_friendly")
+    dashboard = studio.style_dashboard_rows("business-token", style)
+    dashboard_labels = [label for row in dashboard for label, _callback in row]
+    assert "✅ 🤗 Тёпло и дружелюбно" in dashboard_labels
+    assert "✅ Готово — к созданию" in dashboard_labels
+
+    mood_rows = studio.style_dimension_rows("business-token", "m", style)
+    mood_labels = [label for row in mood_rows for label, _callback in row]
+    assert "✅ 😊 Доброжелательная" in mood_labels
+    assert "✅ Готово — к созданию" in mood_labels
+    assert "⬅️ Все настройки" in mood_labels
+
+
+def test_style_dimension_updates_the_same_message_when_telegram_allows_edit(monkeypatch) -> None:
+    target = _message()
+    target.edit_text = AsyncMock()
+    state = FakeState(_style_state())
+    monkeypatch.setattr(studio.control, "_callback_message", lambda _callback: target)
+
+    open_dimension = _callback("cpc:st:d:m:business-token", target)
+    asyncio.run(studio.open_visual_style_dimension(open_dimension, state))
+    target.edit_text.assert_awaited_once()
+    target.answer.assert_not_awaited()
+
+    target.edit_text.reset_mock()
+    selected = _callback("cpc:st:s:m:c:business-token", target)
+    asyncio.run(studio.set_visual_style_dimension(selected, state))
+    target.edit_text.assert_awaited_once()
+    target.answer.assert_not_awaited()
+    labels = [
+        button.text
+        for row in target.edit_text.await_args.kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert "✅ 🧘 Спокойная" in labels
+
+
 def test_style_dimension_can_override_preset_with_human_choice(monkeypatch) -> None:
     target = _message()
     state = FakeState(
