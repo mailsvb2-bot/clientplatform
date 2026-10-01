@@ -122,7 +122,7 @@ def test_short_prompt_enters_optional_style_step_before_any_paid_preparation(
     assert "cpc:st:open:business-token" in buttons
 
 
-def test_receive_prompt_rejects_corrupt_creative_kind_without_paid_call(
+def test_receive_prompt_rejects_corrupt_creative_kind_before_actor_lookup(
     monkeypatch,
 ) -> None:
     message = _message("обычная идея")
@@ -140,7 +140,10 @@ def test_receive_prompt_rejects_corrupt_creative_kind_without_paid_call(
     asyncio.run(studio.receive_creative_prompt(message, state))
 
     actor.assert_not_awaited()
-    assert "безопасно подготовить генерацию" in message.answer.await_args.args[0]
+    assert (
+        "Опишите картинку или видео одним сообщением"
+        in message.answer.await_args.args[0]
+    )
 
 
 def test_quick_style_callback_fails_closed_when_style_mapping_is_invalid(
