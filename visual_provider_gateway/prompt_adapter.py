@@ -12,10 +12,10 @@ from dataclasses import replace
 from .models import CreativeBrief
 
 
-PROMPT_ADAPTER_VERSION = 1
+PROMPT_ADAPTER_VERSION = 2
 
 _RUNWAY_PROMPT_LIMIT = 1000
-_YANDEX_PROMPT_LIMIT = 4800
+_YANDEX_PROMPT_LIMIT = 500
 
 
 def _lines(prompt: str) -> tuple[str, ...]:
@@ -91,12 +91,11 @@ def _priority_lines(brief: CreativeBrief) -> list[str]:
 
 def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
     priority = (
-        "Provider execution priority: depict the requested verbs, relationships and "
-        "state changes literally. A requested interaction or transformation must be "
-        "visually obvious; never reduce a multi-action request to an isolated portrait."
+        "Render the owner's requested scene faithfully. Preserve every explicit "
+        "subject, action, relationship and state change."
     )
     prompt = _bounded_join(
-        [priority, *_lines(brief.prompt)],
+        [priority, *_priority_lines(brief)],
         limit=_YANDEX_PROMPT_LIMIT,
     )
     return replace(brief, prompt=prompt)
@@ -104,9 +103,8 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
 
 def _adapt_yandex_motion(brief: CreativeBrief) -> CreativeBrief:
     keyframe = (
-        "This provider creates motion from a generated keyframe. Build the keyframe "
-        "so the requested subject, interaction and direction of change are visible "
-        "already in the frame; do not imply an action only through a generic portrait."
+        "Create a keyframe that visibly contains the requested subject, interaction "
+        "and direction of change; it will be animated afterwards."
     )
     prompt = _bounded_join(
         [keyframe, *_priority_lines(brief)],

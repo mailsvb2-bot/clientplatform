@@ -246,11 +246,29 @@ def _yandex_image_model_candidates(config: ProviderConfig) -> tuple[str, ...]:
     candidates.extend(part.strip() for part in raw.split(",") if part.strip())
     if config.folder_id:
         candidates.append(f"art://{config.folder_id}/aliceai-image-art-3.0")
-        # Keep the native API's documented alias as a compatibility fallback.
-        # It is attempted only after the configured/current model is rejected
-        # definitively before acceptance.
-        candidates.append(f"art://{config.folder_id}/yandex-art/latest")
+
+    allow_deprecated = str(
+        os.getenv("YANDEX_ALLOW_DEPRECATED_ART_MODELS", "0") or "0"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if not allow_deprecated:
+        candidates = [
+            item
+            for item in candidates
+            if not (
+                str(item or "").strip() == "yandex-art-2.0"
+                or str(item or "").strip() == "yandex-art/latest"
+                or str(item or "").strip().endswith("/yandex-art-2.0")
+                or str(item or "").strip().endswith("/yandex-art/latest")
+            )
+        ]
+
+    # A stale deprecated fallback must never mask the current Alice model's
+    # actual failure code. Legacy routing is available only by explicit opt-in.
     return tuple(dict.fromkeys(item for item in candidates if item))
+
+
+def _is_alice_image_model(model_uri: str) -> bool:
+    return str(model_uri or "").strip().rsplit("/", 1)[-1] == "aliceai-image-art-3.0"
 
 
 def _definitive_model_rejection(exc: BaseException) -> bool:
@@ -384,67 +402,56 @@ class YandexArtProvider:
         job.error_code = ""
         return _store_asset(self.config, job, raw)
 
-    def _submit_compat(
+    def _submit_compat_model(
         self,
         brief: CreativeBrief,
         *,
         authorization: str,
+        model_uri: str,
     ) -> CreativeJob:
-        last_error: BaseException | None = None
-        for model_uri in _yandex_image_model_candidates(self.config):
+        data = _json_request(
+            "POST",
+            self.config.base_url.rstrip("/") + "/v1/images/generations",
+            headers={
+                "Authorization": authorization,
+                "OpenAI-Project": self.config.folder_id,
+            },
+            payload={
+                "model": model_uri,
+                "prompt": brief.prompt,
+                "size": _openai_image_size(brief.aspect_ratio),
+            },
+            timeout=self.config.timeout_seconds,
+            max_bytes=self.config.max_json_bytes,
+        )
+
+        rows = data.get("data") if isinstance(data.get("data"), list) else []
+        row = rows[0] if rows and isinstance(rows[0], dict) else {}
+        encoded = str(row.get("b64_json") or "")
+        job = CreativeJob(
+            provider="yandexart",
+            kind="image",
+            status="succeeded",
+            external_id=uuid.uuid4().hex,
+            model=model_uri,
+            mime_type="image/png",
+            provider_payload={"transport": "openai_compat"},
+        )
+        if encoded:
             try:
-                data = _json_request(
-                    "POST",
-                    self.config.base_url.rstrip("/") + "/v1/images/generations",
-                    headers={
-                        "Authorization": authorization,
-                        "OpenAI-Project": self.config.folder_id,
-                    },
-                    payload={
-                        "model": model_uri,
-                        "prompt": brief.prompt,
-                        "size": _openai_image_size(brief.aspect_ratio),
-                    },
-                    timeout=self.config.timeout_seconds,
-                    max_bytes=self.config.max_json_bytes,
-                )
-            except ProviderTransportError as exc:
-                last_error = exc
-                if _definitive_model_rejection(exc):
-                    continue
-                raise
-
-            rows = data.get("data") if isinstance(data.get("data"), list) else []
-            row = rows[0] if rows and isinstance(rows[0], dict) else {}
-            encoded = str(row.get("b64_json") or "")
-            job = CreativeJob(
-                provider="yandexart",
-                kind="image",
-                status="succeeded",
-                external_id=uuid.uuid4().hex,
-                model=model_uri,
-                mime_type="image/png",
-                provider_payload={"transport": "openai_compat"},
-            )
-            if encoded:
-                try:
-                    raw = base64.b64decode(encoded, validate=True)
-                except (binascii.Error, ValueError, TypeError):
-                    job.status = "failed"
-                    job.error_code = "invalid_image_encoding"
-                    return job
-                return _store_asset(self.config, job, raw)
-            url = str(row.get("url") or "").strip()
-            if url:
-                job.media_url = url
-                return _download_asset(self.config, job, url)
-            job.status = "failed"
-            job.error_code = "missing_image"
-            return job
-
-        if last_error is not None:
-            raise last_error
-        raise ProviderTransportError("provider_not_configured")
+                raw = base64.b64decode(encoded, validate=True)
+            except (binascii.Error, ValueError, TypeError):
+                job.status = "failed"
+                job.error_code = "invalid_image_encoding"
+                return job
+            return _store_asset(self.config, job, raw)
+        url = str(row.get("url") or "").strip()
+        if url:
+            job.media_url = url
+            return _download_asset(self.config, job, url)
+        job.status = "failed"
+        job.error_code = "missing_image"
+        return job
 
     def _submit_with_authorization(
         self,
@@ -469,6 +476,16 @@ class YandexArtProvider:
         last_error: BaseException | None = None
         for model_uri in _yandex_image_model_candidates(self.config):
             try:
+                if _is_alice_image_model(model_uri):
+                    # Alice AI ART 3.0 is served through the current
+                    # OpenAI-compatible Images API. Do not send it through the
+                    # deprecated native YandexART transport first.
+                    return self._submit_compat_model(
+                        brief,
+                        authorization=authorization,
+                        model_uri=model_uri,
+                    )
+
                 operation = _json_request(
                     "POST",
                     self._generation_url(),
@@ -500,8 +517,6 @@ class YandexArtProvider:
             )
             return self._materialize_operation(job, operation)
 
-        if last_error is not None and _definitive_model_rejection(last_error):
-            return self._submit_compat(brief, authorization=authorization)
         if last_error is not None:
             raise last_error
         raise ProviderTransportError("provider_not_configured")

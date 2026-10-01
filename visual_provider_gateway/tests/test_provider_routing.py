@@ -192,10 +192,50 @@ def test_legacy_yandex_latest_uri_is_marked_deprecated():
     assert lifecycle["replacement"] == "aliceai-image-art-3.0"
 
 
-def test_yandexart_uses_native_async_image_generation_api(tmp_path, monkeypatch):
+def test_stale_deprecated_yandex_candidates_are_ignored_without_explicit_opt_in(monkeypatch):
+    from visual_provider_gateway.providers import _yandex_image_model_candidates
+
+    monkeypatch.setenv(
+        "YANDEX_ART_MODEL_CANDIDATES",
+        "art://folder/yandex-art/latest,art://folder/yandex-art-2.0",
+    )
+    monkeypatch.delenv("YANDEX_ALLOW_DEPRECATED_ART_MODELS", raising=False)
+    config = ProviderConfig(
+        name="yandexart",
+        model_image="art://folder/aliceai-image-art-3.0",
+        folder_id="folder",
+    )
+
+    assert _yandex_image_model_candidates(config) == (
+        "art://folder/aliceai-image-art-3.0",
+    )
+
+
+def test_deprecated_yandex_candidate_requires_explicit_operator_opt_in(monkeypatch):
+    from visual_provider_gateway.providers import _yandex_image_model_candidates
+
+    monkeypatch.setenv(
+        "YANDEX_ART_MODEL_CANDIDATES",
+        "art://folder/yandex-art/latest",
+    )
+    monkeypatch.setenv("YANDEX_ALLOW_DEPRECATED_ART_MODELS", "1")
+    config = ProviderConfig(
+        name="yandexart",
+        model_image="art://folder/aliceai-image-art-3.0",
+        folder_id="folder",
+    )
+
+    assert _yandex_image_model_candidates(config) == (
+        "art://folder/aliceai-image-art-3.0",
+        "art://folder/yandex-art/latest",
+    )
+
+
+def test_alice_ai_art_uses_openai_compatible_images_api(tmp_path, monkeypatch):
     from visual_provider_gateway.providers import YandexArtProvider
 
     calls = []
+    encoded = base64.b64encode(b"alice-image").decode("ascii")
 
     def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0):
         calls.append(
@@ -206,7 +246,7 @@ def test_yandexart_uses_native_async_image_generation_api(tmp_path, monkeypatch)
                 "payload": payload,
             }
         )
-        return {"id": "operation-123", "done": False}
+        return {"data": [{"b64_json": encoded}]}
 
     monkeypatch.setattr(providers, "_json_request", fake_json_request)
     monkeypatch.setenv("YANDEX_API_KEY", "durable-api-key")
@@ -232,24 +272,21 @@ def test_yandexart_uses_native_async_image_generation_api(tmp_path, monkeypatch)
         )
     )
 
-    assert job.status == "running"
-    assert job.external_id == "operation-123"
+    assert job.status == "succeeded"
+    assert Path(job.asset_path).read_bytes() == b"alice-image"
+    assert len(calls) == 1
     assert calls[0]["method"] == "POST"
-    assert calls[0]["url"] == (
-        "https://ai.api.cloud.yandex.net:443"
-        "/foundationModels/v1/imageGenerationAsync"
-    )
-    assert calls[0]["headers"] == {"Authorization": "Api-Key durable-api-key"}
-    assert calls[0]["payload"] == {
-        "modelUri": "art://folder/aliceai-image-art-3.0",
-        "messages": [{"text": "clean product photo", "weight": "1"}],
-        "generationOptions": {
-            "mimeType": "image/jpeg",
-            "aspectRatio": {"widthRatio": "16", "heightRatio": "9"},
-            "seed": "12",
-        },
+    assert calls[0]["url"] == "https://ai.api.cloud.yandex.net:443/v1/images/generations"
+    assert calls[0]["headers"] == {
+        "Authorization": "Api-Key durable-api-key",
+        "OpenAI-Project": "folder",
     }
-    assert "OpenAI-Project" not in calls[0]["headers"]
+    assert calls[0]["payload"] == {
+        "model": "art://folder/aliceai-image-art-3.0",
+        "prompt": "clean product photo",
+        "size": "1536x1024",
+    }
+    assert job.provider_payload["transport"] == "openai_compat"
 
 
 def test_yandexart_poll_materializes_native_operation_result(tmp_path, monkeypatch):
@@ -340,7 +377,7 @@ def test_yandexart_motion_waits_for_native_image_operation(monkeypatch):
     assert result.provider_payload["motion_duration_seconds"] == 5
 
 
-def test_yandexart_native_model_fallback_only_after_definitive_rejection(monkeypatch):
+def test_current_alice_model_failure_is_not_masked_by_deprecated_fallback(monkeypatch):
     from visual_provider_gateway.providers import (
         ProviderTransportError,
         YandexArtProvider,
@@ -349,13 +386,12 @@ def test_yandexart_native_model_fallback_only_after_definitive_rejection(monkeyp
     calls = []
 
     def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0):
-        calls.append(payload["modelUri"])
-        if len(calls) == 1:
-            raise ProviderTransportError("http_400")
-        return {"id": "operation-fallback", "done": False}
+        calls.append((url, payload))
+        raise ProviderTransportError("http_400")
 
     monkeypatch.setattr(providers, "_json_request", fake_json_request)
     monkeypatch.setenv("YANDEX_API_KEY", "key")
+    monkeypatch.delenv("YANDEX_ART_MODEL_CANDIDATES", raising=False)
     provider = YandexArtProvider(
         ProviderConfig(
             name="yandexart",
@@ -366,32 +402,41 @@ def test_yandexart_native_model_fallback_only_after_definitive_rejection(monkeyp
         )
     )
 
-    job = provider.submit(CreativeBrief(kind="image", prompt="product"))
+    with pytest.raises(ProviderTransportError, match="http_400"):
+        provider.submit(CreativeBrief(kind="image", prompt="product"))
 
-    assert job.external_id == "operation-fallback"
-    assert calls == [
-        "art://folder/aliceai-image-art-3.0",
-        "art://folder/yandex-art/latest",
-    ]
+    assert len(calls) == 1
+    assert calls[0][0].endswith("/v1/images/generations")
+    assert calls[0][1]["model"] == "art://folder/aliceai-image-art-3.0"
 
 
-def test_yandexart_falls_back_to_compat_api_after_native_authorization_rejection(tmp_path, monkeypatch):
+def test_alice_ai_art_auth_rejection_can_use_renewable_iam(tmp_path, monkeypatch):
+    from services.yandex_iam_token import YandexIamTokenResult
     from visual_provider_gateway.providers import (
         ProviderTransportError,
         YandexArtProvider,
     )
 
     calls = []
-    encoded = base64.b64encode(b"compat-image").decode("ascii")
+    encoded = base64.b64encode(b"renewable-image").decode("ascii")
 
     def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0):
-        calls.append((method, url, headers, payload))
-        if url.endswith("/foundationModels/v1/imageGenerationAsync"):
+        calls.append((url, headers))
+        if headers["Authorization"] == "Api-Key durable-api-key":
             raise ProviderTransportError("http_403")
-        assert url.endswith("/v1/images/generations")
         return {"data": [{"b64_json": encoded}]}
 
     monkeypatch.setattr(providers, "_json_request", fake_json_request)
+    monkeypatch.setattr(
+        providers,
+        "get_yandex_art_iam_token",
+        lambda: YandexIamTokenResult(
+            configured=True,
+            available=True,
+            token="renewable-token",
+            auth_mode="authorized_key",
+        ),
+    )
     monkeypatch.setenv("YANDEX_API_KEY", "durable-api-key")
     monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
     monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
@@ -409,12 +454,11 @@ def test_yandexart_falls_back_to_compat_api_after_native_authorization_rejection
     job = provider.submit(CreativeBrief(kind="image", prompt="product"))
 
     assert job.status == "succeeded"
-    assert Path(job.asset_path).read_bytes() == b"compat-image"
-    assert job.provider_payload["transport"] == "openai_compat"
-    compat_calls = [call for call in calls if call[1].endswith("/v1/images/generations")]
-    assert len(compat_calls) == 1
-    assert compat_calls[0][2]["Authorization"] == "Api-Key durable-api-key"
-    assert compat_calls[0][2]["OpenAI-Project"] == "folder"
+    assert Path(job.asset_path).read_bytes() == b"renewable-image"
+    assert [headers["Authorization"] for _url, headers in calls] == [
+        "Api-Key durable-api-key",
+        "Bearer renewable-token",
+    ]
 
 
 def test_yandexart_does_not_retry_model_after_ambiguous_submit(monkeypatch):
@@ -426,7 +470,7 @@ def test_yandexart_does_not_retry_model_after_ambiguous_submit(monkeypatch):
     calls = []
 
     def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0):
-        calls.append(payload["modelUri"])
+        calls.append(payload["model"])
         raise ProviderTransportError("TimeoutError")
 
     monkeypatch.setattr(providers, "_json_request", fake_json_request)
@@ -891,17 +935,20 @@ def test_submit_never_exposes_unstructured_transport_error_text(monkeypatch):
     assert secret_marker not in rendered
 
 
-def test_yandexart_uses_current_native_image_api(monkeypatch, tmp_path):
+def test_yandexart_uses_current_alice_images_api(monkeypatch, tmp_path):
     from visual_provider_gateway.providers import YandexArtProvider
 
     observed = {}
+    encoded = base64.b64encode(b"current-image").decode("ascii")
 
     def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0, ca_bundle_file=""):
         observed.update({"method": method, "url": url, "headers": headers, "payload": payload})
-        return {"id": "operation-current-model", "done": False}
+        return {"data": [{"b64_json": encoded}]}
 
     monkeypatch.setattr(providers, "_json_request", fake_json_request)
     monkeypatch.setenv("YANDEX_API_KEY", "test")
+    monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
     provider = YandexArtProvider(
         ProviderConfig(
             name="yandexart",
@@ -909,24 +956,26 @@ def test_yandexart_uses_current_native_image_api(monkeypatch, tmp_path):
             api_key="test",
             folder_id="folder",
             model_image="art://folder/aliceai-image-art-3.0",
-            output_dir=str(tmp_path),
+            output_dir=str(tmp_path / "visual"),
         )
     )
     job = provider.submit(
         CreativeBrief(kind="image", prompt="new sink advertising image", aspect_ratio="16:9")
     )
 
-    assert observed["url"].endswith("/foundationModels/v1/imageGenerationAsync")
-    assert observed["headers"] == {"Authorization": "Api-Key test"}
-    assert observed["payload"]["modelUri"] == "art://folder/aliceai-image-art-3.0"
-    assert observed["payload"]["generationOptions"]["aspectRatio"] == {
-        "widthRatio": "16",
-        "heightRatio": "9",
+    assert observed["url"].endswith("/v1/images/generations")
+    assert observed["headers"] == {
+        "Authorization": "Api-Key test",
+        "OpenAI-Project": "folder",
     }
-    assert job.status == "running"
-    assert job.external_id == "operation-current-model"
-    assert job.mime_type == "image/jpeg"
-
+    assert observed["payload"] == {
+        "model": "art://folder/aliceai-image-art-3.0",
+        "prompt": "new sink advertising image",
+        "size": "1536x1024",
+    }
+    assert job.status == "succeeded"
+    assert job.model == "art://folder/aliceai-image-art-3.0"
+    assert job.provider_payload["transport"] == "openai_compat"
 
 def test_stored_visual_uses_actual_image_signature_for_mime_and_suffix(tmp_path):
     job = CreativeJob(
@@ -1000,23 +1049,25 @@ def test_yandexart_motion_video_renders_current_alice_keyframe(monkeypatch, tmp_
     assert source.exists() is False
 
 
-def test_yandex_model_candidate_failover_after_deprecated_model(monkeypatch, tmp_path):
+def test_yandex_model_candidate_skips_deprecated_model_and_uses_current_alice(monkeypatch, tmp_path):
     from visual_provider_gateway.providers import YandexArtProvider
 
     calls = []
+    encoded = base64.b64encode(b"current-image").decode("ascii")
 
     def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0, ca_bundle_file=""):
-        calls.append(payload["modelUri"])
-        if payload["modelUri"].endswith("/yandex-art-2.0"):
-            raise providers.ProviderTransportError("http_403")
-        return {"id": "operation-new-model", "done": False}
+        calls.append((url, payload["model"]))
+        return {"data": [{"b64_json": encoded}]}
 
     monkeypatch.setenv(
         "YANDEX_ART_MODEL_CANDIDATES",
         "art://folder/aliceai-image-art-3.0",
     )
+    monkeypatch.delenv("YANDEX_ALLOW_DEPRECATED_ART_MODELS", raising=False)
     monkeypatch.setattr(providers, "_json_request", fake_json_request)
     monkeypatch.setenv("YANDEX_API_KEY", "key")
+    monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
     provider = YandexArtProvider(
         ProviderConfig(
             name="yandexart",
@@ -1024,20 +1075,20 @@ def test_yandex_model_candidate_failover_after_deprecated_model(monkeypatch, tmp
             api_key="key",
             folder_id="folder",
             model_image="art://folder/yandex-art-2.0",
-            output_dir=str(tmp_path),
+            output_dir=str(tmp_path / "visual"),
         )
     )
 
     job = provider.submit(CreativeBrief(kind="image", prompt="x"))
 
-    assert calls[:2] == [
-        "art://folder/yandex-art-2.0",
-        "art://folder/aliceai-image-art-3.0",
+    assert calls == [
+        (
+            "https://ai.api.cloud.yandex.net/v1/images/generations",
+            "art://folder/aliceai-image-art-3.0",
+        )
     ]
-    assert job.status == "running"
-    assert job.external_id == "operation-new-model"
+    assert job.status == "succeeded"
     assert job.model == "art://folder/aliceai-image-art-3.0"
-
 
 def test_yandex_image_circuit_also_blocks_motion_fallback(monkeypatch):
     import time
@@ -1103,10 +1154,11 @@ def test_visual_provider_gateway_image_contains_ffmpeg_contract():
     dockerfile = Path("visual_provider_gateway/Dockerfile").read_text(encoding="utf-8")
     assert "apt-get install -y --no-install-recommends ffmpeg" in dockerfile
 
-def test_yandexart_retries_with_renewable_iam_after_static_auth_rejection(monkeypatch):
+def test_yandexart_retries_with_renewable_iam_after_static_auth_rejection(monkeypatch, tmp_path):
     from visual_provider_gateway.providers import ProviderTransportError, YandexArtProvider
 
     calls = []
+    encoded = base64.b64encode(b"renewed-image").decode("ascii")
 
     def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0):
         authorization = str((headers or {}).get("Authorization") or "")
@@ -1114,11 +1166,13 @@ def test_yandexart_retries_with_renewable_iam_after_static_auth_rejection(monkey
         if authorization.startswith("Api-Key "):
             raise ProviderTransportError("http_403")
         assert authorization == "Bearer renewable-iam-token"
-        assert url.endswith("/foundationModels/v1/imageGenerationAsync")
-        return {"id": "operation-renewed", "done": False}
+        assert url.endswith("/v1/images/generations")
+        return {"data": [{"b64_json": encoded}]}
 
     monkeypatch.setenv("YANDEX_API_KEY", "expired-or-insufficient-key")
     monkeypatch.delenv("YANDEX_ART_IAM_TOKEN", raising=False)
+    monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
     monkeypatch.setattr(providers, "_json_request", fake_json_request)
     monkeypatch.setattr(
         providers,
@@ -1137,16 +1191,16 @@ def test_yandexart_retries_with_renewable_iam_after_static_auth_rejection(monkey
             api_key="expired-or-insufficient-key",
             model_image="art://folder/aliceai-image-art-3.0",
             folder_id="folder",
+            output_dir=str(tmp_path / "visual"),
         )
     )
 
     result = provider.submit(CreativeBrief(kind="image", prompt="hedgehog"))
 
-    assert result.status == "running"
-    assert result.external_id == "operation-renewed"
+    assert result.status == "succeeded"
+    assert result.provider_payload["transport"] == "openai_compat"
     assert any(auth.startswith("Api-Key ") for _, _, auth in calls)
     assert calls[-1][2] == "Bearer renewable-iam-token"
-
 
 def test_yandexart_does_not_switch_credentials_after_ambiguous_failure(monkeypatch):
     from visual_provider_gateway.providers import ProviderTransportError, YandexArtProvider
@@ -1188,11 +1242,14 @@ def test_yandexart_does_not_switch_credentials_after_ambiguous_failure(monkeypat
     assert renewable_calls == 0
 
 
-def test_yandexart_can_be_configured_by_renewable_iam_only(monkeypatch):
+def test_yandexart_can_be_configured_by_renewable_iam_only(monkeypatch, tmp_path):
     from visual_provider_gateway.providers import YandexArtProvider
 
+    encoded = base64.b64encode(b"renewable-only-image").decode("ascii")
     monkeypatch.delenv("YANDEX_API_KEY", raising=False)
     monkeypatch.delenv("YANDEX_ART_IAM_TOKEN", raising=False)
+    monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
     monkeypatch.setattr(providers, "yandex_art_renewable_auth_configured", lambda: True)
     monkeypatch.setattr(
         providers,
@@ -1207,7 +1264,7 @@ def test_yandexart_can_be_configured_by_renewable_iam_only(monkeypatch):
     monkeypatch.setattr(
         providers,
         "_json_request",
-        lambda *_args, **_kwargs: {"id": "operation-renewable-only", "done": False},
+        lambda *_args, **_kwargs: {"data": [{"b64_json": encoded}]},
     )
     provider = YandexArtProvider(
         ProviderConfig(
@@ -1216,10 +1273,12 @@ def test_yandexart_can_be_configured_by_renewable_iam_only(monkeypatch):
             api_key="",
             model_image="art://folder/aliceai-image-art-3.0",
             folder_id="folder",
+            output_dir=str(tmp_path / "visual"),
         )
     )
 
     assert provider.configured("image") is True
     result = provider.submit(CreativeBrief(kind="image", prompt="hedgehog"))
-    assert result.external_id == "operation-renewable-only"
-
+    assert result.status == "succeeded"
+    assert result.provider_payload["transport"] == "openai_compat"
+    assert Path(result.asset_path).read_bytes() == b"renewable-only-image"

@@ -34,11 +34,10 @@ def _compiled_brief(*, kind: str = "image") -> CreativeBrief:
 def test_yandex_adapter_keeps_frozen_semantics_and_strengthens_action_priority() -> None:
     adapted = adapt_visual_brief_for_provider(_compiled_brief(), provider="yandexart")
 
-    assert "Provider execution priority" in adapted.prompt
+    assert "Render the owner's requested scene faithfully" in adapted.prompt
     assert "hedgehog listens to an audio session" in adapted.prompt
-    assert "listening unmistakable" in adapted.prompt
     assert adapted.negative_prompt == "missing requested action"
-    assert len(adapted.prompt) <= 4800
+    assert len(adapted.prompt) <= 500
 
 
 def test_yandex_motion_adapter_marks_keyframe_constraint_without_new_story() -> None:
@@ -47,9 +46,9 @@ def test_yandex_motion_adapter_marks_keyframe_constraint_without_new_story() -> 
         provider="yandexart_motion",
     )
 
-    assert "creates motion from a generated keyframe" in adapted.prompt
+    assert "Create a keyframe" in adapted.prompt
     assert "hedgehog listens to an audio session" in adapted.prompt
-    assert "transformation is mandatory" in adapted.prompt.casefold()
+    assert len(adapted.prompt) <= 500
 
 
 def test_runway_adapter_preserves_semantics_and_style_inside_hard_prompt_limit() -> None:
@@ -94,6 +93,6 @@ def test_engine_applies_adapter_only_after_provider_selection(monkeypatch) -> No
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 1
-    assert "Provider execution priority" in captured["brief"].prompt
+    assert result.provider_payload["prompt_adapter_version"] == 2
+    assert "Render the owner's requested scene faithfully" in captured["brief"].prompt
     assert "hedgehog listens to an audio session" in captured["brief"].prompt
