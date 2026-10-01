@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from clientplatform.domain.visual_style_intent import VisualStyleIntent, style_summary_ru
+from clientplatform.domain.visual_style_intent import (
+    VisualStyleIntent,
+    style_summary_ru,
+    visual_style_preset,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,39 +163,59 @@ def style_preset_name(code: str) -> str:
         raise ValueError("visual style preset is invalid") from exc
 
 
-def style_dashboard_rows(token: str) -> list[list[tuple[str, str]]]:
+def _checked_label(label: str, *, selected: bool) -> str:
+    return f"✅ {label}" if selected else label
+
+
+def style_dashboard_rows(
+    token: str,
+    intent: VisualStyleIntent | None = None,
+) -> list[list[tuple[str, str]]]:
+    current = (intent or VisualStyleIntent()).normalized()
+    current_mapping = current.to_mapping()
+
+    def preset(index: int) -> tuple[str, str]:
+        label, name, code = _PRESETS[index]
+        selected = current_mapping == visual_style_preset(name).to_mapping()
+        return (
+            _checked_label(label, selected=selected),
+            f"cpc:st:p:{code}:{token}",
+        )
+
     rows = [
-        [
-            (_PRESETS[0][0], f"cpc:st:p:{_PRESETS[0][2]}:{token}"),
-            (_PRESETS[1][0], f"cpc:st:p:{_PRESETS[1][2]}:{token}"),
-        ],
-        [
-            (_PRESETS[2][0], f"cpc:st:p:{_PRESETS[2][2]}:{token}"),
-            (_PRESETS[3][0], f"cpc:st:p:{_PRESETS[3][2]}:{token}"),
-        ],
-        [
-            (_PRESETS[4][0], f"cpc:st:p:{_PRESETS[4][2]}:{token}"),
-            (_PRESETS[5][0], f"cpc:st:p:{_PRESETS[5][2]}:{token}"),
-        ],
-        [(_PRESETS[6][0], f"cpc:st:p:{_PRESETS[6][2]}:{token}")],
+        [preset(0), preset(1)],
+        [preset(2), preset(3)],
+        [preset(4), preset(5)],
+        [preset(6)],
     ]
     for dimension in _DIMENSIONS:
+        selected_value = getattr(current, dimension.field)
+        configured = selected_value != "auto"
         rows.append(
-            [(f"⚙️ {dimension.title}", f"cpc:st:d:{dimension.code}:{token}")]
+            [(
+                _checked_label(f"⚙️ {dimension.title}", selected=configured),
+                f"cpc:st:d:{dimension.code}:{token}",
+            )]
         )
     rows.extend(
         [
             [("🤖 Авто по запросу", f"cpc:st:reset:{token}")],
             [("💾 Запомнить этот стиль", f"cpc:st:save:{token}")],
             [("🗑 Не использовать сохранённый стиль", f"cpc:st:clear:{token}")],
-            [("✅ Продолжить", f"cpc:st:go:{token}")],
+            [("✅ Готово — к созданию", f"cpc:st:go:{token}")],
         ]
     )
     return rows
 
 
-def style_dimension_rows(token: str, code: str) -> list[list[tuple[str, str]]]:
+def style_dimension_rows(
+    token: str,
+    code: str,
+    intent: VisualStyleIntent | None = None,
+) -> list[list[tuple[str, str]]]:
     dimension = style_dimension(code)
+    current = (intent or VisualStyleIntent()).normalized()
+    selected_value = getattr(current, dimension.field)
     rows: list[list[tuple[str, str]]] = []
     choices = list(dimension.choices)
     for index in range(0, len(choices), 2):
@@ -199,14 +223,17 @@ def style_dimension_rows(token: str, code: str) -> list[list[tuple[str, str]]]:
         for choice in choices[index:index + 2]:
             row.append(
                 (
-                    choice.label,
+                    _checked_label(
+                        choice.label,
+                        selected=choice.value == selected_value,
+                    ),
                     f"cpc:st:s:{dimension.code}:{choice.code}:{token}",
                 )
             )
         rows.append(row)
-    rows.append([("⬅️ К стилю", f"cpc:st:open:{token}")])
+    rows.append([("✅ Готово — к созданию", f"cpc:st:go:{token}")])
+    rows.append([("⬅️ Все настройки", f"cpc:st:open:{token}")])
     return rows
-
 
 def style_dashboard_text(
     intent: VisualStyleIntent,
