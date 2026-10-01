@@ -275,7 +275,7 @@ jobs:
           # inspect safe recent-job metadata without mutating production.
           PY
 
-          privileged docker exec -i "$provider_id" python - <<'PY'
+          privileged docker exec -i "$app_id" python - <<'PY'
           from __future__ import annotations
           import json
           import urllib.error
