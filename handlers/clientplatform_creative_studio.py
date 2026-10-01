@@ -1316,11 +1316,11 @@ async def _continue_generation(
             )
             current = await _remember_job(actor, current, waited_job)
             job = waited_job
-        except VisualCreativeError:
+        except VisualCreativeError as exc:
             # The durable receipt/source job remains authoritative. A transient
             # poll failure must not create another paid job; the recovery button
             # below can continue the same idempotent generation.
-            pass
+            logger.info("visual auto-wait deferred to explicit recovery: %s", exc)
 
     if await _retire_unavailable_completed_receipt(actor, current, job=job):
         await control._callback_message(callback).answer(
