@@ -275,6 +275,49 @@ jobs:
           # inspect safe recent-job metadata without mutating production.
           PY
 
+          privileged docker exec -i "$app_id" python - <<'PY'
+          from __future__ import annotations
+          import json
+          import time
+          from clientplatform.application.visual_creatives import build_business_image_brief
+          from services.visual_creative_gateway import submit_visual
+
+          brief = build_business_image_brief(
+              request="Красный круг на белом фоне, минималистичная иллюстрация",
+              brand_context="",
+              country_code="RU",
+          )
+          safe = {
+              "compiled_prompt_chars": len(str(brief.prompt or "")),
+              "compiled_prompt_utf8_bytes": len(str(brief.prompt or "").encode("utf-8")),
+              "aspect_ratio": str(brief.aspect_ratio),
+          }
+          try:
+              job = submit_visual(
+                  brief,
+                  scope_id="diag-alice-e2e",
+                  idempotency_key=f"diag:alice:e2e:{int(time.time())}",
+                  wait_seconds=60,
+              )
+              safe.update(
+                  {
+                      "status": str(job.status),
+                      "provider": str(job.provider),
+                      "error_code": str(job.error_code or ""),
+                      "model_recorded": bool(str(job.model or "")),
+                      "asset_ready": bool(job.asset_ready),
+                  }
+              )
+          except Exception as exc:
+              safe.update(
+                  {
+                      "status": "exception",
+                      "exception_type": type(exc).__name__,
+                  }
+              )
+          print("CLIENTPLATFORM_PRODUCTION_VISUAL_E2E_SYNTHETIC " + json.dumps(safe, ensure_ascii=False, sort_keys=True))
+          PY
+
           privileged docker exec -i "$provider_id" python - <<'PY'
           from __future__ import annotations
           import json
