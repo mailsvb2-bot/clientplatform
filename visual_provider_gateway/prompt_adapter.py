@@ -114,9 +114,15 @@ def _compiled_directives(prompt: str) -> tuple[str, ...]:
 
 def _compiled_owner_request(lines: tuple[str, ...]) -> str:
     for line in lines:
-        if not line.startswith(_OWNER_REQUEST_PREFIX) or not line.endswith('"'):
+        if not line.startswith(_OWNER_REQUEST_PREFIX):
             continue
-        return line[len(_OWNER_REQUEST_PREFIX) : -1].strip()
+        value = line[len(_OWNER_REQUEST_PREFIX) :].strip()
+        # Compiler v2 itself emits a bare closing quote. Some frozen/test-era
+        # payloads also carry ordinary sentence punctuation after that quote.
+        if value.endswith('".'):
+            value = value[:-1].rstrip()
+        if value.endswith('"'):
+            return value[:-1].strip()
     return ""
 
 
