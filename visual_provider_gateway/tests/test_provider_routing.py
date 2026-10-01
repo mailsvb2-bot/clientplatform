@@ -192,6 +192,45 @@ def test_legacy_yandex_latest_uri_is_marked_deprecated():
     assert lifecycle["replacement"] == "aliceai-image-art-3.0"
 
 
+def test_stale_deprecated_yandex_candidates_are_ignored_without_explicit_opt_in(monkeypatch):
+    from visual_provider_gateway.providers import _yandex_image_model_candidates
+
+    monkeypatch.setenv(
+        "YANDEX_ART_MODEL_CANDIDATES",
+        "art://folder/yandex-art/latest,art://folder/yandex-art-2.0",
+    )
+    monkeypatch.delenv("YANDEX_ALLOW_DEPRECATED_ART_MODELS", raising=False)
+    config = ProviderConfig(
+        name="yandexart",
+        model_image="art://folder/aliceai-image-art-3.0",
+        folder_id="folder",
+    )
+
+    assert _yandex_image_model_candidates(config) == (
+        "art://folder/aliceai-image-art-3.0",
+    )
+
+
+def test_deprecated_yandex_candidate_requires_explicit_operator_opt_in(monkeypatch):
+    from visual_provider_gateway.providers import _yandex_image_model_candidates
+
+    monkeypatch.setenv(
+        "YANDEX_ART_MODEL_CANDIDATES",
+        "art://folder/yandex-art/latest",
+    )
+    monkeypatch.setenv("YANDEX_ALLOW_DEPRECATED_ART_MODELS", "1")
+    config = ProviderConfig(
+        name="yandexart",
+        model_image="art://folder/aliceai-image-art-3.0",
+        folder_id="folder",
+    )
+
+    assert _yandex_image_model_candidates(config) == (
+        "art://folder/aliceai-image-art-3.0",
+        "art://folder/yandex-art/latest",
+    )
+
+
 def test_alice_ai_art_uses_openai_compatible_images_api(tmp_path, monkeypatch):
     from visual_provider_gateway.providers import YandexArtProvider
 
