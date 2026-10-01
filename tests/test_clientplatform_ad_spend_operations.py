@@ -3,15 +3,17 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timezone
 from typing import Any, Mapping
+from unittest.mock import patch
 from uuid import uuid4
 
-from clientplatform.domain.ad_spend import AdSpendInvariantViolation
+from clientplatform.domain.ad_spend import AdSpendAuthorizationStatus, AdSpendInvariantViolation
 from clientplatform.domain.ad_spend_operations import (
     AdSpendOperation,
     AdSpendOperationStatus,
     AdSpendOperationType,
     ad_spend_operation_key,
 )
+from clientplatform.infrastructure.ad_spend_operation_repository import AdSpendOperationRepository
 from clientplatform.integrations.yandex_direct import (
     YandexDirectError,
     YandexOAuthConfig,
@@ -91,6 +93,51 @@ class SpendOperationDomainTests(unittest.TestCase):
                 created_at=NOW.isoformat(),
                 updated_at=NOW.isoformat(),
             )
+
+    def test_enqueue_reconciles_operation_committed_after_initial_idempotency_read(self) -> None:
+        business = str(uuid4())
+        authorization = str(uuid4())
+        member = str(uuid4())
+        key = ad_spend_operation_key(
+            business_id=business,
+            authorization_id=authorization,
+            operation_type=AdSpendOperationType.LAUNCH,
+        )
+        existing = AdSpendOperation(
+            id=str(uuid4()),
+            business_id=business,
+            authorization_id=authorization,
+            operation_type=AdSpendOperationType.LAUNCH,
+            status=AdSpendOperationStatus.QUEUED,
+            idempotency_key=key,
+            attempts=0,
+            available_at=NOW.isoformat(),
+            created_at=NOW.isoformat(),
+            updated_at=NOW.isoformat(),
+        )
+
+        class MissingAuthorizationCursor:
+            def fetchone(self) -> None:
+                return None
+
+        class Connection:
+            def execute(self, _sql: str, _params: object = ()) -> MissingAuthorizationCursor:
+                return MissingAuthorizationCursor()
+
+        repository = AdSpendOperationRepository(Connection())
+        with patch.object(repository, "_find_by_key", side_effect=[None, existing]):
+            reconciled = repository._enqueue(
+                business_id=business,
+                actor_member_id=member,
+                authorization_id=authorization,
+                operation_type=AdSpendOperationType.LAUNCH,
+                expected_status=AdSpendAuthorizationStatus.AUTHORIZED,
+                target_status=AdSpendAuthorizationStatus.LAUNCHING,
+                now=NOW,
+                reason="owner_launch_requested",
+            )
+
+        self.assertEqual(reconciled, existing)
 
     def test_provider_launch_reconciles_submitted_ad_without_second_mutation(self) -> None:
         provider = ScriptedActions(
