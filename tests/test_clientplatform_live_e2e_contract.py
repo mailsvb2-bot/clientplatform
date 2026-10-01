@@ -1,0 +1,385 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from scripts.check_live_e2e_manifest import (
+    load_manifest,
+    required_native_actions,
+    validate_manifest,
+)
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_live_e2e_manifest_covers_current_native_parity_registry() -> None:
+    summary = validate_manifest(load_manifest())
+    assert summary["journeys"] >= 14
+    assert summary["native_actions"] == len(required_native_actions())
+    assert summary["native_actions"] >= 90
+    assert summary["live_probes"] >= 17
+    assert summary["windows_variants"] == ["windows-10", "windows-11"]
+    assert summary["mobile_targets"] == [
+        "android-phone",
+        "android-tablet",
+        "chromeos-tablet",
+        "fireos-tablet",
+        "harmonyos-phone",
+        "harmonyos-tablet",
+        "ios-iphone",
+        "ipados-ipad",
+    ]
+    assert summary["mobile_compatibility_probes"] == 16
+    assert summary["mobile_form_factor_probes"] == 8
+    assert {"telegram", "vk", "max"} <= set(summary["channels"])
+
+
+def test_live_e2e_workflow_never_runs_on_pull_request_code() -> None:
+    workflow = (
+        ROOT / ".github" / "workflows" / "clientplatform-live-e2e-windows.yml"
+    ).read_text(encoding="utf-8")
+    assert "pull_request:" not in workflow
+    assert "clientplatform-live-e2e" in workflow
+    assert "clientplatform-windows-10" in workflow
+    assert "clientplatform-windows-11" in workflow
+    assert "matrix.os_label" in workflow
+    assert "matrix.os_id" in workflow
+    assert "CLIENTPLATFORM_E2E_RUNNER_IDENTITY: .clientplatform-live-e2e-runner-identity.json" in workflow
+    assert "CLIENTPLATFORM_E2E_RUNNER_IDENTITY: ${{ runner.temp }}" not in workflow
+    assert "environment: clientplatform_live_e2e" in workflow
+    assert "ref: main" in workflow
+    assert "CLIENTPLATFORM_LIVE_E2E_REAL_MONEY: '0'" in workflow
+    assert "CLIENTPLATFORM_LIVE_E2E_PRODUCTION_CREDENTIALS: '0'" in workflow
+    assert "validate_runner.ps1" in workflow
+
+
+def test_scheduled_live_e2e_is_disabled_until_runner_is_explicitly_enabled() -> None:
+    workflow = (
+        ROOT / ".github" / "workflows" / "clientplatform-live-e2e-windows.yml"
+    ).read_text(encoding="utf-8")
+    assert "vars.CLIENTPLATFORM_LIVE_E2E_ENABLED == '1'" in workflow
+    assert "schedule:" in workflow
+
+
+def test_live_e2e_contract_is_checked_on_hosted_windows_without_credentials() -> None:
+    workflow = (
+        ROOT / ".github" / "workflows" / "clientplatform-live-e2e-contract.yml"
+    ).read_text(encoding="utf-8")
+    assert "pull_request:" in workflow
+    assert "runs-on: windows-2025" in workflow
+    assert "scripts/check_live_e2e_manifest.py" in workflow
+    assert "scripts/clientplatform_live_e2e.py --plan" in workflow
+    assert "scripts/clientplatform_mobile_live_e2e.py --plan" in workflow
+    assert "scripts/live_e2e/mobile/validate_device.py" in workflow
+    assert "scripts/live_e2e/mobile/appium_driver.py" in workflow
+    assert "scripts/live_e2e/mobile/hypium_adapter.py" in workflow
+    assert "scripts/live_e2e/mobile/form_factor_adapter.py" in workflow
+    assert "secrets." not in workflow
+
+
+def test_desktop_driver_uses_windows_uia_and_never_exports_profiles() -> None:
+    driver = (
+        ROOT / "scripts" / "live_e2e" / "windows" / "desktop_driver.ps1"
+    ).read_text(encoding="utf-8")
+    assert "UIAutomationClient" in driver
+    assert "AutomationElement" in driver
+    assert "Save-Screenshot" in driver
+    assert "ConvertTo-Json" in driver
+    assert "browser profile" not in driver.casefold()
+    assert "cookies" not in driver.casefold()
+    assert "Invoke-Expression" not in driver
+    assert "iex " not in driver.casefold()
+
+
+def test_live_checklist_no_longer_uses_imported_consumer_smoke_as_evidence() -> None:
+    checklist = (ROOT / "docs" / "MESSENGER_LIVE_SMOKE_CHECKLIST.md").read_text(
+        encoding="utf-8"
+    )
+    for stale in (
+        "Практика на утро",
+        "Практика на вечер",
+        "Мой прогресс",
+        "Погода",
+        "шкала -10",
+    ):
+        assert stale not in checklist
+    assert "Owner entry" in checklist
+    assert "Cross-channel parity" in checklist
+    assert "Cross-tenant isolation" in checklist
+
+
+def test_runner_validator_requires_real_windows_10_or_11_x64_interactive_host() -> None:
+    validator = (
+        ROOT / "scripts" / "live_e2e" / "windows" / "validate_runner.ps1"
+    ).read_text(encoding="utf-8")
+    assert "CLIENTPLATFORM_E2E_EXPECTED_WINDOWS" in validator
+    assert "live_e2e_manifest.json" in validator
+    assert "caption_pattern" in validator
+    assert "minimum_build" in validator
+    assert "BuildNumber" in validator
+    assert "OSArchitecture" in validator
+    assert "SessionId" in validator
+    assert "Runner.Listener" in validator
+    assert "github_actions_runner_must_not_run_as_service" in validator
+    for variable in (
+        "CLIENTPLATFORM_E2E_TELEGRAM_EXE",
+        "CLIENTPLATFORM_E2E_MAX_EXE",
+        "CLIENTPLATFORM_E2E_EDGE_EXE",
+        "CLIENTPLATFORM_E2E_CHROME_EXE",
+    ):
+        assert variable in validator
+
+
+def test_live_driver_requires_new_expected_text_not_merely_any_ui_change() -> None:
+    driver = (
+        ROOT / "scripts" / "live_e2e" / "windows" / "desktop_driver.ps1"
+    ).read_text(encoding="utf-8")
+    assert "Get-TextOccurrenceCount" in driver
+    assert "$afterExpected -gt $beforeExpected" in driver
+    assert "$last.Hash -ne $Before.Hash" in driver
+    assert "provider_response_assertion_timeout" in driver
+    assert "$plan.actions" not in driver
+    assert "$plan.probes" in driver
+
+
+def test_live_orchestrator_reports_semantic_and_live_evidence_separately() -> None:
+    source = (ROOT / "scripts" / "clientplatform_live_e2e.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"semantic_contract"' in source
+    assert '"live_transport"' in source
+    assert '"hermetic_registry_coverage"' in source
+    assert '"runner_identity"' in source
+    assert "CLIENTPLATFORM_E2E_RUNNER_IDENTITY" in source
+    assert 'raw["live_transport_probes"]' in source
+
+
+def test_imported_consumer_messenger_fixtures_are_not_live_e2e_evidence() -> None:
+    retired = (
+        "max_button_callback_score_1.json",
+        "max_message_created_weather.json",
+        "vk_message_new_button_demo.json",
+        "vk_message_new_score_plus_one.json",
+    )
+    fixture_root = ROOT / "tests" / "fixtures" / "messenger"
+    for name in retired:
+        assert not (fixture_root / name).exists()
+
+
+def test_mobile_live_e2e_matrix_is_real_device_only_and_never_runs_pr_code() -> None:
+    workflow = (
+        ROOT / ".github" / "workflows" / "clientplatform-live-e2e-mobile.yml"
+    ).read_text(encoding="utf-8")
+    assert "pull_request:" not in workflow
+    assert "ref: main" in workflow
+    assert "vars.CLIENTPLATFORM_MOBILE_LIVE_E2E_ENABLED == '1'" in workflow
+    assert "environment: clientplatform_mobile_live_e2e" in workflow
+    assert "CLIENTPLATFORM_LIVE_E2E_REAL_MONEY: '0'" in workflow
+    assert "CLIENTPLATFORM_LIVE_E2E_PRODUCTION_CREDENTIALS: '0'" in workflow
+    for label in (
+        "clientplatform-android-phone",
+        "clientplatform-android-tablet",
+        "clientplatform-ios-iphone",
+        "clientplatform-ipados-ipad",
+        "clientplatform-harmonyos-phone",
+        "clientplatform-harmonyos-tablet",
+        "clientplatform-fireos-tablet",
+        "clientplatform-chromeos-tablet",
+    ):
+        assert label in workflow
+    assert "matrix.host_label" in workflow
+    assert "matrix.device_label" in workflow
+    assert "validate_device.py" in workflow
+    assert "shell: bash" not in workflow
+    assert "python -c" in workflow
+
+
+def test_mobile_device_validator_checks_physical_identity_and_form_factor() -> None:
+    source = (
+        ROOT / "scripts" / "live_e2e" / "mobile" / "validate_device.py"
+    ).read_text(encoding="utf-8")
+    assert "ro.kernel.qemu" in source
+    assert "emulator-" in source
+    assert "smallest_width_dp" in source
+    assert "org.chromium.arc" in source
+    assert "amazon" in source.casefold()
+    assert "xctrace" in source
+    assert "== Simulators ==" in source
+    assert "hdc" in source
+    assert "CLIENTPLATFORM_E2E_HARMONY_REAL_DEVICE" in source
+    assert "sha256" in source
+    assert '"xcode_real_device_verified": True' in source
+    assert '"device_line"' not in source
+    assert "adb_device_not_ready:{udid}" not in source
+    assert "output[-800:]" not in source
+
+
+def test_mobile_appium_driver_requires_expected_text_and_changed_ui() -> None:
+    source = (
+        ROOT / "scripts" / "live_e2e" / "mobile" / "appium_driver.py"
+    ).read_text(encoding="utf-8")
+    assert "expected_count > before_count" in source
+    assert "after_hash != before_hash" in source
+    assert "/screenshot" in source
+    assert "/source" in source
+    assert "page_source" not in source.casefold()
+    assert "profile_contains_secret_like_key" in source
+    assert 'client.navigate("about:blank")' in source
+    assert "Bearer" in source
+    assert "value.get('message'" not in source
+    assert 'execute_mobile("backgroundApp"' in source
+    assert "/orientation" in source
+    assert "orientation_change_required_but_not_observed" in source
+    assert "compatibility_state_anchor_missing" in source
+
+
+def test_harmony_adapter_requires_structured_hypium_evidence() -> None:
+    source = (
+        ROOT / "scripts" / "live_e2e" / "mobile" / "hypium_adapter.py"
+    ).read_text(encoding="utf-8")
+    assert "CLIENTPLATFORM_E2E_HYPIUM_RUNNER" in source
+    assert "expected_text_asserted" in source
+    assert "screenshot" in source
+    assert "shell=True" not in source
+    assert "hypium_runner_must_be_runner_local" in source
+    assert "completed.stdout" not in source
+    assert "hypium_state_not_preserved" in source
+    assert "hypium_orientation_not_verified" in source
+
+
+def test_mobile_orchestrator_never_claims_one_device_as_another() -> None:
+    source = (ROOT / "scripts" / "clientplatform_mobile_live_e2e.py").read_text(
+        encoding="utf-8"
+    )
+    assert "device_identity_target_mismatch" in source
+    assert '"target_id"' in source
+    assert '"semantic_contract"' in source
+    assert '"live_transport"' in source
+    assert "CLIENTPLATFORM_E2E_TELEGRAM_MOBILE_PROFILE" in source
+    assert "CLIENTPLATFORM_E2E_COCKPIT_MOBILE_PROFILE" in source
+    assert "completed.stdout" not in source
+    assert "_SECRET_PROFILE_VALUE_PATTERNS" in source
+    assert "Bearer" in source
+    assert '"device_compatibility"' in source
+    assert '"form_factor"' in source
+    assert "FORM_FACTOR_ADAPTER" in source
+
+
+def test_mobile_manifest_requires_lifecycle_orientation_and_form_factor_evidence() -> None:
+    raw = load_manifest()
+    targets = {item["id"]: item for item in raw["mobile_runner"]["targets"]}
+    for target in targets.values():
+        kinds = {item["kind"] for item in target["compatibility_probes"]}
+        assert kinds == {"background-resume", "orientation-roundtrip"}
+    assert targets["android-tablet"]["form_factor_probes"] == [
+        {"id": "split-screen-state", "kind": "multiwindow-state"}
+    ]
+    assert targets["ipados-ipad"]["form_factor_probes"] == [
+        {"id": "split-view-state", "kind": "multiwindow-state"}
+    ]
+    assert {item["kind"] for item in targets["chromeos-tablet"]["form_factor_probes"]} == {
+        "window-resize",
+        "touchview-transition",
+        "physical-keyboard",
+        "suspend-resume",
+    }
+
+
+def test_mobile_form_factor_adapter_fails_closed_on_external_evidence() -> None:
+    source = (
+        ROOT / "scripts" / "live_e2e" / "mobile" / "form_factor_adapter.py"
+    ).read_text(encoding="utf-8")
+    assert "CLIENTPLATFORM_E2E_FORM_FACTOR_RUNNER" in source
+    assert "form_factor_runner_must_be_runner_local" in source
+    assert "state_preserved" in source
+    assert "multiwindow_verified" in source
+    assert "window_resized" in source
+    assert "mode_transition_verified" in source
+    assert "physical_keyboard_verified" in source
+    assert "resume_verified" in source
+    assert "completed.stdout" not in source
+    assert "shell=True" not in source
+
+
+def test_staging_fixture_is_cli_only_staging_and_delete_free() -> None:
+    source = (ROOT / "scripts" / "clientplatform_live_e2e_fixture.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'APP_ENV_must_be_staging' in source
+    assert 'synthetic_staging_database_attestation_required' in source
+    assert 'production_credentials_forbidden' in source
+    assert 'real_money_forbidden' in source
+    assert 'dedicated_test_accounts_not_confirmed' in source
+    assert 'archive_business' in source
+    assert 'business.name.startswith(config.prefix + " ")' in source
+    assert "DELETE FROM" not in source.upper()
+    assert "DROP TABLE" not in source.upper()
+    assert "TRUNCATE" not in source.upper()
+    assert "FastAPI" not in source
+    assert "APIRouter" not in source
+    assert "aiohttp" not in source
+    assert "requests." not in source
+
+
+def test_staging_fixture_uses_canonical_idempotent_entities() -> None:
+    source = (ROOT / "scripts" / "clientplatform_live_e2e_fixture.py").read_text(
+        encoding="utf-8"
+    )
+    for call in (
+        "create_business_offering(",
+        "create_program(",
+        "add_program_lesson(",
+        "create_publication_draft(",
+        "record_payment(",
+        "set_offering_price(",
+        "create_booking_slot(",
+        "attach_customer_identity(",
+        "set_owner_control_workspace(",
+    ):
+        assert call in source
+    assert 'idempotency_key=f"e2e:{config.namespace}:{config.run_key}:offering"' in source
+    assert 'idempotency_key=f"e2e:{config.namespace}:{config.run_key}:program"' in source
+    assert 'idempotency_key=f"e2e:{config.namespace}:{config.run_key}:publication"' in source
+    assert 'idempotency_key=f"e2e:{config.namespace}:{config.run_key}:payment"' in source
+    assert '_FIXED_BOOKING_START_UTC' in source
+    assert 'include_unavailable=True' in source
+
+
+def test_staging_fixture_guard_rejects_production_and_unsafe_flags() -> None:
+    from scripts.clientplatform_live_e2e_fixture import (
+        FixtureSafetyError,
+        validate_fixture_environment,
+    )
+
+    safe = {
+        "APP_ENV": "staging",
+        "CLIENTPLATFORM_LIVE_E2E": "1",
+        "CLIENTPLATFORM_LIVE_E2E_TEST_ACCOUNTS": "1",
+        "CLIENTPLATFORM_LIVE_E2E_PRODUCTION_CREDENTIALS": "0",
+        "CLIENTPLATFORM_LIVE_E2E_REAL_MONEY": "0",
+        "CLIENTPLATFORM_E2E_FIXTURE_DATABASE_ATTESTATION": "synthetic-staging",
+        "CLIENTPLATFORM_E2E_FIXTURE_NAMESPACE": "canonical",
+        "CLIENTPLATFORM_E2E_FIXTURE_RUN_KEY": "run-123",
+        "CLIENTPLATFORM_E2E_FIXTURE_OWNER_USER_ID": "910001",
+        "CLIENTPLATFORM_E2E_FIXTURE_MEMBER_USER_ID": "910002",
+        "CLIENTPLATFORM_E2E_FIXTURE_CUSTOMER_TELEGRAM_SUBJECT": "tg-e2e-customer",
+        "CLIENTPLATFORM_E2E_FIXTURE_CUSTOMER_VK_SUBJECT": "vk-e2e-customer",
+        "CLIENTPLATFORM_E2E_FIXTURE_CUSTOMER_MAX_SUBJECT": "max-e2e-customer",
+    }
+    config = validate_fixture_environment(safe)
+    assert config.namespace == "canonical"
+    assert config.run_key == "run-123"
+
+    for key, value in (
+        ("APP_ENV", "production"),
+        ("CLIENTPLATFORM_LIVE_E2E_PRODUCTION_CREDENTIALS", "1"),
+        ("CLIENTPLATFORM_LIVE_E2E_REAL_MONEY", "1"),
+        ("CLIENTPLATFORM_E2E_FIXTURE_DATABASE_ATTESTATION", "production"),
+    ):
+        unsafe = dict(safe)
+        unsafe[key] = value
+        try:
+            validate_fixture_environment(unsafe)
+        except FixtureSafetyError:
+            pass
+        else:
+            raise AssertionError(f"unsafe fixture environment accepted: {key}")

@@ -81,6 +81,7 @@ OMNICHANNEL_TESTS = (
     "tests/test_clientplatform_dual_role_entry.py",
     "tests/test_clientplatform_channel_neutral_invites.py",
     "tests/test_clientplatform_messenger_switching.py",
+    "tests/test_clientplatform_live_e2e_contract.py",
 )
 
 COMMERCIAL_OUTCOME_TESTS = (

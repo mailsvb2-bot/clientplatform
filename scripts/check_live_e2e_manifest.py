@@ -1,0 +1,386 @@
+"""Validate the repository-owned ClientPlatform live E2E contract.
+
+This is deliberately hermetic: it validates coverage declarations and safety
+invariants without touching a provider, desktop profile, credential, or live
+environment.
+"""
+
+from __future__ import annotations
+
+import ast
+import json
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+MANIFEST = ROOT / "config" / "live_e2e_manifest.json"
+NATIVE_UI = ROOT / "clientplatform" / "application" / "native_member_interactions.py"
+
+_REQUIRED_CHANNELS = {"telegram", "vk", "max", "cockpit_edge", "cockpit_chrome"}
+_REQUIRED_ROLES = {"owner", "member", "customer"}
+_REQUIRED_WINDOWS_VARIANTS = {
+    "windows-10": {
+        "runner_label": "clientplatform-windows-10",
+        "caption_pattern": "Windows 10",
+        "minimum_build": 19045,
+    },
+    "windows-11": {
+        "runner_label": "clientplatform-windows-11",
+        "caption_pattern": "Windows 11",
+        "minimum_build": 22000,
+    },
+}
+_REQUIRED_MOBILE_SURFACES = {"telegram", "vk", "max", "cockpit"}
+_REQUIRED_MOBILE_TARGETS = {
+    "android-phone": {
+        "host_label": "Linux",
+        "runner_label": "clientplatform-android-phone",
+        "device_os": "android",
+        "form_factor": "phone",
+        "driver": "appium-uiautomator2",
+    },
+    "android-tablet": {
+        "host_label": "Linux",
+        "runner_label": "clientplatform-android-tablet",
+        "device_os": "android",
+        "form_factor": "tablet",
+        "driver": "appium-uiautomator2",
+    },
+    "ios-iphone": {
+        "host_label": "macOS",
+        "runner_label": "clientplatform-ios-iphone",
+        "device_os": "ios",
+        "form_factor": "phone",
+        "driver": "appium-xcuitest",
+    },
+    "ipados-ipad": {
+        "host_label": "macOS",
+        "runner_label": "clientplatform-ipados-ipad",
+        "device_os": "ipados",
+        "form_factor": "tablet",
+        "driver": "appium-xcuitest",
+    },
+    "harmonyos-phone": {
+        "host_label": "Windows",
+        "runner_label": "clientplatform-harmonyos-phone",
+        "device_os": "harmonyos",
+        "form_factor": "phone",
+        "driver": "deveco-hypium",
+    },
+    "harmonyos-tablet": {
+        "host_label": "Windows",
+        "runner_label": "clientplatform-harmonyos-tablet",
+        "device_os": "harmonyos",
+        "form_factor": "tablet",
+        "driver": "deveco-hypium",
+    },
+    "fireos-tablet": {
+        "host_label": "Linux",
+        "runner_label": "clientplatform-fireos-tablet",
+        "device_os": "fireos",
+        "form_factor": "tablet",
+        "driver": "appium-uiautomator2",
+    },
+    "chromeos-tablet": {
+        "host_label": "Linux",
+        "runner_label": "clientplatform-chromeos-tablet",
+        "device_os": "chromeos",
+        "form_factor": "tablet",
+        "driver": "appium-uiautomator2",
+    },
+}
+_REQUIRED_COMPATIBILITY_BASE = [
+    {"id": "background-resume", "kind": "background-resume"},
+]
+_REQUIRED_FORM_FACTOR_PROBES = {
+    "android-phone": [],
+    "android-tablet": [{"id": "split-screen-state", "kind": "multiwindow-state"}],
+    "ios-iphone": [],
+    "ipados-ipad": [{"id": "split-view-state", "kind": "multiwindow-state"}],
+    "harmonyos-phone": [],
+    "harmonyos-tablet": [{"id": "multiwindow-state", "kind": "multiwindow-state"}],
+    "fireos-tablet": [{"id": "multiwindow-state", "kind": "multiwindow-state"}],
+    "chromeos-tablet": [
+        {"id": "window-resize", "kind": "window-resize"},
+        {"id": "touchview-transition", "kind": "touchview-transition"},
+        {"id": "physical-keyboard", "kind": "physical-keyboard"},
+        {"id": "suspend-resume", "kind": "suspend-resume"},
+    ],
+}
+_REQUIRED_EVIDENCE = {
+    "cross_tenant_denial",
+    "duplicate_event_replay",
+    "restart_recovery",
+    "temporary_provider_failure",
+}
+_PARITY_ASSIGNMENTS = (
+    "TELEGRAM_NATIVE_ACTION_EQUIVALENTS",
+    "SIMPLE_OWNER_NATIVE_INTENT_EQUIVALENTS",
+)
+
+
+class LiveE2EContractError(RuntimeError):
+    pass
+
+
+def _literal_assignment(path: Path, name: str) -> dict[str, tuple[str, ...]]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in tree.body:
+        target_name = None
+        value = None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            target_name = target.id if isinstance(target, ast.Name) else None
+            value = node.value
+        elif isinstance(node, ast.AnnAssign):
+            target_name = node.target.id if isinstance(node.target, ast.Name) else None
+            value = node.value
+        if target_name == name and value is not None:
+            parsed = ast.literal_eval(value)
+            if not isinstance(parsed, dict):
+                break
+            return {
+                str(key): tuple(str(item) for item in values)
+                for key, values in parsed.items()
+            }
+    raise LiveE2EContractError(f"missing_literal_assignment:{name}")
+
+
+def required_native_actions() -> set[str]:
+    actions: set[str] = set()
+    for name in _PARITY_ASSIGNMENTS:
+        mapping = _literal_assignment(NATIVE_UI, name)
+        for values in mapping.values():
+            actions.update(values)
+    return actions
+
+
+def load_manifest() -> dict[str, Any]:
+    raw = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise LiveE2EContractError("manifest_not_object")
+    return raw
+
+
+def validate_manifest(raw: dict[str, Any]) -> dict[str, Any]:
+    problems: list[str] = []
+    if raw.get("schema_version") != 1:
+        problems.append("schema_version_must_be_1")
+
+    runner = raw.get("runner")
+    if not isinstance(runner, dict):
+        problems.append("runner_missing")
+        runner = {}
+    labels = set(runner.get("labels") or ())
+    for label in ("self-hosted", "Windows", "X64", "clientplatform-live-e2e"):
+        if label not in labels:
+            problems.append(f"runner_label_missing:{label}")
+    if runner.get("interactive_session_required") is not True:
+        problems.append("interactive_session_required")
+    if runner.get("staging_only") is not True:
+        problems.append("runner_must_be_staging_only")
+
+    raw_variants = runner.get("os_variants")
+    variants: dict[str, dict[str, Any]] = {}
+    if not isinstance(raw_variants, list):
+        problems.append("runner_os_variants_missing")
+        raw_variants = []
+    for item in raw_variants:
+        if not isinstance(item, dict):
+            problems.append("runner_os_variant_invalid")
+            continue
+        variant_id = str(item.get("id") or "").strip()
+        if not variant_id:
+            problems.append("runner_os_variant_id_missing")
+            continue
+        if variant_id in variants:
+            problems.append(f"runner_os_variant_duplicate:{variant_id}")
+            continue
+        variants[variant_id] = item
+
+    for variant_id, expected in _REQUIRED_WINDOWS_VARIANTS.items():
+        variant = variants.get(variant_id)
+        if variant is None:
+            problems.append(f"runner_os_variant_missing:{variant_id}")
+            continue
+        for key, expected_value in expected.items():
+            if variant.get(key) != expected_value:
+                problems.append(f"runner_os_variant_contract_mismatch:{variant_id}:{key}")
+    for variant_id in sorted(set(variants) - set(_REQUIRED_WINDOWS_VARIANTS)):
+        problems.append(f"runner_os_variant_unknown:{variant_id}")
+
+    mobile_runner = raw.get("mobile_runner")
+    if not isinstance(mobile_runner, dict):
+        problems.append("mobile_runner_missing")
+        mobile_runner = {}
+    mobile_labels = set(mobile_runner.get("labels") or ())
+    for label in ("self-hosted", "clientplatform-live-e2e"):
+        if label not in mobile_labels:
+            problems.append(f"mobile_runner_label_missing:{label}")
+    if mobile_runner.get("staging_only") is not True:
+        problems.append("mobile_runner_must_be_staging_only")
+    if mobile_runner.get("real_device_required") is not True:
+        problems.append("mobile_runner_real_device_required")
+
+    raw_mobile_targets = mobile_runner.get("targets")
+    mobile_targets: dict[str, dict[str, Any]] = {}
+    if not isinstance(raw_mobile_targets, list):
+        problems.append("mobile_targets_missing")
+        raw_mobile_targets = []
+    for item in raw_mobile_targets:
+        if not isinstance(item, dict):
+            problems.append("mobile_target_invalid")
+            continue
+        target_id = str(item.get("id") or "").strip()
+        if not target_id:
+            problems.append("mobile_target_id_missing")
+            continue
+        if target_id in mobile_targets:
+            problems.append(f"mobile_target_duplicate:{target_id}")
+            continue
+        mobile_targets[target_id] = item
+
+    for target_id, expected in _REQUIRED_MOBILE_TARGETS.items():
+        target = mobile_targets.get(target_id)
+        if target is None:
+            problems.append(f"mobile_target_missing:{target_id}")
+            continue
+        for key, expected_value in expected.items():
+            if target.get(key) != expected_value:
+                problems.append(f"mobile_target_contract_mismatch:{target_id}:{key}")
+        surfaces = set(target.get("required_surfaces") or ())
+        if surfaces != _REQUIRED_MOBILE_SURFACES:
+            problems.append(f"mobile_target_surfaces_mismatch:{target_id}")
+
+        compatibility = target.get("compatibility_probes")
+        expected_orientation = {
+            "id": "orientation-roundtrip",
+            "kind": "orientation-roundtrip",
+            "require_change": (
+                target.get("form_factor") == "tablet"
+                and target_id != "chromeos-tablet"
+            ),
+        }
+        expected_compatibility = [*_REQUIRED_COMPATIBILITY_BASE, expected_orientation]
+        if compatibility != expected_compatibility:
+            problems.append(f"mobile_target_compatibility_mismatch:{target_id}")
+
+        expected_form_factor = _REQUIRED_FORM_FACTOR_PROBES[target_id]
+        if target.get("form_factor_probes") != expected_form_factor:
+            problems.append(f"mobile_target_form_factor_mismatch:{target_id}")
+    for target_id in sorted(set(mobile_targets) - set(_REQUIRED_MOBILE_TARGETS)):
+        problems.append(f"mobile_target_unknown:{target_id}")
+
+    safety = raw.get("safety")
+    if not isinstance(safety, dict):
+        problems.append("safety_missing")
+        safety = {}
+    for key in (
+        "test_accounts_only",
+        "production_credentials_forbidden",
+        "real_money_forbidden",
+        "cross_product_credentials_forbidden",
+    ):
+        if safety.get(key) is not True:
+            problems.append(f"safety_invariant_missing:{key}")
+
+    channels = raw.get("channels")
+    if not isinstance(channels, dict):
+        channels = {}
+        problems.append("channels_missing")
+    missing_channels = sorted(_REQUIRED_CHANNELS - set(channels))
+    problems.extend(f"required_channel_missing:{item}" for item in missing_channels)
+
+    live_probes = raw.get("live_transport_probes")
+    if not isinstance(live_probes, dict):
+        live_probes = {}
+        problems.append("live_transport_probes_missing")
+    for channel in sorted(_REQUIRED_CHANNELS):
+        probes = live_probes.get(channel)
+        if not isinstance(probes, list) or not probes:
+            problems.append(f"live_transport_probe_missing:{channel}")
+            continue
+        seen_probe_ids: set[str] = set()
+        for probe in probes:
+            if not isinstance(probe, dict):
+                problems.append(f"live_transport_probe_invalid:{channel}")
+                continue
+            probe_id = str(probe.get("id") or "").strip()
+            user_input = str(probe.get("input") or "").strip()
+            expected = str(probe.get("expect") or "").strip()
+            if not probe_id:
+                problems.append(f"live_transport_probe_id_missing:{channel}")
+            elif probe_id in seen_probe_ids:
+                problems.append(f"live_transport_probe_duplicate:{channel}:{probe_id}")
+            seen_probe_ids.add(probe_id)
+            if not user_input:
+                problems.append(f"live_transport_probe_input_missing:{channel}:{probe_id}")
+            if not expected:
+                problems.append(f"live_transport_probe_expect_missing:{channel}:{probe_id}")
+
+    journeys = raw.get("journeys")
+    if not isinstance(journeys, list) or not journeys:
+        journeys = []
+        problems.append("journeys_missing")
+
+    ids: set[str] = set()
+    covered_actions: set[str] = set()
+    covered_roles: set[str] = set()
+    evidence: set[str] = set()
+    journey_channels: set[str] = set()
+    for item in journeys:
+        if not isinstance(item, dict):
+            problems.append("journey_not_object")
+            continue
+        journey_id = str(item.get("id") or "").strip()
+        if not journey_id:
+            problems.append("journey_id_missing")
+        elif journey_id in ids:
+            problems.append(f"duplicate_journey:{journey_id}")
+        ids.add(journey_id)
+        covered_actions.update(str(x) for x in item.get("covers_native_actions") or ())
+        covered_roles.update(str(x) for x in item.get("roles") or ())
+        evidence.update(str(x) for x in item.get("evidence") or ())
+        journey_channels.update(str(x) for x in item.get("channels") or ())
+
+    expected_actions = required_native_actions()
+    for action in sorted(expected_actions - covered_actions):
+        problems.append(f"native_action_uncovered:{action}")
+    for action in sorted(covered_actions - expected_actions):
+        problems.append(f"unknown_native_action:{action}")
+    for role in sorted(_REQUIRED_ROLES - covered_roles):
+        problems.append(f"required_role_uncovered:{role}")
+    for channel in sorted(_REQUIRED_CHANNELS - journey_channels):
+        problems.append(f"required_channel_uncovered:{channel}")
+    for item in sorted(_REQUIRED_EVIDENCE - evidence):
+        problems.append(f"required_evidence_uncovered:{item}")
+
+    if problems:
+        raise LiveE2EContractError(";".join(problems))
+    return {
+        "journeys": len(journeys),
+        "native_actions": len(expected_actions),
+        "channels": sorted(_REQUIRED_CHANNELS),
+        "roles": sorted(covered_roles),
+        "windows_variants": sorted(variants),
+        "mobile_targets": sorted(mobile_targets),
+        "mobile_compatibility_probes": sum(
+            len(target.get("compatibility_probes") or ())
+            for target in mobile_targets.values()
+        ),
+        "mobile_form_factor_probes": sum(
+            len(target.get("form_factor_probes") or ())
+            for target in mobile_targets.values()
+        ),
+        "live_probes": sum(len(live_probes.get(channel) or ()) for channel in _REQUIRED_CHANNELS),
+    }
+
+
+def main() -> int:
+    summary = validate_manifest(load_manifest())
+    print("CLIENTPLATFORM_LIVE_E2E_CONTRACT_OK " + json.dumps(summary, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,62 +1,65 @@
-# Messenger live smoke checklist
+# ClientPlatform live messenger E2E checklist
 
-Use this checklist after every change to MAX/VK buttons, payload extraction, webhook routing, or reply rendering.
+This checklist is the human-readable mirror of
+`config/live_e2e_manifest.json`. The executable manifest and its validator are
+the source of truth for live coverage.
 
-## Scope
+## Safety boundary
 
-Admin/control-plane is Telegram-only. Do not test or expose admin buttons in VK/MAX.
+Live E2E uses only a dedicated ClientPlatform staging tenant and dedicated test
+accounts. Personal accounts, production credentials, production customer data,
+real payment methods and credentials from other products are forbidden.
 
-## Preconditions
+The Windows runner must be interactive. A GitHub Actions runner installed as a
+Windows service cannot drive Telegram Desktop or MAX Desktop reliably and is
+therefore not accepted by the preflight.
 
-- Server is on `main` and clean.
-- `python -m pytest -q -p no:cacheprovider` is green.
-- `python scripts/post_deploy_verify.py` is green.
-- MAX/VK webhook secrets and public URLs are configured only on the target server.
+## Surfaces
 
-## MAX manual pass
+- Telegram Desktop: owner/member/customer staging session.
+- VK: dedicated test account in Chrome or Edge.
+- MAX Desktop: dedicated test account.
+- ClientPlatform cockpit: both Edge and Chrome.
+- Server side: the same staging tenant, with synthetic business/customer data.
 
-1. Open the MAX bot.
-2. Send `/start` or tap start.
-3. Confirm main menu has these user actions: 🌿 Попробовать бесплатно, 🔐 Полный маршрут, 💳 Тарифы, 🎁 Подарить, 📈 Мой прогресс, 🧠 Настройки, 📣 Посоветовать, 🌤 Погода.
-4. Confirm there is no 🛠 Панель button.
-5. Tap 🌿 Попробовать бесплатно.
-6. Confirm route buttons: 🚗 Практика на утро / дорогу, 🌙 Практика на вечер / домой, ⬅️ Меню.
-7. Tap one route and confirm score scale appears.
-8. Tap score buttons including -10, 0, 1, 2, 10. Confirm 1/2 are saved as scores, not demo route choices.
-9. Confirm audio/send-link step appears.
-10. Tap ✅ Прослушал and confirm post-score scale appears.
-11. Tap 🔐 Полный маршрут and confirm 🎧 Получить аудио, ✅ Прослушал, ⬅️ Меню.
-12. Tap 🌤 Погода and confirm 🔄 Обновить погоду, 🏙 Изменить город, ⬅️ Меню.
-13. Tap 📈 Мой прогресс and confirm 🎧 Получить аудио, ✅ Прослушал, 🔁 Повторить аудио, 🧾 История, ⬅️ Назад.
-14. Tap 🧠 Настройки and confirm public settings buttons only.
-15. Tap 💳 Тарифы and 🎁 Подарить and confirm link buttons are rendered.
+## Canonical journeys
 
-## VK manual pass
+1. Owner entry, business creation/selection and explicit active-business context.
+2. Today/home, customers, sales, connections and system/status surfaces.
+3. Telegram/VK/MAX connection status and channel switching.
+4. Growth, acquisition, funnels, segments, retention and AutomationPolicy.
+5. Publications: draft, schedule, cancel, publish and duplicate-event replay.
+6. Programs: create draft, lessons, publish, customer delivery, media and progress.
+7. Booking: slot creation, date/time/duration selection, customer booking and concurrency.
+8. Offerings, business profile, activity directions and enabled formats.
+9. Money/prices/tariff branches using synthetic evidence or provider sandbox only.
+10. Team/RBAC: member invite/change/revoke plus immediate revoked-access denial.
+11. Events and event editing/wizard flows.
+12. Customer invite/identity claim through Telegram, VK and MAX.
+13. Creative Studio image/video through a zero-cost test project or sandbox only,
+    including visible result and download action.
+14. Cross-channel parity: the same semantic action must be accepted in Telegram,
+    VK and MAX without creating a second business-logic implementation.
+15. Resilience: duplicate ingress, restart recovery and temporary provider failure.
+16. Cross-tenant isolation and forged/stale action rejection with two synthetic businesses.
+17. Platform-operator read-only/support flows in a separate high-trust staging account.
 
-1. Open the VK bot/chat.
-2. Send `/start` or `start`.
-3. Confirm main menu has the same eight public user actions as Telegram.
-4. Confirm there is no 🛠 Панель button.
-5. Tap 🌿 Попробовать бесплатно.
-6. Confirm route buttons: 🚗 Практика на утро / дорогу, 🌙 Практика на вечер / домой, ⬅️ Назад.
-7. Tap one route and confirm score scale appears.
-8. Tap score buttons including -10, 0, +1, +2, +10. Confirm payloads are treated as scores.
-9. Confirm audio/send-link step appears.
-10. Tap ✅ Прослушал and confirm post-score scale appears.
-11. Tap 🔐 Полный маршрут and confirm 🎧 Получить аудио, ✅ Прослушал, ⬅️ Назад.
-12. Tap 🌤 Погода and confirm 🌤 Погода, 🏙 Изменить город, ⬅️ Назад.
-13. Tap 📈 Мой прогресс and confirm 🎧 Получить аудио, ✅ Прослушал, 🔁 Повторить аудио, 🧾 История, ⬅️ Назад.
-14. Tap 🧠 Настройки and confirm public settings buttons only.
-15. Tap 💳 Тарифы and 🎁 Подарить and confirm link buttons are rendered.
+## Evidence
 
-## Evidence to keep
+A successful run keeps only synthetic evidence for seven days:
 
-- Screenshot of main menu in MAX and VK.
-- Screenshot of score scale in MAX and VK.
-- Screenshot of weather surface in MAX and VK.
-- Screenshot of progress surface in MAX and VK.
-- Server log lines showing payload normalization and action completion.
+- per-live-transport/channel screenshots from the dedicated VM;
+- UI accessibility-tree fingerprints, not raw credentials;
+- action counts and pass/fail status;
+- the combined `live-e2e-report.json`.
+
+The runner must not upload browser profiles, Telegram/MAX session databases,
+cookies, tokens, environment dumps or arbitrary home-directory files.
 
 ## Stop condition
 
-Live smoke is complete only when both platforms pass without any decorative/dead button and without exposing Telegram admin controls.
+The live contour is green only when the hermetic user-scenario wall passes first
+and every configured live probe succeeds. A provider outage is a failed live
+run, not a reason to silently substitute mocks. Paid branches must remain
+sandbox-only; absence of a sandbox is reported as blocked rather than spending
+real money.

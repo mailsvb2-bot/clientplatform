@@ -1,0 +1,107 @@
+name: ClientPlatform Live E2E Mobile and Tablet
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '47 1 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clientplatform-live-e2e-mobile
+  cancel-in-progress: false
+
+jobs:
+  live-mobile-user-journeys:
+    if: ${{ vars.CLIENTPLATFORM_MOBILE_LIVE_E2E_ENABLED == '1' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target_id: android-phone
+            host_label: Linux
+            device_label: clientplatform-android-phone
+          - target_id: android-tablet
+            host_label: Linux
+            device_label: clientplatform-android-tablet
+          - target_id: ios-iphone
+            host_label: macOS
+            device_label: clientplatform-ios-iphone
+          - target_id: ipados-ipad
+            host_label: macOS
+            device_label: clientplatform-ipados-ipad
+          - target_id: harmonyos-phone
+            host_label: Windows
+            device_label: clientplatform-harmonyos-phone
+          - target_id: harmonyos-tablet
+            host_label: Windows
+            device_label: clientplatform-harmonyos-tablet
+          - target_id: fireos-tablet
+            host_label: Linux
+            device_label: clientplatform-fireos-tablet
+          - target_id: chromeos-tablet
+            host_label: Linux
+            device_label: clientplatform-chromeos-tablet
+    runs-on: [self-hosted, "${{ matrix.host_label }}", clientplatform-live-e2e, "${{ matrix.device_label }}"]
+    environment: clientplatform_mobile_live_e2e
+    timeout-minutes: 90
+    env:
+      APP_ENV: staging
+      LOAD_DOTENV: '0'
+      PYTHONDONTWRITEBYTECODE: '1'
+      CLIENTPLATFORM_LIVE_E2E: '1'
+      CLIENTPLATFORM_LIVE_E2E_TEST_ACCOUNTS: '1'
+      CLIENTPLATFORM_LIVE_E2E_PRODUCTION_CREDENTIALS: '0'
+      CLIENTPLATFORM_LIVE_E2E_REAL_MONEY: '0'
+      CLIENTPLATFORM_E2E_TARGET_ID: ${{ matrix.target_id }}
+      CLIENTPLATFORM_E2E_DEVICE_IDENTITY: .clientplatform-mobile-device-identity.json
+
+    steps:
+      - name: Checkout exact trusted main
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: main
+          clean: true
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Reject non-main source
+        run: >-
+          python -c "import os,sys;
+          ok=os.environ.get('GITHUB_REF')=='refs/heads/main'
+          or os.environ.get('GITHUB_EVENT_NAME')=='schedule';
+          sys.exit(0 if ok else 1)"
+
+      - name: Install hash-locked test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check pip==26.1.2
+          python -m pip install --require-hashes -r requirements-dev.txt
+
+      - name: Validate real device identity and automation stack
+        run: python scripts/live_e2e/mobile/validate_device.py
+
+      - name: Validate manifest and safety contract
+        run: python scripts/check_live_e2e_manifest.py
+
+      - name: Run hermetic user-scenario wall first
+        run: python scripts/all_user_scenario_gate.py
+
+      - name: Verify mobile staging session contract
+        run: python scripts/clientplatform_mobile_live_e2e.py --preflight
+
+      - name: Run real mobile/tablet journeys
+        run: python scripts/clientplatform_mobile_live_e2e.py --execute --evidence-dir "${{ runner.temp }}/clientplatform-mobile-live-e2e/${{ matrix.target_id }}"
+
+      - name: Upload synthetic mobile E2E evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: clientplatform-mobile-live-e2e-${{ matrix.target_id }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/clientplatform-mobile-live-e2e/${{ matrix.target_id }}
+          if-no-files-found: warn
+          retention-days: 7
