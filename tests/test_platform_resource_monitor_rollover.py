@@ -60,7 +60,7 @@ def test_pending_threshold_delivery_survives_utc_day_rollover(monkeypatch):
     )
     monkeypatch.setattr(monitor, "_load_state", lambda: dict(saved))
     monkeypatch.setattr(monitor, "_save_state", save)
-    monkeypatch.setattr(monitor, "_superadmin_ids", lambda: (101, 202))
+    monkeypatch.setattr(monitor, "_resource_alert_chat_ids", lambda: (202,))
 
     asyncio.run(monitor._tick(Bot()))
 
