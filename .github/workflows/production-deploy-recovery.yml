@@ -74,7 +74,7 @@ jobs:
           echo "SSH_PORT=$SSH_PORT" >> "$GITHUB_ENV"
 
       - name: Checkout exact recovery source
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -264,7 +264,7 @@ jobs:
 
       - name: Publish deploy recovery status
         if: always()
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           RECOVERY_OUTCOME: ${{ steps.recover.outcome }}
           RECOVERY_FAILURE_MARKER: ${{ steps.recover.outputs.failure_marker }}

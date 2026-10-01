@@ -563,7 +563,7 @@ jobs:
 
       - name: Upload latest production image asset
         if: steps.probe.outcome == 'success' && steps.probe.outputs.asset_available == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: production-latest-image-asset
           path: ${{ runner.temp }}/clientplatform-latest-production-image.*
@@ -572,7 +572,7 @@ jobs:
 
       - name: Upload safe diagnostic log
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: production-visual-provider-diagnostic
           path: ${{ runner.temp }}/clientplatform-production-visual-provider-diagnostic.log
@@ -580,7 +580,7 @@ jobs:
 
       - name: Publish production visual diagnostic status
         if: always()
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         env:
           PROBE_OUTCOME: ${{ steps.probe.outcome }}
           FAILURE_MARKER: ${{ steps.probe.outputs.failure_marker }}
