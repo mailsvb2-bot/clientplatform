@@ -199,6 +199,13 @@ class AdSpendOperationRepository:
             (authorization, business_id, expected_status.value),
         ).fetchone()
         if row is None:
+            # Another request may have committed the idempotent operation and
+            # moved the authorization out of expected_status after our first
+            # key lookup. Reconcile that committed winner before treating the
+            # state transition as an invariant violation.
+            concurrent = self._find_by_key(business_id=business_id, key=key)
+            if concurrent is not None:
+                return concurrent
             raise AdSpendInvariantViolation(f"{operation_type.value} authorization state changed")
         if _optional(row, "consent_receipt_id", 1) is None:
             raise AdSpendInvariantViolation("launch or stop requires immutable consent receipt")
