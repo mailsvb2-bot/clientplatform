@@ -279,6 +279,45 @@ def test_paid_confirmation_replace_always_sends_fresh_keyboard_message(monkeypat
     assert "⬅️ Не создавать" in labels
 
 
+def test_paid_confirmation_survives_stale_keyboard_cleanup_error(monkeypatch) -> None:
+    target = _message()
+    target.edit_reply_markup = AsyncMock(
+        side_effect=studio.TelegramAPIError(
+            method=SimpleNamespace(),
+            message="message is not modified",
+        )
+    )
+    receipt = SimpleNamespace(
+        id="receipt-id",
+        request_text="ёж слушает аудиосессию",
+        provider_payload_json='{"version":2}',
+    )
+    monkeypatch.setattr(studio, "_receipt_kind", lambda _receipt: "image")
+    monkeypatch.setattr(
+        studio,
+        "_receipt_callback",
+        lambda action, token, _receipt: f"receipt:{action}:{token}",
+    )
+
+    asyncio.run(
+        studio._show_paid_generation_confirmation(
+            target,
+            token="business-token",
+            receipt=receipt,
+            replace=True,
+        )
+    )
+
+    target.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
+    target.answer.assert_awaited_once()
+    labels = [
+        button.text
+        for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert "✅ Создать 1 картинку" in labels
+
+
 def test_continue_freezes_selected_style_before_paid_confirmation(monkeypatch) -> None:
     target = _message()
     style = visual_style_preset("warm_friendly")
