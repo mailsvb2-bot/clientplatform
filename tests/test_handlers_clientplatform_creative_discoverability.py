@@ -929,23 +929,18 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
         )
         target.answer.reset_mock()
         with (
-            patch.object(creative.asyncio, "to_thread", new=direct),
             patch.object(
                 creative,
                 "_poll_existing",
                 new=AsyncMock(return_value=(running, job(status="running"))),
             ),
-            patch.object(
-                creative,
-                "wait_ad_visual",
-                side_effect=creative.VisualCreativeError("down"),
-            ) as wait,
+            patch.object(creative, "wait_ad_visual") as wait,
             patch.object(creative, "_finish_image", new=AsyncMock(return_value=False)),
             patch.object(creative.control, "_callback_message", return_value=target),
             patch.object(creative.control, "_uuid_token", return_value=_TOKEN),
         ):
             await creative._continue_generation(cb, actor=actor(), receipt=running)
-        wait.assert_called_once()
+        wait.assert_not_called()
         self.assertIn("ещё создаётся", target.answer.await_args.args[0])
 
         target.answer.reset_mock()
@@ -1003,7 +998,12 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
             ) as finish,
             patch.object(creative.control, "_uuid_token", return_value=_TOKEN),
         ):
-            await creative._continue_generation(cb, actor=actor(), receipt=prepared)
+            await creative._continue_generation(
+                cb,
+                actor=actor(),
+                receipt=prepared,
+                auto_wait=True,
+            )
 
         wait.assert_called_once_with(queued_job, wait_seconds=60)
         remember.assert_awaited_once_with(actor(), queued, ready_job)
@@ -1074,7 +1074,10 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
             ):
                 await handler(cb, FakeState())
             exact.assert_awaited_once_with(actor(), _RECEIPT_TOKEN)
-            resume.assert_awaited_once_with(cb, actor=actor(), receipt=current)
+            expected_resume = {"actor": actor(), "receipt": current}
+            if action == "generate":
+                expected_resume["auto_wait"] = True
+            resume.assert_awaited_once_with(cb, **expected_resume)
 
         stale_shape = callback(f"cpc:generate:{_TOKEN}")
         await creative.generate_creative_image(stale_shape, FakeState())
