@@ -157,6 +157,105 @@ jobs:
               "renewable_auth_mode": str(renewable_result.auth_mode or ""),
               "renewable_error": str(renewable_result.error_code or ""),
           }
+
+          # Distinguish a configured *path* from a real mounted authorized-key file.
+          # Never print secret contents; expose only existence, size and JSON field names.
+          key_path = str(
+              os.environ.get("YANDEX_ART_AUTHORIZED_KEY_FILE")
+              or os.environ.get("YANDEX_BILLING_AUTHORIZED_KEY_FILE")
+              or ""
+          ).strip()
+          key_file = {
+              "path_configured": bool(key_path),
+              "exists": bool(key_path and os.path.isfile(key_path)),
+              "size_bytes": 0,
+              "json_keys": [],
+              "json_valid_object": False,
+          }
+          if key_file["exists"]:
+              try:
+                  raw_key = open(key_path, "rb").read(256 * 1024 + 1)
+                  key_file["size_bytes"] = len(raw_key)
+                  if len(raw_key) <= 256 * 1024:
+                      parsed_key = json.loads(raw_key.decode("utf-8"))
+                      if isinstance(parsed_key, dict):
+                          key_file["json_valid_object"] = True
+                          key_file["json_keys"] = sorted(
+                              str(name)[:64] for name in parsed_key.keys()
+                          )[:32]
+              except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                  pass
+          safe["authorized_key_file"] = key_file
+
+          # Permission probe with a deliberately non-existent model. It cannot start
+          # paid generation. If Yandex returns 403 before model lookup, capture only
+          # bounded structured error metadata so we can distinguish IAM/scope/folder
+          # denial from model/request problems without exposing credentials.
+          def permission_probe(model_uri: str):
+              headers = {
+                  "Authorization": primary,
+                  "Accept": "application/json",
+                  "Content-Type": "application/json",
+              }
+              payload = json.dumps(
+                  {
+                      "modelUri": model_uri,
+                      "messages": [{"text": "clientplatform permission probe"}],
+                      "generationOptions": {
+                          "mimeType": "image/jpeg",
+                          "aspectRatio": {"widthRatio": "1", "heightRatio": "1"},
+                      },
+                  },
+                  separators=(",", ":"),
+              ).encode("utf-8")
+              request = urllib.request.Request(
+                  paths["native"],
+                  data=payload,
+                  headers=headers,
+                  method="POST",
+              )
+              status = 0
+              body = b""
+              try:
+                  with urllib.request.urlopen(request, timeout=10) as response:
+                      status = int(response.status)
+                      body = response.read(64 * 1024 + 1)
+              except urllib.error.HTTPError as exc:
+                  status = int(exc.code)
+                  try:
+                      body = exc.read(64 * 1024 + 1)
+                  except OSError:
+                      body = b""
+              except urllib.error.URLError as exc:
+                  return {"status": "transport_" + type(exc.reason).__name__}
+              except TimeoutError:
+                  return {"status": "transport_TimeoutError"}
+              except OSError as exc:
+                  return {"status": "transport_" + type(exc).__name__}
+
+              detail = {"status": status}
+              if len(body) <= 64 * 1024:
+                  try:
+                      decoded = json.loads(body.decode("utf-8"))
+                  except (UnicodeDecodeError, json.JSONDecodeError):
+                      decoded = {}
+                  if isinstance(decoded, dict):
+                      code = decoded.get("code")
+                      message = decoded.get("message")
+                      if isinstance(code, (str, int)):
+                          detail["code"] = str(code)[:96]
+                      if isinstance(message, str):
+                          # Provider error text is operational metadata; bound and
+                          # normalize it before printing to avoid arbitrary payloads.
+                          normalized = " ".join(message.split())
+                          detail["message"] = normalized[:240]
+              return detail
+
+          folder = str(provider.config.folder_id or "").strip()
+          if primary and folder:
+              safe["permission_probe"] = permission_probe(
+                  "art://" + folder + "/clientplatform-permission-probe-model-does-not-exist"
+              )
           print(
               "CLIENTPLATFORM_PRODUCTION_VISUAL_AUTH_PROBE "
               + json.dumps(safe, ensure_ascii=False, sort_keys=True)
