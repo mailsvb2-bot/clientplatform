@@ -669,8 +669,7 @@ async def _show_paid_generation_confirmation(
         if _receipt_kind(receipt) == "video"
         else f"cpc:new:{token}"
     )
-    sender = _replace_or_answer if replace else target.answer
-    await sender(
+    text = (
         "✨ Всё готово к генерации\n\n"
         f"Задача: {receipt.request_text}\n\n"
         "ClientPlatform уже развернула короткое описание в подробное визуальное "
@@ -684,15 +683,19 @@ async def _show_paid_generation_confirmation(
             "может быть использован явно обозначенный motion fallback из AI-кадра."
             if _receipt_kind(receipt) == "video"
             else ""
-        ),
-        reply_markup=control._keyboard(
-            [
-                [(f"✅ Создать 1 {noun}", _receipt_callback("generate", token, receipt))],
-                [("✏️ Изменить описание", edit_callback)],
-                [("⬅️ Не создавать", f"cpc:open:{token}")],
-            ]
-        ),
+        )
     )
+    reply_markup = control._keyboard(
+        [
+            [(f"✅ Создать 1 {noun}", _receipt_callback("generate", token, receipt))],
+            [("✏️ Изменить описание", edit_callback)],
+            [("⬅️ Не создавать", f"cpc:open:{token}")],
+        ]
+    )
+    if replace:
+        await _replace_or_answer(target, text, reply_markup=reply_markup)
+    else:
+        await target.answer(text, reply_markup=reply_markup)
 
 
 async def _prepare_styled_generation(
