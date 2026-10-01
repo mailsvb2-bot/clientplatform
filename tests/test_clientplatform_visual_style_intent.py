@@ -64,6 +64,46 @@ class VisualStyleIntentTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown"):
             VisualStyleIntent.from_json(json.dumps(payload))
 
+    def test_quick_style_accents_roundtrip_and_compile_additively(self) -> None:
+        style = (
+            VisualStyleIntent()
+            .with_quick_style("warm_friendly")
+            .with_quick_style("illustrative")
+            .with_quick_style("premium")
+        )
+
+        self.assertEqual(
+            style.quick_style_names(),
+            ("warm_friendly", "premium", "illustrative"),
+        )
+        self.assertEqual(VisualStyleIntent.from_json(style.to_json()), style)
+
+        compiled = compile_visual_prompt(
+            request="ёж слушает аудиосессию и становится добрым",
+            kind="image",
+            style_intent=style,
+        )
+        self.assertIn("Combine every selected quick style accent coherently", compiled.prompt)
+        self.assertIn("warm, welcoming and approachable", compiled.prompt)
+        self.assertIn("refined premium feel", compiled.prompt)
+        self.assertIn("artistic, crafted visual treatment", compiled.prompt)
+
+    def test_legacy_style_json_version_one_remains_readable(self) -> None:
+        legacy_style = visual_style_preset("soft_calm").to_mapping()
+        legacy_style.pop("quick_styles", None)
+        raw = json.dumps(
+            {"version": 1, "style": legacy_style},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+        loaded = VisualStyleIntent.from_json(raw)
+
+        self.assertEqual(loaded.quick_styles, "auto")
+        self.assertEqual(loaded.emotional_tone, "calm")
+        self.assertEqual(loaded.contrast, "soft")
+
     def test_compiler_keeps_semantics_above_style(self) -> None:
         compiled = compile_visual_prompt(
             request=(
@@ -104,7 +144,7 @@ class VisualStyleIntentTests(unittest.TestCase):
         self.assertEqual(first, second)
         payload = json.loads(first)
         self.assertEqual(payload["version"], 2)
-        self.assertEqual(payload["intent"]["style_schema_version"], 1)
+        self.assertEqual(payload["intent"]["style_schema_version"], 2)
         self.assertEqual(payload["intent"]["style"]["color_temperature"], "warm")
         self.assertIn("Use a warm color temperature", payload["brief"]["prompt"])
 
@@ -128,6 +168,33 @@ class VisualStyleIntentTests(unittest.TestCase):
         )
 
         self.assertLessEqual(len(payload), 10000)
+
+    def test_frozen_payload_with_legacy_style_schema_stays_loadable(self) -> None:
+        current = json.loads(
+            visual_creatives.freeze_business_image_payload(
+                request="calm office",
+                style_intent=VisualStyleIntent(color_temperature="warm"),
+            )
+        )
+        current["intent"]["style_schema_version"] = 1
+        current["intent"]["style"].pop("quick_styles", None)
+        legacy = json.dumps(
+            current,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        expected = type("Job", (), {"id": "job-legacy-style"})()
+
+        with patch.object(visual_creatives, "submit_visual", return_value=expected) as submit:
+            result = visual_creatives.create_business_image_from_frozen_payload(
+                provider_payload_json=legacy,
+                scope_id="scope-1",
+                idempotency_key="legacy-style-stable-key",
+            )
+
+        self.assertIs(result, expected)
+        self.assertIn("Use a warm color temperature", submit.call_args.args[0].prompt)
 
     def test_legacy_version_one_frozen_payload_stays_loadable(self) -> None:
         current = json.loads(
