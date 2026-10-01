@@ -124,8 +124,15 @@ def _compiled_style_directives(lines: tuple[str, ...]) -> tuple[str, ...]:
             continue
         if not inside:
             continue
-        if folded.startswith(_STYLE_SECTION_END):
+        if (
+            folded.startswith(_STYLE_SECTION_END)
+            or folded.startswith("business grounding")
+            or folded.startswith("readable text is explicitly")
+            or folded.startswith("do not rely on readable text")
+        ):
             break
+        if folded.startswith("combine every selected quick style accent"):
+            continue
         selected.append(line)
     return tuple(selected)
 
