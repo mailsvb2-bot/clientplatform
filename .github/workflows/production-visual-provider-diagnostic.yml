@@ -277,6 +277,64 @@ jobs:
 
           privileged docker exec -i "$provider_id" python - <<'PY'
           from __future__ import annotations
+          import json
+          import urllib.error
+          import urllib.request
+          from visual_provider_gateway.engine import build_provider
+
+          provider = build_provider("yandexart")
+          authorization = provider._primary_authorization()
+          payload = {
+              "model": provider.config.model_image,
+              "prompt": "Красный круг на белом фоне, минималистичная иллюстрация",
+              "size": "1024x1024",
+          }
+          request = urllib.request.Request(
+              provider.config.base_url.rstrip("/") + "/v1/images/generations",
+              data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+              method="POST",
+              headers={
+                  "Authorization": authorization,
+                  "OpenAI-Project": str(provider.config.folder_id or ""),
+                  "Content-Type": "application/json",
+                  "Accept": "application/json",
+              },
+          )
+          safe = {}
+          try:
+              with urllib.request.urlopen(request, timeout=90) as response:
+                  raw = response.read(32 * 1024 * 1024 + 1)
+                  decoded = json.loads(raw.decode("utf-8")) if raw else {}
+                  rows = decoded.get("data") if isinstance(decoded, dict) and isinstance(decoded.get("data"), list) else []
+                  row = rows[0] if rows and isinstance(rows[0], dict) else {}
+                  safe = {
+                      "http_status": int(response.status),
+                      "data_count": len(rows),
+                      "b64_present": bool(str(row.get("b64_json") or "")),
+                      "url_present": bool(str(row.get("url") or "")),
+                  }
+          except urllib.error.HTTPError as exc:
+              raw = exc.read(64 * 1024)
+              try:
+                  decoded = json.loads(raw.decode("utf-8"))
+              except Exception:
+                  decoded = {}
+              err = decoded.get("error") if isinstance(decoded, dict) else {}
+              if not isinstance(err, dict):
+                  err = {}
+              message = " ".join(str(err.get("message") or decoded.get("message") or "").split())[:240] if isinstance(decoded, dict) else ""
+              safe = {
+                  "http_status": int(exc.code),
+                  "error_type": str(err.get("type") or decoded.get("type") or "")[:80] if isinstance(decoded, dict) else "",
+                  "error_code": str(err.get("code") or decoded.get("code") or "")[:80] if isinstance(decoded, dict) else "",
+                  "message": message,
+                  "top_level_keys": sorted(str(k)[:64] for k in decoded.keys())[:20] if isinstance(decoded, dict) else [],
+              }
+          print("CLIENTPLATFORM_PRODUCTION_VISUAL_SYNTHETIC_SMOKE " + json.dumps(safe, ensure_ascii=False, sort_keys=True))
+          PY
+
+          privileged docker exec -i "$provider_id" python - <<'PY'
+          from __future__ import annotations
 
           import json
           import os
