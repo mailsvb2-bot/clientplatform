@@ -246,9 +246,20 @@ def _yandex_image_model_candidates(config: ProviderConfig) -> tuple[str, ...]:
     candidates.extend(part.strip() for part in raw.split(",") if part.strip())
     if config.folder_id:
         candidates.append(f"art://{config.folder_id}/aliceai-image-art-3.0")
-    # Never auto-append deprecated YandexART aliases. An operator may still
-    # configure one explicitly for controlled legacy recovery, but a failure on
-    # the current Alice model must not be masked by a later deprecated-model 403.
+
+    allow_deprecated = str(
+        os.getenv("YANDEX_ALLOW_DEPRECATED_ART_MODELS", "0") or "0"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if not allow_deprecated:
+        deprecated = {"yandex-art-2.0", "yandex-art/latest"}
+        candidates = [
+            item
+            for item in candidates
+            if str(item or "").strip().rsplit("/", 1)[-1] not in deprecated
+        ]
+
+    # A stale deprecated fallback must never mask the current Alice model's
+    # actual failure code. Legacy routing is available only by explicit opt-in.
     return tuple(dict.fromkeys(item for item in candidates if item))
 
 
