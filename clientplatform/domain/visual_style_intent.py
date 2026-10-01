@@ -8,7 +8,37 @@ import re
 from typing import Mapping
 
 
-STYLE_SCHEMA_VERSION = 1
+STYLE_SCHEMA_VERSION = 2
+SUPPORTED_STYLE_SCHEMA_VERSIONS = frozenset({1, 2})
+
+_QUICK_STYLE_ORDER = (
+    "warm_friendly",
+    "soft_calm",
+    "bright_energy",
+    "premium",
+    "cinematic",
+    "illustrative",
+    "natural_photo",
+)
+_QUICK_STYLE_SET = frozenset(_QUICK_STYLE_ORDER)
+_QUICK_STYLE_LABELS_RU = {
+    "warm_friendly": "тёпло и дружелюбно",
+    "soft_calm": "мягко и спокойно",
+    "bright_energy": "ярко и энергично",
+    "premium": "премиально",
+    "cinematic": "кинематографично",
+    "illustrative": "художественно",
+    "natural_photo": "натуральное фото",
+}
+_QUICK_STYLE_DIRECTIVES = {
+    "warm_friendly": "Blend in a warm, welcoming and approachable visual character.",
+    "soft_calm": "Blend in a soft, calm and reassuring visual character.",
+    "bright_energy": "Blend in a bright, energetic and lively visual character.",
+    "premium": "Blend in a refined premium feel with restrained, polished visual cues.",
+    "cinematic": "Blend in a cinematic, story-driven visual treatment with deliberate framing.",
+    "illustrative": "Blend in an artistic, crafted visual treatment rather than a generic stock look.",
+    "natural_photo": "Blend in a natural photographic feel with believable, unforced details.",
+}
 
 _ALLOWED = {
     "color_temperature": {"auto", "warm", "neutral", "cool"},
@@ -68,6 +98,43 @@ class VisualStyleIntent:
     motion: str = "auto"
     commercial_tone: str = "auto"
     copy_space: str = "auto"
+    quick_styles: str = "auto"
+
+    def quick_style_names(self) -> tuple[str, ...]:
+        raw = str(self.quick_styles or "auto").strip().lower()
+        if not raw or raw == "auto":
+            return ()
+        requested = {item.strip() for item in raw.split(",") if item.strip()}
+        unknown = requested - _QUICK_STYLE_SET
+        if unknown:
+            raise ValueError("visual quick style is invalid")
+        return tuple(name for name in _QUICK_STYLE_ORDER if name in requested)
+
+    def has_quick_style(self, name: str) -> bool:
+        token = str(name or "").strip().lower()
+        if token not in _QUICK_STYLE_SET:
+            raise ValueError("visual quick style is invalid")
+        return token in self.quick_style_names()
+
+    def with_quick_style(
+        self,
+        name: str,
+        *,
+        enabled: bool | None = None,
+    ) -> "VisualStyleIntent":
+        token = str(name or "").strip().lower()
+        if token not in _QUICK_STYLE_SET:
+            raise ValueError("visual quick style is invalid")
+        selected = set(self.quick_style_names())
+        should_enable = token not in selected if enabled is None else bool(enabled)
+        if should_enable:
+            selected.add(token)
+        else:
+            selected.discard(token)
+        raw = ",".join(
+            item for item in _QUICK_STYLE_ORDER if item in selected
+        ) or "auto"
+        return replace(self, quick_styles=raw).normalized()
 
     def normalized(self) -> "VisualStyleIntent":
         values: dict[str, str] = {}
@@ -76,11 +143,14 @@ class VisualStyleIntent:
             if value not in allowed:
                 raise ValueError(f"visual style {field} is invalid")
             values[field] = value
-        return VisualStyleIntent(**values)
+        quick_styles = ",".join(self.quick_style_names()) or "auto"
+        return VisualStyleIntent(**values, quick_styles=quick_styles)
 
     def to_mapping(self) -> dict[str, str]:
         value = self.normalized()
-        return {field: getattr(value, field) for field in _ALLOWED}
+        result = {field: getattr(value, field) for field in _ALLOWED}
+        result["quick_styles"] = value.quick_styles
+        return result
 
     def to_json(self) -> str:
         return json.dumps(
@@ -97,14 +167,15 @@ class VisualStyleIntent:
     def from_mapping(cls, value: Mapping[str, object] | None) -> "VisualStyleIntent":
         if value is None:
             return cls()
-        unknown = set(value) - set(_ALLOWED)
+        unknown = set(value) - set(_ALLOWED) - {"quick_styles"}
         if unknown:
             raise ValueError("visual style contains unknown fields")
         return cls(
             **{
                 field: str(value.get(field) or "auto")
                 for field in _ALLOWED
-            }
+            },
+            quick_styles=str(value.get("quick_styles") or "auto"),
         ).normalized()
 
     @classmethod
@@ -115,11 +186,14 @@ class VisualStyleIntent:
             raise ValueError("visual style json is invalid") from exc
         if not isinstance(payload, dict):
             raise ValueError("visual style json is invalid")
-        if payload.get("version") != STYLE_SCHEMA_VERSION:
+        version = payload.get("version")
+        if version not in SUPPORTED_STYLE_SCHEMA_VERSIONS:
             raise ValueError("visual style version is unsupported")
         style = payload.get("style")
         if not isinstance(style, dict):
             raise ValueError("visual style payload is invalid")
+        if version == 1 and "quick_styles" in style:
+            raise ValueError("visual style version one cannot contain quick styles")
         return cls.from_mapping(style)
 
     def with_value(self, field: str, value: str) -> "VisualStyleIntent":
@@ -238,6 +312,8 @@ def merge_visual_style(
         value = getattr(incoming, field)
         if value != "auto":
             values[field] = value
+    if override_fields is None and incoming.quick_styles != "auto":
+        values["quick_styles"] = incoming.quick_styles
     return VisualStyleIntent.from_mapping(values)
 
 
@@ -408,6 +484,13 @@ def visual_style_prompt_directives(
         },
     }
     lines: list[str] = []
+    quick_styles = value.quick_style_names()
+    if quick_styles:
+        lines.append(
+            "Combine every selected quick style accent coherently; blend overlapping "
+            "qualities instead of dropping one."
+        )
+        lines.extend(_QUICK_STYLE_DIRECTIVES[name] for name in quick_styles)
     for field in _ALLOWED:
         token = getattr(value, field)
         if token == "auto":
@@ -457,14 +540,23 @@ def style_summary_ru(intent: VisualStyleIntent) -> str:
         ("Композиция", "composition"),
         ("Место под текст", "copy_space"),
     )
-    return "\n".join(
+    lines = [
         f"{title}: {labels[field][getattr(value, field)]}"
         for title, field in shown
-    )
+    ]
+    quick_styles = value.quick_style_names()
+    if quick_styles:
+        lines.insert(
+            0,
+            "Акценты: "
+            + ", ".join(_QUICK_STYLE_LABELS_RU[name] for name in quick_styles),
+        )
+    return "\n".join(lines)
 
 
 __all__ = [
     "STYLE_SCHEMA_VERSION",
+    "SUPPORTED_STYLE_SCHEMA_VERSIONS",
     "VisualStyleInference",
     "VisualStyleIntent",
     "infer_visual_style_intent",
