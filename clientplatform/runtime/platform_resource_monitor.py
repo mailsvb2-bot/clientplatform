@@ -11,7 +11,6 @@ from typing import Any, Iterable
 
 from aiogram.exceptions import TelegramAPIError
 
-from config.settings import ADMIN_IDS
 from core.runtime_env import env_int
 from core.task_manager import TaskManager
 from services.db import get_db, get_db_ro
@@ -48,10 +47,6 @@ def _interval_seconds() -> int:
         minimum=60,
         maximum=3600,
     )
-
-
-def _superadmin_ids() -> tuple[int, ...]:
-    return tuple(sorted({int(value) for value in ADMIN_IDS or []}))
 
 
 def _resource_alert_chat_ids() -> tuple[int, ...]:
@@ -109,19 +104,6 @@ def _save_state(value: dict[str, Any]) -> None:
         )
 
 
-def _recipient_ids(values: Iterable[object]) -> tuple[int, ...]:
-    configured = set(_superadmin_ids())
-    recipients: set[int] = set()
-    for value in values:
-        try:
-            candidate = int(value)
-        except (TypeError, ValueError):
-            continue
-        if candidate in configured:
-            recipients.add(candidate)
-    return tuple(sorted(recipients))
-
-
 def _resource_alert_recipient_ids(values: Iterable[object]) -> tuple[int, ...]:
     configured = set(_resource_alert_chat_ids())
     recipients: set[int] = set()
@@ -133,38 +115,6 @@ def _resource_alert_recipient_ids(values: Iterable[object]) -> tuple[int, ...]:
         if candidate in configured:
             recipients.add(candidate)
     return tuple(sorted(recipients))
-
-
-async def _send_superadmins(
-    bot: Any,
-    text: str,
-    *,
-    recipient_ids: Iterable[object] | None = None,
-) -> tuple[set[int], set[int]]:
-    targets = _superadmin_ids() if recipient_ids is None else _recipient_ids(recipient_ids)
-    delivered: set[int] = set()
-    failed: set[int] = set()
-    for admin_id in targets:
-        try:
-            await bot.send_message(admin_id, text)
-        except TelegramAPIError:
-            log.warning(
-                "Failed to send platform resource alert to superadmin=%s",
-                admin_id,
-                exc_info=True,
-            )
-            failed.add(admin_id)
-            continue
-        except asyncio.TimeoutError:
-            log.warning(
-                "Timed out sending platform resource alert to superadmin=%s",
-                admin_id,
-                exc_info=True,
-            )
-            failed.add(admin_id)
-            continue
-        delivered.add(admin_id)
-    return delivered, failed
 
 
 async def _send_resource_operators(
@@ -278,19 +228,25 @@ async def _finish_pending_threshold(
     if not isinstance(pending, dict):
         return True
 
-    recipients = _recipient_ids(pending.get("pending_admin_ids") or [])
+    pending_targets = (
+        pending.get("pending_chat_ids")
+        or pending.get("pending_admin_ids")
+        or []
+    )
+    recipients = _resource_alert_recipient_ids(pending_targets)
     if recipients:
         message = str(pending.get("message") or "").strip()
         if not message:
             state.pop("threshold_pending", None)
             return True
-        _delivered, failed = await _send_superadmins(
+        _delivered, failed = await _send_resource_operators(
             bot,
             message,
             recipient_ids=recipients,
         )
         if failed:
-            pending["pending_admin_ids"] = sorted(failed)
+            pending.pop("pending_admin_ids", None)
+            pending["pending_chat_ids"] = sorted(failed)
             state["threshold_pending"] = pending
             await asyncio.to_thread(_save_state, state)
             return False
@@ -635,7 +591,18 @@ async def _deliver_provider_alerts(
     if not alerts:
         return True
     message = "🧠 ClientPlatform · Visual Provider Watch\n\n" + "\n\n".join(alerts)
-    _delivered, failed = await _send_superadmins(bot, message)
+    targets = _resource_alert_chat_ids()
+    if not targets:
+        log.warning(
+            "Suppressed Visual Provider/Billing operator alert because %s is not configured",
+            _OPERATOR_ALERT_CHAT_IDS_ENV,
+        )
+        return True
+    _delivered, failed = await _send_resource_operators(
+        bot,
+        message,
+        recipient_ids=targets,
+    )
     return not failed
 
 
@@ -788,12 +755,24 @@ async def _tick(bot: Any) -> None:
 
     if crossed:
         message = render_threshold_notification(snapshot, crossed)
-        _delivered, failed = await _send_superadmins(bot, message)
+        targets = _resource_alert_chat_ids()
+        if not targets:
+            log.warning(
+                "Suppressed Visual Creative threshold alert because %s is not configured",
+                _OPERATOR_ALERT_CHAT_IDS_ENV,
+            )
+            failed: set[int] = set()
+        else:
+            _delivered, failed = await _send_resource_operators(
+                bot,
+                message,
+                recipient_ids=targets,
+            )
         if failed:
             state["threshold_pending"] = {
                 "day": day,
                 "message": message,
-                "pending_admin_ids": sorted(failed),
+                "pending_chat_ids": sorted(failed),
                 "target_levels": levels,
             }
             await asyncio.to_thread(_save_state, state)
