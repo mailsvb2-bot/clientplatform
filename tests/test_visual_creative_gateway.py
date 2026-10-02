@@ -294,6 +294,51 @@ def test_download_retries_transient_content_gap_without_resubmitting(
     )
 
 
+def test_download_retries_incomplete_declared_body_on_same_job(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setenv("VISUAL_GATEWAY_URL", "http://gateway.internal")
+    calls = []
+    sleeps = []
+    clock = {"now": 0.0}
+
+    def fake_open(request, **_kwargs):
+        calls.append(request.full_url)
+        response = FakeResponse(
+            b"partial" if len(calls) == 1 else b"complete",
+            content_type="image/jpeg",
+        )
+        if len(calls) == 1:
+            response.headers["Content-Length"] = "100"
+        return response
+
+    def fake_sleep(delay):
+        sleeps.append(delay)
+        clock["now"] += delay
+
+    monkeypatch.setattr(gateway.urllib.request, "urlopen", fake_open)
+    monkeypatch.setattr(gateway.time, "sleep", fake_sleep)
+    monkeypatch.setattr(gateway.time, "monotonic", lambda: clock["now"])
+    job = gateway.VisualCreativeJob(
+        id="incomplete-image",
+        provider="yandexart",
+        scope_id="tenant-1",
+        kind="image",
+        status="succeeded",
+        asset_ready=True,
+    )
+
+    path = gateway.download_visual(job, output_dir=str(tmp_path))
+
+    assert path.read_bytes() == b"complete"
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert sleeps == pytest.approx(
+        [gateway._content_retry_delay("incomplete-image", 0)]
+    )
+
+
 def test_download_honors_retry_after_without_new_paid_submit(
     monkeypatch,
     tmp_path: Path,
