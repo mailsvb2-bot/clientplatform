@@ -689,18 +689,38 @@ class YandexArtMotionVideoProvider(YandexArtProvider):
                 duration_seconds=duration_seconds,
                 aspect_ratio=aspect_ratio,
             )
-        except ProviderTransportError:
+        except ProviderTransportError as exc:
+            attempts = int(
+                image_job.provider_payload.get("motion_render_attempts") or 0
+            ) + 1
             image_job.kind = "video"
             image_job.provider = "yandexart_motion"
-            image_job.status = "failed"
-            image_job.error_code = "motion_render_failed"
             image_job.mime_type = ""
             image_job.asset_path = ""
+            image_job.provider_payload["motion_render_attempts"] = attempts
+            image_job.provider_payload["motion_source_path"] = image_path
+            terminal = str(exc or "") == "motion_source_missing" or attempts >= 3
+            if terminal:
+                image_job.status = "failed"
+                image_job.error_code = (
+                    "motion_source_missing"
+                    if str(exc or "") == "motion_source_missing"
+                    else "motion_render_failed"
+                )
+                if image_path:
+                    Path(image_path).unlink(missing_ok=True)
+                image_job.provider_payload.pop("motion_source_path", None)
+            else:
+                # The paid keyframe already exists. Preserve it and retry only the
+                # local ffmpeg render on poll; never resubmit the provider request.
+                image_job.status = "running"
+                image_job.error_code = "motion_render_retryable"
             return image_job
-        finally:
-            if image_path:
-                Path(image_path).unlink(missing_ok=True)
 
+        if image_path:
+            Path(image_path).unlink(missing_ok=True)
+        image_job.provider_payload.pop("motion_source_path", None)
+        image_job.provider_payload.pop("motion_render_attempts", None)
         image_job.kind = "video"
         image_job.provider = "yandexart_motion"
         image_job.model = f"{image_job.model}+motion"
@@ -749,6 +769,29 @@ class YandexArtMotionVideoProvider(YandexArtProvider):
     def poll(self, job: CreativeJob) -> CreativeJob:
         if job.done:
             return job
+        retained_source = str(
+            job.provider_payload.get("motion_source_path") or ""
+        ).strip()
+        if retained_source:
+            image_job = CreativeJob(
+                provider="yandexart",
+                kind="image",
+                status="succeeded",
+                external_id=job.external_id,
+                model=job.model.removesuffix("+motion"),
+                mime_type="image/jpeg",
+                asset_path=retained_source,
+                provider_payload=dict(job.provider_payload or {}),
+            )
+            return self._render_ready_image(
+                image_job,
+                duration_seconds=int(
+                    job.provider_payload.get("motion_duration_seconds") or 5
+                ),
+                aspect_ratio=str(
+                    job.provider_payload.get("motion_aspect_ratio") or "1:1"
+                ),
+            )
         image_job = CreativeJob(
             provider="yandexart",
             kind="image",
