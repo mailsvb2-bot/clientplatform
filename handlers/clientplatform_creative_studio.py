@@ -16,6 +16,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, FSInputFile, Message
 
 from clientplatform.application.creative_generation import (
+    abandon_ambiguous_creative_generation,
     abandon_creative_generation,
     authorize_creative_generation_redelivery,
     begin_creative_generation_submission,
@@ -1216,6 +1217,7 @@ async def _remember_job(actor, receipt: CreativeGenerationReceipt, job):
         receipt_id=receipt.id,
         source_job_id=str(job.id),
         provider_status=str(job.status),
+        provider_error_code=str(getattr(job, "error_code", "") or ""),
     )
 
 
@@ -1256,6 +1258,24 @@ def _pending_rows(token: str, receipt: CreativeGenerationReceipt):
     return control._keyboard(
         [
             [("🔄 Проверить готовность", _receipt_callback("check", token, receipt))],
+            [("🏠 Главная", f"cpj:home:{token}")],
+        ]
+    )
+
+
+def _ambiguous_submission_rows(
+    token: str,
+    receipt: CreativeGenerationReceipt,
+):
+    return control._keyboard(
+        [
+            [("🔄 Проверить ещё раз", _receipt_callback("check", token, receipt))],
+            [
+                (
+                    "⚠️ Завершить неопределённый запрос",
+                    _receipt_callback("resolve", token, receipt),
+                )
+            ],
             [("🏠 Главная", f"cpj:home:{token}")],
         ]
     )
@@ -1347,6 +1367,21 @@ async def _continue_generation(
             # poll failure must not create another paid job; the recovery button
             # below can continue the same idempotent generation.
             logger.info("visual auto-wait deferred to explicit recovery: %s", exc)
+
+    if (
+        str(getattr(job, "status", "") or "") == "failed"
+        and str(getattr(job, "error_code", "") or "")
+        == "visual_gateway_submit_ambiguous"
+    ):
+        await control._callback_message(callback).answer(
+            "⚠️ Не удалось достоверно установить, успел ли внешний генератор принять "
+            "платный запрос до технического сбоя. ClientPlatform не запускает новый "
+            "платный job автоматически. Можно проверить этот же запрос ещё раз или "
+            "явно завершить его и затем подготовить новый; прежний запрос при этом "
+            "мог уже быть принят провайдером.",
+            reply_markup=_ambiguous_submission_rows(token, current),
+        )
+        return
 
     if await _retire_unavailable_completed_receipt(actor, current, job=job):
         await control._callback_message(callback).answer(
@@ -1453,6 +1488,53 @@ async def abandon_creative_image(callback: CallbackQuery, state: FSMContext) -> 
     )
     await control._callback_message(callback).answer(
         result_text,
+        reply_markup=_result_rows(token),
+    )
+
+
+@router.callback_query(F.data.startswith("cpc:resolve:"))
+async def resolve_ambiguous_creative_generation(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    del state
+    parts = str(callback.data).split(":")
+    if len(parts) != 4:
+        await callback.answer("Это действие устарело", show_alert=True)
+        return
+    token, receipt_token = parts[2], parts[3]
+    try:
+        actor = await _actor_for_callback(callback, token)
+        receipt = await _receipt_for_callback(actor, receipt_token)
+        resolved = await asyncio.to_thread(
+            abandon_ambiguous_creative_generation,
+            actor=actor,
+            receipt_id=receipt.id,
+        )
+    except TenantPermissionDenied:
+        await callback.answer(
+            "Создание визуалов недоступно для Вашей роли",
+            show_alert=True,
+        )
+        return
+    except (LookupError, TypeError, ValueError, VisualCreativeError):
+        await callback.answer(
+            "Не удалось подтвердить неопределённое состояние. Проверьте запрос ещё раз.",
+            show_alert=True,
+        )
+        return
+    if not resolved:
+        await callback.answer(
+            "Состояние уже изменилось. Проверьте генерацию ещё раз.",
+            show_alert=True,
+        )
+        return
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "Неопределённый запрос завершён вручную. Внешний провайдер мог успеть "
+        "принять прежнюю генерацию до сбоя, поэтому предыдущий расход или результат "
+        "нельзя полностью исключить. Новый запрос начнётся только после отдельного "
+        "подтверждения.",
         reply_markup=_result_rows(token),
     )
 
