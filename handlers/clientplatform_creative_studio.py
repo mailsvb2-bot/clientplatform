@@ -1726,6 +1726,7 @@ async def download_creative_file(callback: CallbackQuery, state: FSMContext) -> 
             await target.answer_document(
                 FSInputFile(path, filename=filename),
                 caption="📥 Файл для сохранения",
+                reply_markup=_result_rows(token, receipt),
             )
     except TenantPermissionDenied:
         await callback.answer("Создание визуалов недоступно для Вашей роли", show_alert=True)
