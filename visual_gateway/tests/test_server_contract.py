@@ -167,6 +167,105 @@ def auth():
 
 
 @pytest.mark.asyncio
+async def test_generation_content_proxy_reads_complete_multi_chunk_body(
+    aiohttp_client,
+    tmp_path,
+):
+    source = (
+        b"a" * (64 * 1024)
+        + b"b" * (64 * 1024)
+        + b"c" * 12_345
+    )
+
+    async def content(request):
+        response = web.StreamResponse(
+            status=200,
+            headers={"Content-Type": "image/jpeg"},
+        )
+        await response.prepare(request)
+        await response.write(source[: 64 * 1024])
+        await asyncio.sleep(0)
+        await response.write(source[64 * 1024 : 128 * 1024])
+        await asyncio.sleep(0)
+        await response.write(source[128 * 1024 :])
+        await response.write_eof()
+        return response
+
+    upstream_app = web.Application()
+    upstream_app.router.add_get(
+        "/v1/creative/generations/{job_id}/content",
+        content,
+    )
+    upstream = await aiohttp_client(upstream_app)
+    client = await aiohttp_client(
+        create_app(
+            GatewayConfig(
+                token=TOKEN,
+                upstream_url=str(upstream.make_url("")).rstrip("/"),
+                upstream_token="",
+                state_dir=tmp_path / "state",
+            )
+        )
+    )
+
+    response = await client.get(
+        "/v1/creative/generations/job1/content?scope_id=tenant-a",
+        headers=auth(),
+    )
+    raw = await response.read()
+
+    assert response.status == 200
+    assert len(raw) == len(source)
+    assert raw == source
+
+
+@pytest.mark.asyncio
+async def test_generation_content_proxy_enforces_cumulative_stream_limit(
+    aiohttp_client,
+    tmp_path,
+):
+    source = b"a" * (64 * 1024) + b"b" * (64 * 1024)
+
+    async def content(request):
+        response = web.StreamResponse(
+            status=200,
+            headers={"Content-Type": "image/jpeg"},
+        )
+        await response.prepare(request)
+        await response.write(source[: 64 * 1024])
+        await asyncio.sleep(0)
+        await response.write(source[64 * 1024 :])
+        await response.write_eof()
+        return response
+
+    upstream_app = web.Application()
+    upstream_app.router.add_get(
+        "/v1/creative/generations/{job_id}/content",
+        content,
+    )
+    upstream = await aiohttp_client(upstream_app)
+    client = await aiohttp_client(
+        create_app(
+            GatewayConfig(
+                token=TOKEN,
+                upstream_url=str(upstream.make_url("")).rstrip("/"),
+                upstream_token="",
+                state_dir=tmp_path / "state",
+                max_source_bytes=96 * 1024,
+            )
+        )
+    )
+
+    response = await client.get(
+        "/v1/creative/generations/job1/content?scope_id=tenant-a",
+        headers=auth(),
+    )
+
+    assert response.status == 502
+    assert (await response.json())["error_code"] == "provider_gateway_source_too_large"
+
+
+@pytest.mark.asyncio
 async def test_capabilities_are_authenticated_and_do_not_touch_provider(gateway, upstream):
     denied = await gateway.get("/v1/capabilities")
     assert denied.status == 401
