@@ -584,6 +584,45 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_ad_materials_keep_two_image_and_two_video_paths(self):
+        target = out()
+        with (
+            patch.object(
+                one_click.control,
+                "_token_uuid",
+                side_effect=lambda value: value,
+            ),
+            patch.object(
+                one_click.control,
+                "_actor",
+                new=AsyncMock(return_value=tenant_actor()),
+            ),
+            patch.object(
+                one_click.control,
+                "_callback_message",
+                return_value=target,
+            ),
+        ):
+            await one_click.open_ad_materials(
+                callback("cpo:ad-materials:business-1", target)
+            )
+
+        buttons = {
+            button.text: button.callback_data
+            for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        }
+        self.assertEqual(buttons["🖼 Создать картинку"], "cpc:new:business-1")
+        self.assertEqual(
+            buttons["картинка для рекламы (возможность редактирования)"],
+            "cpc:editad:image:business-1",
+        )
+        self.assertEqual(buttons["🎬 Создать видео"], "cpc:video:business-1")
+        self.assertEqual(
+            buttons["видео для рекламы (возможность редактирования)"],
+            "cpc:editad:video:business-1",
+        )
+
     def test_growth_action_router_covers_all_canonical_action_kinds(self):
         token = "business-1"
         lead_id = "33333333-3333-4333-8333-333333333333"
