@@ -181,6 +181,12 @@ def _interaction_directives(flags: tuple[str, ...]) -> list[str]:
             "If eating or drinking is requested, show the action itself and its "
             "source object, not only the food, drink or subject separately."
         )
+    if "generic_action" in flags:
+        directives.append(
+            "If the request contains another action, make that action visually "
+            "legible through body pose, contact, motion cues and relevant objects; "
+            "do not reduce it to a static portrait or symbolic substitute."
+        )
     return directives
 
 
