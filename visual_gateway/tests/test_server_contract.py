@@ -266,6 +266,54 @@ async def test_generation_content_proxy_enforces_cumulative_stream_limit(
 
 
 @pytest.mark.asyncio
+async def test_generation_content_proxy_uses_idle_timeout_not_total_transfer_timeout(
+    aiohttp_client,
+    tmp_path,
+):
+    source = b"a" * 4096 + b"b" * 4096
+
+    async def content(request):
+        response = web.StreamResponse(
+            status=200,
+            headers={"Content-Type": "image/jpeg"},
+        )
+        await response.prepare(request)
+        await response.write(source[:4096])
+        await asyncio.sleep(0.15)
+        await response.write(source[4096:])
+        await response.write_eof()
+        return response
+
+    upstream_app = web.Application()
+    upstream_app.router.add_get(
+        "/v1/creative/generations/{job_id}/content",
+        content,
+    )
+    upstream = await aiohttp_client(upstream_app)
+    client = await aiohttp_client(
+        create_app(
+            GatewayConfig(
+                token=TOKEN,
+                upstream_url=str(upstream.make_url("")).rstrip("/"),
+                upstream_token="",
+                state_dir=tmp_path / "state",
+                upstream_timeout_seconds=0.10,
+                upstream_media_idle_timeout_seconds=1,
+            )
+        )
+    )
+
+    response = await client.get(
+        "/v1/creative/generations/job1/content?scope_id=tenant-a",
+        headers=auth(),
+    )
+    raw = await response.read()
+
+    assert response.status == 200
+    assert raw == source
+
+
+@pytest.mark.asyncio
 async def test_capabilities_are_authenticated_and_do_not_touch_provider(gateway, upstream):
     denied = await gateway.get("/v1/capabilities")
     assert denied.status == 401
