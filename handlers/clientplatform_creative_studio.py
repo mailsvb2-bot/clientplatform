@@ -207,12 +207,12 @@ def _result_rows(
     receipt: CreativeGenerationReceipt | None = None,
 ):
     rows: list[list[tuple[str, str]]] = []
+    kind = _receipt_kind(receipt) if receipt is not None else ""
     if receipt is not None and receipt.source_job_id:
         rows.append(
             [("📥 Скачать файл", _receipt_callback("download", token, receipt))]
         )
     if receipt is not None:
-        kind = _receipt_kind(receipt)
         rows.extend(
             [
                 [("👍 Подходит", _receipt_callback("accept", token, receipt))],
@@ -228,8 +228,22 @@ def _result_rows(
         )
     rows.extend(
         [
-            [("✨ Создать ещё картинку", f"cpc:new:{token}")],
-            [("🎬 Создать видео", f"cpc:video:{token}")],
+            [
+                (
+                    "✨ Создать картинку"
+                    if kind == "video"
+                    else "✨ Создать ещё картинку",
+                    f"cpc:new:{token}",
+                )
+            ],
+            [
+                (
+                    "🎬 Создать ещё видео"
+                    if kind == "video"
+                    else "🎬 Создать видео",
+                    f"cpc:video:{token}",
+                )
+            ],
             [("🚀 Перейти к рекламе", f"cpo:ads:{token}")],
             *_studio_navigation_rows(token),
         ]
