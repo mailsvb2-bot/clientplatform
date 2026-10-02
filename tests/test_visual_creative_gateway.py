@@ -248,6 +248,26 @@ def test_download_is_bounded_scoped_and_materialized(monkeypatch, tmp_path: Path
     assert "scope_id=tenant-1" in seen["url"]
 
 
+def test_content_retry_helpers_cover_invalid_and_bounded_retry_after():
+    baseline = gateway._content_retry_delay(
+        "retry-helper",
+        0,
+        retry_after_seconds="not-a-number",
+    )
+    assert 0.0 < baseline <= gateway._CONTENT_RETRY_AFTER_CAP_SECONDS
+
+    assert gateway._retry_after_seconds("") is None
+    assert gateway._retry_after_seconds("not-a-number") is None
+    assert gateway._retry_after_seconds("0") is None
+    assert gateway._retry_after_seconds("-5") is None
+    assert gateway._retry_after_seconds("9999999") is None
+    assert gateway._retry_after_seconds("5") == 5.0
+    assert (
+        gateway._retry_after_seconds("45")
+        == gateway._CONTENT_RETRY_AFTER_CAP_SECONDS
+    )
+
+
 def test_download_retries_transient_content_gap_without_resubmitting(
     monkeypatch,
     tmp_path: Path,
@@ -255,15 +275,21 @@ def test_download_retries_transient_content_gap_without_resubmitting(
     monkeypatch.setenv("VISUAL_GATEWAY_URL", "http://gateway.internal")
     attempts = []
     sleeps = []
+    clock = {"now": 0.0}
 
-    def fake_request(method, path, **_kwargs):
-        attempts.append((method, path))
+    def fake_request(method, path, **kwargs):
+        attempts.append((method, path, kwargs.get("timeout_seconds")))
         if len(attempts) < 3:
             raise gateway.VisualCreativeGatewayError("visual_gateway_http_404")
         return ({"content-type": "image/jpeg"}, b"\xff\xd8\xfffresh")
 
+    def fake_sleep(delay):
+        sleeps.append(delay)
+        clock["now"] += delay
+
     monkeypatch.setattr(gateway, "_request", fake_request)
-    monkeypatch.setattr(gateway.time, "sleep", lambda delay: sleeps.append(delay))
+    monkeypatch.setattr(gateway.time, "sleep", fake_sleep)
+    monkeypatch.setattr(gateway.time, "monotonic", lambda: clock["now"])
     job = gateway.VisualCreativeJob(
         id="fresh-image",
         provider="yandexart",
@@ -277,7 +303,219 @@ def test_download_retries_transient_content_gap_without_resubmitting(
 
     assert path.read_bytes() == b"\xff\xd8\xfffresh"
     assert len(attempts) == 3
-    assert sleeps == [0.25, 0.5]
+    assert all(method == "GET" for method, _path, _timeout in attempts)
+    assert len({path for _method, path, _timeout in attempts}) == 1
+    assert all(timeout == 60 for _method, _path, timeout in attempts)
+    assert sleeps == pytest.approx(
+        [
+            gateway._content_retry_delay("fresh-image", 0),
+            gateway._content_retry_delay("fresh-image", 1),
+        ]
+    )
+
+
+def test_download_retries_incomplete_declared_body_on_same_job(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setenv("VISUAL_GATEWAY_URL", "http://gateway.internal")
+    calls = []
+    sleeps = []
+    clock = {"now": 0.0}
+
+    def fake_open(request, **_kwargs):
+        calls.append(request.full_url)
+        response = FakeResponse(
+            b"partial" if len(calls) == 1 else b"complete",
+            content_type="image/jpeg",
+        )
+        if len(calls) == 1:
+            response.headers["Content-Length"] = "100"
+        return response
+
+    def fake_sleep(delay):
+        sleeps.append(delay)
+        clock["now"] += delay
+
+    monkeypatch.setattr(gateway.urllib.request, "urlopen", fake_open)
+    monkeypatch.setattr(gateway.time, "sleep", fake_sleep)
+    monkeypatch.setattr(gateway.time, "monotonic", lambda: clock["now"])
+    job = gateway.VisualCreativeJob(
+        id="incomplete-image",
+        provider="yandexart",
+        scope_id="tenant-1",
+        kind="image",
+        status="succeeded",
+        asset_ready=True,
+    )
+
+    path = gateway.download_visual(job, output_dir=str(tmp_path))
+
+    assert path.read_bytes() == b"complete"
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert sleeps == pytest.approx(
+        [gateway._content_retry_delay("incomplete-image", 0)]
+    )
+
+
+def test_download_honors_retry_after_without_new_paid_submit(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setenv("VISUAL_GATEWAY_URL", "http://gateway.internal")
+    attempts = []
+    sleeps = []
+    clock = {"now": 0.0}
+
+    def fake_request(method, path, **_kwargs):
+        attempts.append((method, path))
+        if len(attempts) == 1:
+            raise gateway.VisualCreativeGatewayError(
+                "visual_gateway_http_429",
+                retry_after_seconds=5.0,
+            )
+        return ({"content-type": "image/jpeg"}, b"\xff\xd8\xfffresh")
+
+    def fake_sleep(delay):
+        sleeps.append(delay)
+        clock["now"] += delay
+
+    monkeypatch.setattr(gateway, "_request", fake_request)
+    monkeypatch.setattr(gateway.time, "sleep", fake_sleep)
+    monkeypatch.setattr(gateway.time, "monotonic", lambda: clock["now"])
+    job = gateway.VisualCreativeJob(
+        id="rate-limited-image",
+        provider="yandexart",
+        scope_id="tenant-1",
+        kind="image",
+        status="succeeded",
+        asset_ready=True,
+    )
+
+    path = gateway.download_visual(job, output_dir=str(tmp_path))
+
+    assert path.read_bytes() == b"\xff\xd8\xfffresh"
+    assert attempts == [
+        ("GET", attempts[0][1]),
+        ("GET", attempts[0][1]),
+    ]
+    assert sleeps == pytest.approx([5.0])
+
+
+def test_download_stops_transient_retries_at_kind_deadline(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setenv("VISUAL_GATEWAY_URL", "http://gateway.internal")
+    monkeypatch.setenv("VISUAL_CONTENT_RECOVERY_IMAGE_SECONDS", "5")
+    attempts = []
+    sleeps = []
+    clock = {"now": 0.0}
+
+    def fake_request(method, path, **_kwargs):
+        attempts.append((method, path))
+        raise gateway.VisualCreativeGatewayError("visual_gateway_http_503")
+
+    def fake_sleep(delay):
+        sleeps.append(delay)
+        clock["now"] += delay
+
+    monkeypatch.setattr(gateway, "_request", fake_request)
+    monkeypatch.setattr(gateway.time, "sleep", fake_sleep)
+    monkeypatch.setattr(gateway.time, "monotonic", lambda: clock["now"])
+    job = gateway.VisualCreativeJob(
+        id="deadline-image",
+        provider="yandexart",
+        scope_id="tenant-1",
+        kind="image",
+        status="succeeded",
+        asset_ready=True,
+    )
+
+    with pytest.raises(
+        gateway.VisualCreativeGatewayError,
+        match="visual_gateway_http_503",
+    ):
+        gateway.download_visual(job, output_dir=str(tmp_path))
+
+    assert len(attempts) >= 2
+    assert all(method == "GET" for method, _path in attempts)
+    assert len({path for _method, path in attempts}) == 1
+    assert sum(sleeps) < 5.0
+    assert clock["now"] < 5.0
+
+
+def test_download_stops_immediately_when_recovery_deadline_elapsed(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setenv("VISUAL_GATEWAY_URL", "http://gateway.internal")
+    monkeypatch.setenv("VISUAL_CONTENT_RECOVERY_IMAGE_SECONDS", "5")
+    clock = {"now": 0.0}
+    attempts = []
+
+    def fake_request(method, path, **_kwargs):
+        attempts.append((method, path))
+        clock["now"] = 6.0
+        raise gateway.VisualCreativeGatewayError("visual_gateway_http_503")
+
+    monkeypatch.setattr(gateway, "_request", fake_request)
+    monkeypatch.setattr(gateway.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(
+        gateway.time,
+        "sleep",
+        lambda _delay: pytest.fail("expired recovery must not sleep"),
+    )
+    job = gateway.VisualCreativeJob(
+        id="expired-image",
+        provider="yandexart",
+        scope_id="tenant-1",
+        kind="image",
+        status="succeeded",
+        asset_ready=True,
+    )
+
+    with pytest.raises(
+        gateway.VisualCreativeGatewayError,
+        match="visual_gateway_http_503",
+    ):
+        gateway.download_visual(job, output_dir=str(tmp_path))
+
+    assert len(attempts) == 1
+    assert attempts[0][0] == "GET"
+
+
+def test_download_uses_kind_specific_transfer_timeout(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("VISUAL_GATEWAY_URL", "http://gateway.internal")
+    timeouts = []
+
+    def fake_request(_method, _path, **kwargs):
+        timeouts.append(kwargs.get("timeout_seconds"))
+        return ({"content-type": "application/octet-stream"}, b"payload")
+
+    monkeypatch.setattr(gateway, "_request", fake_request)
+    image = gateway.VisualCreativeJob(
+        id="image-timeout",
+        provider="yandexart",
+        scope_id="tenant-1",
+        kind="image",
+        status="succeeded",
+        asset_ready=True,
+    )
+    video = gateway.VisualCreativeJob(
+        id="video-timeout",
+        provider="yandexart_motion",
+        scope_id="tenant-1",
+        kind="video",
+        status="succeeded",
+        asset_ready=True,
+    )
+
+    gateway.download_visual(image, output_dir=str(tmp_path))
+    gateway.download_visual(video, output_dir=str(tmp_path))
+
+    assert timeouts == [60, 180]
 
 
 def test_download_does_not_retry_permanent_content_contract_error(
