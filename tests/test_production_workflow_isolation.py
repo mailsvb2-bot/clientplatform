@@ -169,6 +169,26 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
         self.assertNotIn('print(job_id)', text)
         self.assertNotIn('print(scope_id)', text)
 
+    def test_visual_diagnostic_waits_for_exact_marked_deploy_before_probe(self) -> None:
+        text = self._text(VISUAL_DIAGNOSTIC)
+
+        wait_step = text.index("- name: Wait for marked production deploy")
+        probe_step = text.index("- name: Probe live production visual provider state")
+        self.assertLess(wait_step, probe_step)
+        for required in (
+            "github.event_name == 'push'",
+            "contains(github.event.head_commit.message, '[recover-production-deploy]')",
+            "ops/clientplatform-production-deploy-recovery",
+            "listCommitStatusesForRef",
+            "deploy?.state === 'success'",
+            "['failure', 'error'].includes(deploy.state)",
+            "Timed out waiting for exact production deploy recovery status before visual probe.",
+            "timeout-minutes: 20",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, text)
+
+
     def test_operations_doc_preserves_private_health_contract(self) -> None:
         text = self._text(OPERATIONS)
         self.assertIn("`/opt/clientplatform`", text)
