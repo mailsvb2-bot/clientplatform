@@ -13,7 +13,7 @@ import re
 from .models import CreativeBrief
 
 
-PROMPT_ADAPTER_VERSION = 3
+PROMPT_ADAPTER_VERSION = 4
 
 _RUNWAY_PROMPT_LIMIT = 1000
 _YANDEX_PROMPT_LIMIT = 500
@@ -179,6 +179,56 @@ def _compiled_style_directives(lines: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(selected)
 
 
+def _compiled_semantic_visual_cues(
+    lines: tuple[str, ...],
+    *,
+    kind: str,
+) -> tuple[str, ...]:
+    """Translate compiler semantics into short, natural provider-visible scene cues.
+
+    Alice AI ART should not receive compiler control language such as "mandatory",
+    but dropping those directives entirely loses the visible verbs and state changes
+    that distinguish the owner's request from a generic portrait.
+    """
+
+    folded = tuple(line.casefold() for line in lines)
+    cues: list[str] = []
+
+    def has(prefix: str) -> bool:
+        return any(line.startswith(prefix) for line in folded)
+
+    if has("if the subject is listening"):
+        cues.append(
+            "Явно видно прослушивание аудио через наушники, колонку или устройство."
+        )
+    if has("if the subject is watching"):
+        cues.append("Явно видна связь взгляда персонажа с экраном или источником.")
+    if has("if the subject is reading"):
+        cues.append("Явно видны материал для чтения и внимание персонажа к нему.")
+    if has("if the request says the subject uses or interacts"):
+        cues.append("Явно видно взаимодействие персонажа с указанным объектом.")
+    if has("if the subject holds or carries"):
+        cues.append("Указанный предмет явно и правдоподобно удерживается персонажем.")
+    if has("if eating or drinking is requested"):
+        cues.append("Явно видно само действие еды или питья и его источник.")
+
+    if has("the transformation is a mandatory"):
+        if str(kind or "").strip().lower() == "video":
+            cues.append(
+                "Тот же персонаж проходит видимое изменение от исходного состояния "
+                "через действие к ясно различимому финалу."
+            )
+        else:
+            cues.append(
+                "Тот же персонаж показан до и после изменения; исходное и конечное "
+                "состояния ясно различимы."
+            )
+    elif has("respect the requested chronology") or has("the request contains a sequence"):
+        cues.append("Причинно-следственная последовательность действий ясно читается.")
+
+    return tuple(dict.fromkeys(cues))
+
+
 def _yandex_natural_prompt_parts(brief: CreativeBrief) -> list[str]:
     """Shape compiler output as a natural image description for Alice AI ART.
 
@@ -233,8 +283,14 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
         extras.append(
             "Контекст бренда: " + " ".join(str(brief.brand_context).split())
         )
+    scene = "\n".join(
+        [
+            owner_request,
+            *_compiled_semantic_visual_cues(lines, kind=brief.kind),
+        ]
+    )
     prompt = _bounded_yandex_prompt(
-        scene=owner_request,
+        scene=scene,
         brief=brief,
         extras=tuple(extras),
     )
@@ -246,7 +302,13 @@ def _adapt_yandex_motion(brief: CreativeBrief) -> CreativeBrief:
     owner_request = _compiled_owner_request(lines)
     extras: list[str] = []
     if owner_request:
-        scene = "Ключевой кадр для короткого вертикального видео: " + owner_request
+        semantic_scene = "\n".join(
+            [
+                owner_request,
+                *_compiled_semantic_visual_cues(lines, kind="image"),
+            ]
+        )
+        scene = "Ключевой кадр для короткого вертикального видео: " + semantic_scene
         extras.extend(_compiled_style_directives(lines))
         if str(brief.brand_context or "").strip():
             extras.append(
