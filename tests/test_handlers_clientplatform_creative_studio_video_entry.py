@@ -446,7 +446,7 @@ def test_video_delivery_enables_streaming(monkeypatch, tmp_path) -> None:
     assert target.answer_video.await_args.kwargs["supports_streaming"] is True
 
 
-def test_download_creative_file_sends_document(monkeypatch, tmp_path) -> None:
+def test_download_creative_file_sends_document_with_result_actions(monkeypatch, tmp_path) -> None:
     asset = tmp_path / "creative.jpg"
     asset.write_bytes(b"jpeg")
     target = SimpleNamespace(answer_document=AsyncMock())
@@ -457,7 +457,7 @@ def test_download_creative_file_sends_document(monkeypatch, tmp_path) -> None:
     )
     state = SimpleNamespace()
     actor = SimpleNamespace(business_id="business-id")
-    receipt = SimpleNamespace(source_job_id="job-123")
+    receipt = SimpleNamespace(id="receipt-id", source_job_id="job-123")
     job = SimpleNamespace(
         id="job-123",
         status="succeeded",
@@ -471,6 +471,11 @@ def test_download_creative_file_sends_document(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(studio.asyncio, "to_thread", immediate_to_thread)
     monkeypatch.setattr(studio, "_actor_for_callback", AsyncMock(return_value=actor))
     monkeypatch.setattr(studio, "_receipt_for_callback", AsyncMock(return_value=receipt))
+    monkeypatch.setattr(
+        studio,
+        "_receipt_callback",
+        lambda action, token, _receipt: f"receipt:{action}:{token}",
+    )
     monkeypatch.setattr(studio, "poll_ad_visual", lambda **_kwargs: job)
     monkeypatch.setattr(
         studio,
@@ -486,6 +491,12 @@ def test_download_creative_file_sends_document(monkeypatch, tmp_path) -> None:
     document = target.answer_document.await_args.args[0]
     assert document.filename == "clientplatform-image.jpg"
     assert target.answer_document.await_args.kwargs["caption"] == "📥 Файл для сохранения"
+    rows = _labels_and_callbacks(
+        target.answer_document.await_args.kwargs["reply_markup"]
+    )
+    assert ("📥 Скачать файл", "receipt:download:business-token") in rows
+    assert ("✨ Создать ещё картинку", "cpc:new:business-token") in rows
+    assert ("🎬 Создать видео", "cpc:video:business-token") in rows
 
 
 def test_download_creative_file_reports_expired_asset(monkeypatch) -> None:
