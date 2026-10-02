@@ -13,7 +13,7 @@ import re
 from .models import CreativeBrief
 
 
-PROMPT_ADAPTER_VERSION = 4
+PROMPT_ADAPTER_VERSION = 5
 
 _RUNWAY_PROMPT_LIMIT = 1000
 _YANDEX_PROMPT_LIMIT = 500
@@ -62,6 +62,10 @@ def _priority_lines(brief: CreativeBrief) -> list[str]:
         "initial state",
         "final state",
         "chronology",
+        "autonomous composition",
+        "autonomous video staging",
+        "visible-state translation",
+        "autonomous supporting detail",
         "visual style intent",
         "style choices",
         "color temperature",
@@ -211,6 +215,8 @@ def _compiled_semantic_visual_cues(
         cues.append("Указанный предмет явно и правдоподобно удерживается персонажем.")
     if has("if eating or drinking is requested"):
         cues.append("Явно видно само действие еды или питья и его источник.")
+    if has("if the request contains another action"):
+        cues.append("Запрошенное действие явно видно в кадре, это не статичный портрет.")
 
     if has("the transformation is mandatory") or has(
         "the transformation is a mandatory"
@@ -227,6 +233,15 @@ def _compiled_semantic_visual_cues(
             )
     elif has("respect the requested chronology") or has("the request contains a sequence"):
         cues.append("Причинно-следственная последовательность действий ясно читается.")
+
+    if has("visible-state translation"):
+        cues.append(
+            "Эмоции и качества читаются по выражению, позе и фактуре, не по надписям."
+        )
+    if has("autonomous composition default: use a narrative story-scene"):
+        cues.append("Сюжетная сцена; запрошенное действие — главный фокус.")
+    elif has("autonomous composition default: use a balanced medium"):
+        cues.append("Сбалансированная композиция с одним ясным главным объектом.")
 
     return tuple(dict.fromkeys(cues))
 
@@ -256,19 +271,43 @@ def _yandex_natural_prompt_parts(brief: CreativeBrief) -> list[str]:
 
 def _bounded_yandex_prompt(
     *,
-    scene: str,
+    scene_head: str,
+    semantic_cues: tuple[str, ...],
     brief: CreativeBrief,
     extras: tuple[str, ...] = (),
 ) -> str:
-    """Keep mandatory safety clauses inside Alice's hard prompt limit."""
+    """Preserve meaning and safety inside Alice's hard prompt limit.
+
+    Long owner text is clipped before semantic evidence or safety is sacrificed.
+    This keeps the visual verbs/state changes that make a scene faithful instead
+    of allowing a long request to degrade back into a generic portrait.
+    """
 
     safety = _natural_safety_parts(brief)
     safety_block = _bounded_join(list(safety), limit=_YANDEX_PROMPT_LIMIT)
-    reserved = len(safety_block) + (1 if safety_block else 0)
-    scene_limit = max(80, _YANDEX_PROMPT_LIMIT - reserved)
-    bounded_scene = _bounded_join([scene], limit=scene_limit)
+    minimum_scene_head = 90
+    semantic_budget = max(
+        80,
+        _YANDEX_PROMPT_LIMIT
+        - len(safety_block)
+        - (1 if safety_block else 0)
+        - minimum_scene_head
+        - 1,
+    )
+    bounded_semantics = _bounded_join(list(semantic_cues), limit=semantic_budget)
+    semantic_parts = tuple(
+        line for line in bounded_semantics.splitlines() if line.strip()
+    )
+    reserved = (
+        len(safety_block)
+        + len(bounded_semantics)
+        + (1 if safety_block else 0)
+        + (1 if bounded_semantics else 0)
+    )
+    scene_limit = max(minimum_scene_head, _YANDEX_PROMPT_LIMIT - reserved)
+    bounded_scene_head = _bounded_join([scene_head], limit=scene_limit)
     return _bounded_join(
-        [bounded_scene, *safety, *extras],
+        [bounded_scene_head, *semantic_parts, *safety, *extras],
         limit=_YANDEX_PROMPT_LIMIT,
     )
 
@@ -285,14 +324,10 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
         extras.append(
             "Контекст бренда: " + " ".join(str(brief.brand_context).split())
         )
-    scene = "\n".join(
-        [
-            owner_request,
-            *_compiled_semantic_visual_cues(lines, kind=brief.kind),
-        ]
-    )
+    semantic_cues = _compiled_semantic_visual_cues(lines, kind=brief.kind)
     prompt = _bounded_yandex_prompt(
-        scene=scene,
+        scene_head=owner_request,
+        semantic_cues=semantic_cues,
         brief=brief,
         extras=tuple(extras),
     )
@@ -303,14 +338,10 @@ def _adapt_yandex_motion(brief: CreativeBrief) -> CreativeBrief:
     lines = _compiled_directives(brief.prompt)
     owner_request = _compiled_owner_request(lines)
     extras: list[str] = []
+    semantic_cues: tuple[str, ...] = ()
     if owner_request:
-        semantic_scene = "\n".join(
-            [
-                owner_request,
-                *_compiled_semantic_visual_cues(lines, kind="image"),
-            ]
-        )
-        scene = "Ключевой кадр для короткого вертикального видео: " + semantic_scene
+        scene = "Ключевой кадр для короткого вертикального видео: " + owner_request
+        semantic_cues = _compiled_semantic_visual_cues(lines, kind="image")
         extras.extend(_compiled_style_directives(lines))
         if str(brief.brand_context or "").strip():
             extras.append(
@@ -323,7 +354,8 @@ def _adapt_yandex_motion(brief: CreativeBrief) -> CreativeBrief:
             + " ".join(str(brief.prompt or "").split())
         )
     prompt = _bounded_yandex_prompt(
-        scene=scene,
+        scene_head=scene,
+        semantic_cues=semantic_cues,
         brief=brief,
         extras=tuple(extras),
     )
