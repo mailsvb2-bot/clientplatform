@@ -139,12 +139,17 @@ def _semantic_flags(request: str) -> tuple[str, ...]:
         ("holding", _HOLDING_RE),
         ("eating_or_drinking", _EATING_RE),
         ("generic_action", _GENERIC_ACTION_RE),
-        ("visible_state", _VISIBLE_STATE_RE),
         ("comparison", _COMPARISON_RE),
         ("explicit_text", _TEXT_REQUEST_RE),
         ("portrait", _PORTRAIT_RE),
     )
-    return tuple(name for name, pattern in checks if pattern.search(request))
+    flags = [name for name, pattern in checks if pattern.search(request)]
+    # Descriptive words such as "calm" may refer only to visual style in a static
+    # request. Treat them as state evidence only when the owner actually asks for
+    # a transformation, so autopilot does not invent a character-state narrative.
+    if "transformation" in flags and _VISIBLE_STATE_RE.search(request):
+        flags.append("visible_state")
+    return tuple(flags)
 
 
 def _interaction_directives(flags: tuple[str, ...]) -> list[str]:
