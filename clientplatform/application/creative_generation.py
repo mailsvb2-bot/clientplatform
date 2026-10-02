@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from clientplatform.application.visual_creatives import poll_ad_visual
 from clientplatform.domain.creative_generation import (
     CreativeGenerationReceipt,
     CreativeGenerationReceiptStatus,
@@ -8,7 +9,6 @@ from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.creative_generation_receipt_repository import (
     CreativeGenerationReceiptRepository,
 )
-from clientplatform.application.visual_creatives import poll_ad_visual
 from services.db import get_db, get_db_ro
 
 
