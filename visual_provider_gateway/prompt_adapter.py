@@ -108,23 +108,28 @@ def _natural_safety_parts(brief: CreativeBrief) -> tuple[str, ...]:
     folded_negative = " ".join(str(brief.negative_prompt or "").casefold().split())
     parts: list[str] = []
 
-    if "no watermarks" in folded_prompt or "watermark" in folded_negative:
-        parts.append("Без водяных знаков.")
-    if (
+    watermark = "no watermarks" in folded_prompt or "watermark" in folded_negative
+    invented_logo = (
         "do not invent brand logos or certifications" in folded_prompt
         or "invented logo" in folded_negative
-    ):
-        parts.append("Без выдуманных логотипов, сертификатов и знаков доверия.")
+    )
+    if watermark and invented_logo:
+        parts.append("Без водяных знаков и выдуманных логотипов.")
+    elif watermark:
+        parts.append("Без водяных знаков.")
+    elif invented_logo:
+        parts.append("Без выдуманных логотипов.")
+
     if (
         "safe-area edges" in folded_prompt
         or "cropped important subject" in folded_negative
     ):
-        parts.append("Все важные объекты полностью в кадре, с безопасными полями.")
+        parts.append("Главные объекты полностью в кадре.")
     if (
         "no readable text, letters, captions or ui" in folded_prompt
         or "readable advertising text baked into image" in folded_negative
     ):
-        parts.append("Без читаемого текста, подписей и элементов интерфейса.")
+        parts.append("Без читаемого текста и UI.")
 
     return tuple(parts)
 
@@ -183,6 +188,77 @@ def _compiled_style_directives(lines: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(selected)
 
 
+def _compiled_style_cues(lines: tuple[str, ...]) -> tuple[str, ...]:
+    """Compress every explicit owner style choice into provider-visible tokens.
+
+    Alice has a 500-character prompt ceiling. Raw compiler style sentences are too
+    verbose and used to disappear behind semantic/safety content. This compact
+    representation keeps additive quick-style buttons and explicit dimensions alive.
+    """
+
+    directives = tuple(line.casefold() for line in _compiled_style_directives(lines))
+    mapping = (
+        ("warm, welcoming and approachable", "тёплый дружелюбный"),
+        ("soft, calm and reassuring", "мягкий спокойный"),
+        ("bright, energetic and lively", "яркий энергичный"),
+        ("refined premium feel", "премиальный"),
+        ("cinematic, story-driven", "кинематографичный"),
+        ("artistic, crafted", "художественный"),
+        ("natural photographic feel", "натуральное фото"),
+        ("warm color temperature", "тёплая гамма"),
+        ("neutral color temperature", "нейтральная гамма"),
+        ("cool color temperature", "холодная гамма"),
+        ("friendly and approachable", "доброжелательное настроение"),
+        ("calm and reassuring", "спокойное настроение"),
+        ("bold and assertive", "дерзкое настроение"),
+        ("dramatic and cinematic", "драматичное настроение"),
+        ("aggressive and forceful", "агрессивное настроение"),
+        ("playful and lively", "игривое настроение"),
+        ("premium, restrained and status-oriented", "статусное настроение"),
+        ("visual energy low", "низкая динамика"),
+        ("medium visual energy", "средняя динамика"),
+        ("high visual energy", "высокая динамика"),
+        ("photorealistic visual language", "фотореализм"),
+        ("credible realistic visual language", "реалистично"),
+        ("semi-stylized but believable", "полустилизация"),
+        ("illustrative artistic visual language", "иллюстрация"),
+        ("bright, open lighting", "светлый свет"),
+        ("balanced natural lighting", "естественный свет"),
+        ("dark, moody lighting", "тёмный свет"),
+        ("soft contrast", "мягкий контраст"),
+        ("balanced contrast", "сбалансированный контраст"),
+        ("strong visual contrast", "сильный контраст"),
+        ("visually minimal and uncluttered", "минимум деталей"),
+        ("balanced amount of visual detail", "сбалансированные детали"),
+        ("rich but coherent visual detail", "много уместных деталей"),
+        ("close-up composition", "крупный план"),
+        ("medium-shot composition", "средний план"),
+        ("wide composition", "общий план"),
+        ("narrative story-scene composition", "сюжетная сцена"),
+        ("explicit before/after composition", "до/после"),
+        ("continuous transformation-focused composition", "композиция превращения"),
+        ("motion static and composed", "статичное движение"),
+        ("gentle, smooth motion", "плавное движение"),
+        ("dynamic motion", "динамичное движение"),
+        ("commercial presentation natural", "натуральная подача"),
+        ("commercial presentation friendly", "дружелюбная подача"),
+        ("commercial presentation professional", "профессиональная подача"),
+        ("commercial presentation premium", "премиальная подача"),
+        ("promotional advertising presentation", "рекламная подача"),
+        ("do not reserve empty copy space", "без пустого места под текст"),
+        ("small intentional area for later typography", "немного места под текст"),
+        ("balanced intentional area for later typography", "место под текст"),
+        ("large intentional area for later typography", "много места под текст"),
+    )
+    selected: list[str] = []
+    for needle, label in mapping:
+        if any(needle in line for line in directives):
+            selected.append(label)
+    if not selected:
+        return ()
+    return ("Стиль: " + "; ".join(dict.fromkeys(selected)) + ".",)
+
+
 def _compiled_semantic_visual_cues(
     lines: tuple[str, ...],
     *,
@@ -203,7 +279,7 @@ def _compiled_semantic_visual_cues(
 
     if has("if the subject is listening"):
         cues.append(
-            "Явно видно, что герой слушает аудио: наушники, колонка или устройство."
+            "Слушает аудио: видны наушники, колонка или устройство."
         )
     if has("if the subject is watching"):
         cues.append("Явно видна связь взгляда персонажа с экраном или источником.")
@@ -228,14 +304,14 @@ def _compiled_semantic_visual_cues(
             )
         else:
             cues.append(
-                "Тот же герой: ясно различимы исходное состояние и результат изменения."
+                "Тот же герой: видны исходное состояние и результат."
             )
     elif has("respect the requested chronology") or has("the request contains a sequence"):
         cues.append("Причинно-следственная последовательность действий ясно читается.")
 
     if has("visible-state translation"):
         cues.append(
-            "Эмоции и качества видны по выражению, позе и фактуре, не по надписям."
+            "Эмоции и качества видны по выражению, позе и фактуре."
         )
     if has("autonomous composition default: use a narrative story-scene"):
         cues.append("Сюжетная сцена; запрошенное действие — главный фокус.")
@@ -272,24 +348,26 @@ def _bounded_yandex_prompt(
     *,
     scene_head: str,
     semantic_cues: tuple[str, ...],
+    style_cues: tuple[str, ...],
     brief: CreativeBrief,
     extras: tuple[str, ...] = (),
 ) -> str:
-    """Preserve meaning and safety inside Alice's hard prompt limit.
-
-    Long owner text is clipped before semantic evidence or safety is sacrificed.
-    This keeps the visual verbs/state changes that make a scene faithful instead
-    of allowing a long request to degrade back into a generic portrait.
-    """
+    """Preserve owner meaning, explicit style and safety under Alice's hard limit."""
 
     safety = _natural_safety_parts(brief)
     safety_block = _bounded_join(list(safety), limit=_YANDEX_PROMPT_LIMIT)
+    style_block = _bounded_join(list(style_cues), limit=120)
     minimum_scene_head = 80
+    fixed_reserved = (
+        len(safety_block)
+        + len(style_block)
+        + (1 if safety_block else 0)
+        + (1 if style_block else 0)
+    )
     semantic_budget = max(
-        80,
+        70,
         _YANDEX_PROMPT_LIMIT
-        - len(safety_block)
-        - (1 if safety_block else 0)
+        - fixed_reserved
         - minimum_scene_head
         - 1,
     )
@@ -297,16 +375,16 @@ def _bounded_yandex_prompt(
     semantic_parts = tuple(
         line for line in bounded_semantics.splitlines() if line.strip()
     )
+    style_parts = tuple(line for line in style_block.splitlines() if line.strip())
     reserved = (
-        len(safety_block)
+        fixed_reserved
         + len(bounded_semantics)
-        + (1 if safety_block else 0)
         + (1 if bounded_semantics else 0)
     )
     scene_limit = max(minimum_scene_head, _YANDEX_PROMPT_LIMIT - reserved)
     bounded_scene_head = _bounded_join([scene_head], limit=scene_limit)
     return _bounded_join(
-        [bounded_scene_head, *semantic_parts, *safety, *extras],
+        [bounded_scene_head, *semantic_parts, *style_parts, *safety, *extras],
         limit=_YANDEX_PROMPT_LIMIT,
     )
 
@@ -318,15 +396,17 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
         prompt = _bounded_join([brief.prompt], limit=_YANDEX_PROMPT_LIMIT)
         return replace(brief, prompt=prompt)
 
-    extras = list(_compiled_style_directives(lines))
+    extras: list[str] = []
     if str(brief.brand_context or "").strip():
         extras.append(
             "Контекст бренда: " + " ".join(str(brief.brand_context).split())
         )
     semantic_cues = _compiled_semantic_visual_cues(lines, kind=brief.kind)
+    style_cues = _compiled_style_cues(lines)
     prompt = _bounded_yandex_prompt(
         scene_head=owner_request,
         semantic_cues=semantic_cues,
+        style_cues=style_cues,
         brief=brief,
         extras=tuple(extras),
     )
@@ -338,10 +418,11 @@ def _adapt_yandex_motion(brief: CreativeBrief) -> CreativeBrief:
     owner_request = _compiled_owner_request(lines)
     extras: list[str] = []
     semantic_cues: tuple[str, ...] = ()
+    style_cues: tuple[str, ...] = ()
     if owner_request:
         scene = "Ключевой кадр для короткого вертикального видео: " + owner_request
         semantic_cues = _compiled_semantic_visual_cues(lines, kind="image")
-        extras.extend(_compiled_style_directives(lines))
+        style_cues = _compiled_style_cues(lines)
         if str(brief.brand_context or "").strip():
             extras.append(
                 "Контекст бренда: " + " ".join(str(brief.brand_context).split())
@@ -355,6 +436,7 @@ def _adapt_yandex_motion(brief: CreativeBrief) -> CreativeBrief:
     prompt = _bounded_yandex_prompt(
         scene_head=scene,
         semantic_cues=semantic_cues,
+        style_cues=style_cues,
         brief=brief,
         extras=tuple(extras),
     )
