@@ -8,11 +8,12 @@ offer, claim, audience or transformation.
 """
 
 from dataclasses import replace
+import re
 
 from .models import CreativeBrief
 
 
-PROMPT_ADAPTER_VERSION = 2
+PROMPT_ADAPTER_VERSION = 3
 
 _RUNWAY_PROMPT_LIMIT = 1000
 _YANDEX_PROMPT_LIMIT = 500
@@ -89,13 +90,92 @@ def _priority_lines(brief: CreativeBrief) -> list[str]:
     return list(dict.fromkeys((*opening, *selected)))
 
 
-def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
-    priority = (
-        "Render the owner's requested scene faithfully. Preserve every explicit "
-        "subject, action, relationship and state change."
+_NUMBERED_DIRECTIVE_RE = re.compile(r"^\d+\.\s*")
+_NUMBERED_DIRECTIVE_SPLIT_RE = re.compile(r"(?<!\S)(?=\d+\.\s)")
+_OWNER_REQUEST_PREFIX = 'Owner request, preserve its meaning exactly: "'
+_STYLE_SECTION_START = "style choices may shape presentation"
+_STYLE_SECTION_END = "use credible natural details"
+
+
+def _compiled_directives(prompt: str) -> tuple[str, ...]:
+    # CreativeBrief.normalized() intentionally collapses all whitespace before the
+    # provider adapter runs. Compiler v2 output therefore arrives as
+    # "1. ... 2. ... 3. ..." rather than newline-separated directives.
+    text = " ".join(str(prompt or "").split()).strip()
+    if not text:
+        return ()
+    parts = _NUMBERED_DIRECTIVE_SPLIT_RE.split(text)
+    return tuple(
+        cleaned
+        for part in parts
+        if (cleaned := _NUMBERED_DIRECTIVE_RE.sub("", part).strip())
     )
+
+
+def _compiled_owner_request(lines: tuple[str, ...]) -> str:
+    for line in lines:
+        if not line.startswith(_OWNER_REQUEST_PREFIX):
+            continue
+        value = line[len(_OWNER_REQUEST_PREFIX) :].strip()
+        # Compiler v2 itself emits a bare closing quote. Some frozen/test-era
+        # payloads also carry ordinary sentence punctuation after that quote.
+        if value.endswith('".'):
+            value = value[:-1].rstrip()
+        if value.endswith('"'):
+            return value[:-1].strip()
+    return ""
+
+
+def _compiled_style_directives(lines: tuple[str, ...]) -> tuple[str, ...]:
+    """Return only concrete visual-style sentences from compiler v2 output."""
+
+    inside = False
+    selected: list[str] = []
+    for line in lines:
+        folded = line.casefold()
+        if folded.startswith(_STYLE_SECTION_START):
+            inside = True
+            continue
+        if not inside:
+            continue
+        if (
+            folded.startswith(_STYLE_SECTION_END)
+            or folded.startswith("business grounding")
+            or folded.startswith("readable text is explicitly")
+            or folded.startswith("do not rely on readable text")
+        ):
+            break
+        if folded.startswith("combine every selected quick style accent"):
+            continue
+        selected.append(line)
+    return tuple(selected)
+
+
+def _yandex_natural_prompt_parts(brief: CreativeBrief) -> list[str]:
+    """Shape compiler output as a natural image description for Alice AI ART.
+
+    Alice's Images API expects an image description. Provider-neutral compiler
+    control language (owner request, mandatory contract, do-not-invent rules)
+    can be interpreted as conversational/meta instructions and rejected by the
+    image model even when the underlying scene is harmless.
+    """
+
+    lines = _compiled_directives(brief.prompt)
+    owner_request = _compiled_owner_request(lines)
+    if not owner_request:
+        # Legacy/provider-direct briefs are already natural prompts.
+        return [brief.prompt]
+
+    parts = [owner_request]
+    parts.extend(_compiled_style_directives(lines))
+    if str(brief.brand_context or "").strip():
+        parts.append("Контекст бренда: " + " ".join(str(brief.brand_context).split()))
+    return parts
+
+
+def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
     prompt = _bounded_join(
-        [priority, *_priority_lines(brief)],
+        _yandex_natural_prompt_parts(brief),
         limit=_YANDEX_PROMPT_LIMIT,
     )
     return replace(brief, prompt=prompt)
