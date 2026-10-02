@@ -65,6 +65,21 @@ class VisualPromptCompilerTests(unittest.TestCase):
             compiled.negative_prompt,
         )
 
+    def test_autopilot_does_not_treat_static_russian_nouns_as_actions(self) -> None:
+        for request in (
+            "работа психолога в светлом современном кабинете",
+            "настольная игра на деревянном столе",
+            "готовый ужин на красивой тарелке",
+            "портрет чиновника в деловом костюме",
+        ):
+            with self.subTest(request=request):
+                compiled = compile_visual_prompt(request=request, kind="image")
+                self.assertNotIn("generic_action", compiled.semantic_flags)
+                self.assertNotIn(
+                    "static catalog shot when an action was requested",
+                    compiled.negative_prompt,
+                )
+
     def test_video_transformation_compiles_a_timeline_not_a_static_prompt(self) -> None:
         compiled = compile_visual_prompt(
             request="грязная машина заезжает на мойку и становится блестящей",
