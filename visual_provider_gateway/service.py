@@ -358,7 +358,11 @@ class VisualGatewayService:
                     provider="none",
                     kind=stored.kind,
                     status="failed",
-                    error_code="visual_gateway_start_incomplete",
+                    # Provider identity is still unknown after the reservation timeout.
+                    # The process may have died after the external provider accepted
+                    # the paid request but before its job id was persisted. Treat this
+                    # as ambiguous, never as a safe pre-acceptance failure.
+                    error_code="visual_gateway_submit_ambiguous",
                 )
             return self._response(stored)
         refreshed = self.engine.poll(

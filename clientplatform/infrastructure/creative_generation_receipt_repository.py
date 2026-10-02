@@ -14,6 +14,9 @@ from clientplatform.domain.tenancy import TenantContext, normalize_uuid
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 
 
+_AMBIGUOUS_PROVIDER_ERRORS = frozenset({"visual_gateway_submit_ambiguous"})
+
+
 def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -183,6 +186,7 @@ class CreativeGenerationReceiptRepository:
         receipt_id: str,
         source_job_id: str,
         provider_status: str,
+        provider_error_code: str = "",
         now: str | None = None,
     ) -> CreativeGenerationReceipt:
         current = self._actor(actor)
@@ -203,10 +207,30 @@ class CreativeGenerationReceiptRepository:
             raise ValueError("creative generation provider status is invalid")
         if receipt.source_job_id and receipt.source_job_id != job_id:
             raise ValueError("creative generation source job changed")
+        error_code = str(provider_error_code or "").strip()
+        if (
+            len(error_code) > 128
+            or any(ord(char) < 32 for char in error_code)
+        ):
+            raise ValueError("creative generation provider error is invalid")
         timestamp = str(now or _iso_now())
         if status == CreativeGenerationReceiptStatus.FAILED:
-            # No recovery is possible or needed after provider failure; erase the
-            # prompt/Brand DNA immediately instead of retaining terminal receipts.
+            if error_code in _AMBIGUOUS_PROVIDER_ERRORS:
+                # The gateway reservation is terminal, but it cannot prove whether
+                # the paid provider accepted the request before a process crash.
+                # Keep the owner receipt active and bound to this exact gateway job
+                # until the owner explicitly resolves the ambiguity.
+                self._conn.execute(
+                    """
+                    UPDATE creative_generation_receipts
+                    SET source_job_id=?, status='running', updated_at=?
+                    WHERE id=? AND business_id=?
+                    """,
+                    (job_id, timestamp, receipt.id, current.business_id),
+                )
+                return self.get(actor=current, receipt_id=receipt.id)
+            # Definitive provider failure needs no recovery; erase prompt/Brand DNA
+            # immediately instead of retaining terminal receipts.
             self._conn.execute(
                 "DELETE FROM creative_generation_receipts WHERE id=? AND business_id=?",
                 (receipt.id, current.business_id),
@@ -289,6 +313,32 @@ class CreativeGenerationReceiptRepository:
                 "AND status='succeeded' AND delivery_claimed_at=''"
             )
         cursor = self._conn.execute(sql, (receipt.id, current.business_id))
+        return int(getattr(cursor, "rowcount", 0) or 0) == 1
+
+    def abandon_ambiguous(
+        self,
+        *,
+        actor: TenantContext,
+        receipt_id: str,
+        source_job_id: str,
+    ) -> bool:
+        current = self._actor(actor)
+        receipt = self.get(actor=current, receipt_id=receipt_id)
+        job_id = str(source_job_id or "").strip()
+        if (
+            not job_id
+            or len(job_id) > 128
+            or receipt.status != CreativeGenerationReceiptStatus.RUNNING
+            or receipt.source_job_id != job_id
+        ):
+            return False
+        cursor = self._conn.execute(
+            """
+            DELETE FROM creative_generation_receipts
+            WHERE id=? AND business_id=? AND status='running' AND source_job_id=?
+            """,
+            (receipt.id, current.business_id, job_id),
+        )
         return int(getattr(cursor, "rowcount", 0) or 0) == 1
 
     def mark_delivered(

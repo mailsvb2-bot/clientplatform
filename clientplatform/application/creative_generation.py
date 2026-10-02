@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from clientplatform.domain.creative_generation import CreativeGenerationReceipt
+from clientplatform.application.visual_creatives import poll_ad_visual
+from clientplatform.domain.creative_generation import (
+    CreativeGenerationReceipt,
+    CreativeGenerationReceiptStatus,
+)
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.creative_generation_receipt_repository import (
     CreativeGenerationReceiptRepository,
@@ -59,6 +63,7 @@ def remember_creative_generation_job(
     receipt_id: str,
     source_job_id: str,
     provider_status: str,
+    provider_error_code: str = "",
 ) -> CreativeGenerationReceipt:
     with get_db() as conn:
         return CreativeGenerationReceiptRepository(conn).remember_job(
@@ -66,6 +71,7 @@ def remember_creative_generation_job(
             receipt_id=receipt_id,
             source_job_id=source_job_id,
             provider_status=provider_status,
+            provider_error_code=provider_error_code,
         )
 
 
@@ -99,6 +105,35 @@ def abandon_creative_generation(
             receipt_id=receipt_id,
         )
 
+
+def abandon_ambiguous_creative_generation(
+    *,
+    actor: TenantContext,
+    receipt_id: str,
+) -> bool:
+    receipt = get_creative_generation(actor=actor, receipt_id=receipt_id)
+    if (
+        receipt.status != CreativeGenerationReceiptStatus.RUNNING
+        or not receipt.source_job_id
+    ):
+        return False
+    job = poll_ad_visual(
+        job_id=receipt.source_job_id,
+        scope_id=actor.business_id,
+    )
+    if (
+        str(job.status or "") != "failed"
+        or str(job.error_code or "") != "visual_gateway_submit_ambiguous"
+    ):
+        return False
+    with get_db() as conn:
+        return CreativeGenerationReceiptRepository(conn).abandon_ambiguous(
+            actor=actor,
+            receipt_id=receipt.id,
+            source_job_id=receipt.source_job_id,
+        )
+
+
 def mark_creative_generation_delivered(
     *, actor: TenantContext, receipt_id: str
 ) -> CreativeGenerationReceipt:
@@ -110,6 +145,7 @@ def mark_creative_generation_delivered(
 
 
 __all__ = [
+    "abandon_ambiguous_creative_generation",
     "abandon_creative_generation",
     "authorize_creative_generation_redelivery",
     "begin_creative_generation_submission",

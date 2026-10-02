@@ -22,12 +22,21 @@ def _compiled_brief(*, kind: str = "image") -> CreativeBrief:
             "10. Business grounding: audio wellness session.",
         ]
     )
+    prompt += (
+        "\n\nProduction constraints: No watermarks. "
+        "Do not invent brand logos or certifications. "
+        "Keep important subjects away from the outer 8 percent safe-area edges. "
+        "No readable text, letters, captions or UI in the generated pixels."
+    )
     return CreativeBrief(
         kind=kind,
         prompt=prompt,
         country_code="RU",
         aspect_ratio="4:5",
-        negative_prompt="missing requested action",
+        negative_prompt=(
+            "missing requested action; watermark; invented logo; "
+            "cropped important subject; readable advertising text baked into image"
+        ),
     )
 
 
@@ -40,8 +49,13 @@ def test_yandex_adapter_uses_natural_owner_description_without_compiler_meta() -
     assert "Owner request" not in adapted.prompt
     assert "Render the owner's requested scene faithfully" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
+    assert "Production constraints" not in adapted.prompt
+    assert "Без водяных знаков." in adapted.prompt
+    assert "Без выдуманных логотипов" in adapted.prompt
+    assert "полностью в кадре" in adapted.prompt
+    assert "Без читаемого текста" in adapted.prompt
     assert "warm color temperature" in adapted.prompt
-    assert adapted.negative_prompt == "missing requested action"
+    assert "missing requested action" in adapted.negative_prompt
     assert len(adapted.prompt) <= 500
 
 
@@ -51,9 +65,69 @@ def test_yandex_motion_adapter_marks_keyframe_constraint_without_new_story() -> 
         provider="yandexart_motion",
     )
 
-    assert "Create a keyframe" in adapted.prompt
+    assert adapted.prompt.startswith("Ключевой кадр для короткого вертикального видео:")
     assert "hedgehog listens to an audio session" in adapted.prompt
+    assert "Owner request" not in adapted.prompt
+    assert "mandatory" not in adapted.prompt.casefold()
+    assert "Production constraints" not in adapted.prompt
+    assert "Без водяных знаков." in adapted.prompt
+    assert "Без выдуманных логотипов" in adapted.prompt
+    assert "полностью в кадре" in adapted.prompt
+    assert "Без читаемого текста" in adapted.prompt
     assert len(adapted.prompt) <= 500
+
+
+def _long_owner_brief(*, kind: str) -> CreativeBrief:
+    brief = _compiled_brief(kind=kind)
+    long_request = " ".join(
+        [
+            "a hedgehog listens to a guided audio wellness session in a calm room"
+            for _ in range(18)
+        ]
+    )
+    prompt = brief.prompt.replace(
+        "a prickly hedgehog listens to an audio session and becomes gentle",
+        long_request,
+    )
+    return CreativeBrief(
+        kind=brief.kind,
+        prompt=prompt,
+        country_code=brief.country_code,
+        aspect_ratio=brief.aspect_ratio,
+        duration_seconds=brief.duration_seconds,
+        negative_prompt=brief.negative_prompt,
+        brand_context=brief.brand_context,
+    )
+
+
+def test_yandex_adapter_keeps_all_safety_clauses_for_long_owner_request() -> None:
+    adapted = adapt_visual_brief_for_provider(
+        _long_owner_brief(kind="image"),
+        provider="yandexart",
+    )
+
+    assert len(adapted.prompt) <= 500
+    assert adapted.prompt.startswith("a hedgehog listens to a guided audio wellness session")
+    assert "Без водяных знаков." in adapted.prompt
+    assert "Без выдуманных логотипов" in adapted.prompt
+    assert "полностью в кадре" in adapted.prompt
+    assert "Без читаемого текста" in adapted.prompt
+    assert "Owner request" not in adapted.prompt
+
+
+def test_yandex_motion_adapter_keeps_all_safety_clauses_for_long_owner_request() -> None:
+    adapted = adapt_visual_brief_for_provider(
+        _long_owner_brief(kind="video"),
+        provider="yandexart_motion",
+    )
+
+    assert len(adapted.prompt) <= 500
+    assert adapted.prompt.startswith("Ключевой кадр для короткого вертикального видео:")
+    assert "Без водяных знаков." in adapted.prompt
+    assert "Без выдуманных логотипов" in adapted.prompt
+    assert "полностью в кадре" in adapted.prompt
+    assert "Без читаемого текста" in adapted.prompt
+    assert "Owner request" not in adapted.prompt
 
 
 def test_runway_adapter_preserves_semantics_and_style_inside_hard_prompt_limit() -> None:
@@ -67,6 +141,8 @@ def test_runway_adapter_preserves_semantics_and_style_inside_hard_prompt_limit()
     assert "listening unmistakable" in adapted.prompt
     assert "transformation is mandatory" in adapted.prompt.casefold()
     assert "warm color temperature" in adapted.prompt
+    assert "Без водяных знаков." in adapted.prompt
+    assert "Без выдуманных логотипов" in adapted.prompt
 
 
 def test_openai_adapter_does_not_rewrite_provider_neutral_compiled_prompt() -> None:
@@ -74,6 +150,44 @@ def test_openai_adapter_does_not_rewrite_provider_neutral_compiled_prompt() -> N
     adapted = adapt_visual_brief_for_provider(brief, provider="openai")
 
     assert adapted == brief.normalized()
+
+
+def test_engine_motion_adapter_never_forwards_compiler_control_language(monkeypatch) -> None:
+    captured = {}
+
+    class FakeProvider:
+        def configured(self, kind):
+            return kind == "video"
+
+        def submit(self, brief):
+            captured["brief"] = brief
+            return CreativeJob(
+                provider="yandexart_motion",
+                kind="video",
+                status="succeeded",
+                external_id="job-video-1",
+            )
+
+    monkeypatch.setattr(
+        engine,
+        "provider_order",
+        lambda *_args, **_kwargs: ("yandexart_motion",),
+    )
+    monkeypatch.setattr(engine, "build_provider", lambda _name: FakeProvider())
+
+    result = engine.VisualCreativeEngine(enabled=True).submit(
+        _compiled_brief(kind="video")
+    )
+
+    assert result.status == "succeeded"
+    prompt = captured["brief"].prompt
+    assert prompt.startswith("Ключевой кадр для короткого вертикального видео:")
+    assert "Owner request" not in prompt
+    assert "mandatory" not in prompt.casefold()
+    assert "Production constraints" not in prompt
+    assert "Без водяных знаков." in prompt
+    assert "Без читаемого текста" in prompt
+    assert len(prompt) <= 500
 
 
 def test_engine_applies_adapter_only_after_provider_selection(monkeypatch) -> None:

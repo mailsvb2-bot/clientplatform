@@ -97,6 +97,34 @@ _STYLE_SECTION_START = "style choices may shape presentation"
 _STYLE_SECTION_END = "use credible natural details"
 
 
+def _natural_safety_parts(brief: CreativeBrief) -> tuple[str, ...]:
+    """Preserve production visual constraints without leaking compiler meta-language."""
+
+    folded_prompt = " ".join(str(brief.prompt or "").casefold().split())
+    folded_negative = " ".join(str(brief.negative_prompt or "").casefold().split())
+    parts: list[str] = []
+
+    if "no watermarks" in folded_prompt or "watermark" in folded_negative:
+        parts.append("Без водяных знаков.")
+    if (
+        "do not invent brand logos or certifications" in folded_prompt
+        or "invented logo" in folded_negative
+    ):
+        parts.append("Без выдуманных логотипов, сертификатов и знаков доверия.")
+    if (
+        "safe-area edges" in folded_prompt
+        or "cropped important subject" in folded_negative
+    ):
+        parts.append("Все важные объекты полностью в кадре, с безопасными полями.")
+    if (
+        "no readable text, letters, captions or ui" in folded_prompt
+        or "readable advertising text baked into image" in folded_negative
+    ):
+        parts.append("Без читаемого текста, подписей и элементов интерфейса.")
+
+    return tuple(parts)
+
+
 def _compiled_directives(prompt: str) -> tuple[str, ...]:
     # CreativeBrief.normalized() intentionally collapses all whitespace before the
     # provider adapter runs. Compiler v2 output therefore arrives as
@@ -167,28 +195,73 @@ def _yandex_natural_prompt_parts(brief: CreativeBrief) -> list[str]:
         return [brief.prompt]
 
     parts = [owner_request]
+    parts.extend(_natural_safety_parts(brief))
     parts.extend(_compiled_style_directives(lines))
     if str(brief.brand_context or "").strip():
         parts.append("Контекст бренда: " + " ".join(str(brief.brand_context).split()))
     return parts
 
 
-def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
-    prompt = _bounded_join(
-        _yandex_natural_prompt_parts(brief),
+def _bounded_yandex_prompt(
+    *,
+    scene: str,
+    brief: CreativeBrief,
+    extras: tuple[str, ...] = (),
+) -> str:
+    """Keep mandatory safety clauses inside Alice's hard prompt limit."""
+
+    safety = _natural_safety_parts(brief)
+    safety_block = _bounded_join(list(safety), limit=_YANDEX_PROMPT_LIMIT)
+    reserved = len(safety_block) + (1 if safety_block else 0)
+    scene_limit = max(80, _YANDEX_PROMPT_LIMIT - reserved)
+    bounded_scene = _bounded_join([scene], limit=scene_limit)
+    return _bounded_join(
+        [bounded_scene, *safety, *extras],
         limit=_YANDEX_PROMPT_LIMIT,
+    )
+
+
+def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
+    lines = _compiled_directives(brief.prompt)
+    owner_request = _compiled_owner_request(lines)
+    if not owner_request:
+        prompt = _bounded_join([brief.prompt], limit=_YANDEX_PROMPT_LIMIT)
+        return replace(brief, prompt=prompt)
+
+    extras = list(_compiled_style_directives(lines))
+    if str(brief.brand_context or "").strip():
+        extras.append(
+            "Контекст бренда: " + " ".join(str(brief.brand_context).split())
+        )
+    prompt = _bounded_yandex_prompt(
+        scene=owner_request,
+        brief=brief,
+        extras=tuple(extras),
     )
     return replace(brief, prompt=prompt)
 
 
 def _adapt_yandex_motion(brief: CreativeBrief) -> CreativeBrief:
-    keyframe = (
-        "Create a keyframe that visibly contains the requested subject, interaction "
-        "and direction of change; it will be animated afterwards."
-    )
-    prompt = _bounded_join(
-        [keyframe, *_priority_lines(brief)],
-        limit=_YANDEX_PROMPT_LIMIT,
+    lines = _compiled_directives(brief.prompt)
+    owner_request = _compiled_owner_request(lines)
+    extras: list[str] = []
+    if owner_request:
+        scene = "Ключевой кадр для короткого вертикального видео: " + owner_request
+        extras.extend(_compiled_style_directives(lines))
+        if str(brief.brand_context or "").strip():
+            extras.append(
+                "Контекст бренда: " + " ".join(str(brief.brand_context).split())
+            )
+    else:
+        # Provider-direct/legacy requests are already natural scene descriptions.
+        scene = (
+            "Ключевой кадр для короткого вертикального видео: "
+            + " ".join(str(brief.prompt or "").split())
+        )
+    prompt = _bounded_yandex_prompt(
+        scene=scene,
+        brief=brief,
+        extras=tuple(extras),
     )
     return replace(brief, prompt=prompt)
 
@@ -202,7 +275,7 @@ def _adapt_runway(brief: CreativeBrief) -> CreativeBrief:
         "requested actions, relationships and state changes."
     )
     prompt = _bounded_join(
-        [prefix, *_priority_lines(brief)],
+        [prefix, *_natural_safety_parts(brief), *_priority_lines(brief)],
         limit=_RUNWAY_PROMPT_LIMIT,
     )
     return replace(brief, prompt=prompt)

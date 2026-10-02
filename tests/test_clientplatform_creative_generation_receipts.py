@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import sqlite3
 import unittest
+from contextlib import nullcontext
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+from clientplatform.application import creative_generation as creative_generation_app
 from clientplatform.application import visual_creatives
 from clientplatform.application.visual_creatives import (
     create_business_image_from_frozen_payload,
@@ -125,6 +127,88 @@ class FrozenBusinessImagePayloadTests(unittest.TestCase):
 
 
 
+class AmbiguousCreativeGenerationApplicationTests(unittest.TestCase):
+    def test_resolution_requires_exact_authoritative_ambiguous_gateway_state(self) -> None:
+        actor = SimpleNamespace(business_id="business-1")
+        receipt = SimpleNamespace(
+            id="receipt-1",
+            status=CreativeGenerationReceiptStatus.RUNNING,
+            source_job_id="gateway-job-1",
+        )
+        with (
+            patch.object(
+                creative_generation_app,
+                "get_creative_generation",
+                return_value=receipt,
+            ),
+            patch.object(
+                creative_generation_app,
+                "poll_ad_visual",
+                return_value=SimpleNamespace(
+                    status="failed",
+                    error_code="visual_provider_submit_http_400",
+                ),
+            ),
+            patch.object(creative_generation_app, "get_db") as get_db,
+        ):
+            resolved = creative_generation_app.abandon_ambiguous_creative_generation(
+                actor=actor,
+                receipt_id=receipt.id,
+            )
+
+        self.assertFalse(resolved)
+        get_db.assert_not_called()
+
+    def test_resolution_deletes_only_the_exact_ambiguous_gateway_binding(self) -> None:
+        actor = SimpleNamespace(business_id="business-1")
+        receipt = SimpleNamespace(
+            id="receipt-1",
+            status=CreativeGenerationReceiptStatus.RUNNING,
+            source_job_id="gateway-job-1",
+        )
+        repo = SimpleNamespace(abandon_ambiguous=Mock(return_value=True))
+        with (
+            patch.object(
+                creative_generation_app,
+                "get_creative_generation",
+                return_value=receipt,
+            ),
+            patch.object(
+                creative_generation_app,
+                "poll_ad_visual",
+                return_value=SimpleNamespace(
+                    status="failed",
+                    error_code="visual_gateway_submit_ambiguous",
+                ),
+            ) as poll,
+            patch.object(
+                creative_generation_app,
+                "get_db",
+                return_value=nullcontext(object()),
+            ),
+            patch.object(
+                creative_generation_app,
+                "CreativeGenerationReceiptRepository",
+                return_value=repo,
+            ),
+        ):
+            resolved = creative_generation_app.abandon_ambiguous_creative_generation(
+                actor=actor,
+                receipt_id=receipt.id,
+            )
+
+        self.assertTrue(resolved)
+        poll.assert_called_once_with(
+            job_id="gateway-job-1",
+            scope_id="business-1",
+        )
+        repo.abandon_ambiguous.assert_called_once_with(
+            actor=actor,
+            receipt_id="receipt-1",
+            source_job_id="gateway-job-1",
+        )
+
+
 class CreativeGenerationReceiptRepositoryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.conn = sqlite3.connect(":memory:")
@@ -199,6 +283,50 @@ class CreativeGenerationReceiptRepositoryTests(unittest.TestCase):
         with self.assertRaises(LookupError):
             self.repo.get(actor=self.actor, receipt_id=prepared.id)
         self.assertIsNone(self.repo.get_active(actor=self.actor))
+
+    def test_ambiguous_provider_submit_keeps_receipt_active_until_explicit_resolution(self) -> None:
+        prepared = self.prepare()
+        self.repo.begin_submission(actor=self.actor, receipt_id=prepared.id)
+
+        ambiguous = self.repo.remember_job(
+            actor=self.actor,
+            receipt_id=prepared.id,
+            source_job_id="gateway-job-ambiguous",
+            provider_status="failed",
+            provider_error_code="visual_gateway_submit_ambiguous",
+            now="2026-09-10T06:01:00+00:00",
+        )
+
+        self.assertEqual(ambiguous.status, CreativeGenerationReceiptStatus.RUNNING)
+        self.assertEqual(ambiguous.source_job_id, "gateway-job-ambiguous")
+        self.assertEqual(
+            self.repo.get_active(actor=self.actor).id,
+            prepared.id,
+        )
+        self.assertFalse(
+            self.repo.abandon(actor=self.actor, receipt_id=prepared.id)
+        )
+        self.assertFalse(
+            self.repo.abandon_ambiguous(
+                actor=self.actor,
+                receipt_id=prepared.id,
+                source_job_id="different-gateway-job",
+            )
+        )
+        self.assertTrue(
+            self.repo.abandon_ambiguous(
+                actor=self.actor,
+                receipt_id=prepared.id,
+                source_job_id="gateway-job-ambiguous",
+            )
+        )
+        with self.assertRaises(LookupError):
+            self.repo.get(actor=self.actor, receipt_id=prepared.id)
+        replacement = self.prepare("new visual after explicit resolution")
+        self.assertEqual(
+            replacement.request_text,
+            "new visual after explicit resolution",
+        )
 
     def test_delivered_receipt_remains_addressable_but_is_not_active(self) -> None:
         prepared = self.prepare()
