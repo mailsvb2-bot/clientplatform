@@ -738,6 +738,42 @@ def test_explicit_ambiguous_resolution_surfaces_provider_recheck_failure(
     )
 
 
+def test_explicit_ambiguous_resolution_reports_concurrent_state_change(
+    monkeypatch,
+) -> None:
+    callback = SimpleNamespace(
+        data="cpc:resolve:business-token:receipt-token",
+        answer=AsyncMock(),
+        from_user=SimpleNamespace(id=101),
+    )
+    state = SimpleNamespace()
+    actor = SimpleNamespace(business_id="business-id")
+    receipt = SimpleNamespace(id="receipt-id")
+
+    async def immediate_to_thread(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(studio.asyncio, "to_thread", immediate_to_thread)
+    monkeypatch.setattr(studio, "_actor_for_callback", AsyncMock(return_value=actor))
+    monkeypatch.setattr(
+        studio,
+        "_receipt_for_callback",
+        AsyncMock(return_value=receipt),
+    )
+    monkeypatch.setattr(
+        studio,
+        "abandon_ambiguous_creative_generation",
+        lambda **_kwargs: False,
+    )
+
+    asyncio.run(studio.resolve_ambiguous_creative_generation(callback, state))
+
+    callback.answer.assert_awaited_once_with(
+        "Состояние уже изменилось. Проверьте генерацию ещё раз.",
+        show_alert=True,
+    )
+
+
 def test_checking_expired_completed_asset_ends_deadlock_and_restores_both_entries(
     monkeypatch,
 ) -> None:
