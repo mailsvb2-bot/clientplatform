@@ -53,6 +53,7 @@ class GatewayConfig:
     transient_asset_cleanup_limit: int = 200
     daily_generation_limit: int = 100
     upstream_timeout_seconds: int = 90
+    upstream_media_idle_timeout_seconds: int = 60
     max_json_bytes: int = 128 * 1024
     max_source_bytes: int = 128 * 1024 * 1024
     font_path: str = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -76,6 +77,12 @@ class GatewayConfig:
             transient_asset_cleanup_limit=_env_int("VISUAL_GATEWAY_TRANSIENT_ASSET_CLEANUP_LIMIT", 200, 1, 5_000),
             daily_generation_limit=_env_int("VISUAL_GATEWAY_DAILY_GENERATION_LIMIT", 100, 1, 100000),
             upstream_timeout_seconds=_env_int("VISUAL_GATEWAY_UPSTREAM_TIMEOUT_SECONDS", 90, 5, 300),
+            upstream_media_idle_timeout_seconds=_env_int(
+                "VISUAL_GATEWAY_UPSTREAM_MEDIA_IDLE_TIMEOUT_SECONDS",
+                60,
+                5,
+                300,
+            ),
             max_json_bytes=_env_int("VISUAL_GATEWAY_MAX_JSON_BYTES", 128 * 1024, 4096, 2 * 1024 * 1024),
             max_source_bytes=_env_int("VISUAL_GATEWAY_MAX_SOURCE_BYTES", 128 * 1024 * 1024, 1024 * 1024, 512 * 1024 * 1024),
             font_path=str(os.getenv("VISUAL_GATEWAY_FONT_PATH", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf") or ""),
@@ -552,10 +559,21 @@ async def _upstream_content(request: web.Request, job_id: str, scope_id: str) ->
     config: GatewayConfig = request.app["config"]
     session: ClientSession = request.app["session"]
     query = urllib.parse.urlencode({"scope_id": scope_id})
+    connect_timeout = max(
+        1.0,
+        min(float(config.upstream_timeout_seconds), 30.0),
+    )
+    media_timeout = ClientTimeout(
+        total=None,
+        connect=connect_timeout,
+        sock_connect=connect_timeout,
+        sock_read=float(config.upstream_media_idle_timeout_seconds),
+    )
     try:
         async with session.get(
             config.upstream_url + f"/v1/creative/generations/{urllib.parse.quote(job_id, safe='')}/content?{query}",
             headers=_upstream_headers(config),
+            timeout=media_timeout,
         ) as response:
             if response.status < 200 or response.status >= 300:
                 raise GatewayError(502, f"provider_gateway_http_{response.status}")
