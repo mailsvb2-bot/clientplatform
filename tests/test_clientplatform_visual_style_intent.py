@@ -164,6 +164,7 @@ class VisualStyleIntentTests(unittest.TestCase):
         self.assertIn("Use a warm color temperature", compiled.prompt)
         self.assertIn("friendly and approachable", compiled.prompt)
         self.assertIn("Use a close-up composition", compiled.prompt)
+        self.assertNotIn("Autonomous composition default", compiled.prompt)
         self.assertIn(
             "Style choices may shape presentation but must never remove",
             compiled.prompt,
@@ -185,6 +186,7 @@ class VisualStyleIntentTests(unittest.TestCase):
         self.assertEqual(first, second)
         payload = json.loads(first)
         self.assertEqual(payload["version"], 2)
+        self.assertEqual(payload["intent"]["prompt_compiler_version"], 3)
         self.assertEqual(payload["intent"]["style_schema_version"], 2)
         self.assertEqual(payload["intent"]["style"]["color_temperature"], "warm")
         self.assertIn("Use a warm color temperature", payload["brief"]["prompt"])
@@ -236,6 +238,31 @@ class VisualStyleIntentTests(unittest.TestCase):
 
         self.assertIs(result, expected)
         self.assertIn("Use a warm color temperature", submit.call_args.args[0].prompt)
+
+    def test_previous_prompt_compiler_version_remains_loadable(self) -> None:
+        current = json.loads(
+            visual_creatives.freeze_business_image_payload(
+                request="ёж слушает аудиосессию и становится спокойнее"
+            )
+        )
+        current["intent"]["prompt_compiler_version"] = 2
+        legacy = json.dumps(
+            current,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        expected = type("Job", (), {"id": "job-compiler-v2"})()
+
+        with patch.object(visual_creatives, "submit_visual", return_value=expected) as submit:
+            result = visual_creatives.create_business_image_from_frozen_payload(
+                provider_payload_json=legacy,
+                scope_id="scope-1",
+                idempotency_key="legacy-compiler-stable-key",
+            )
+
+        self.assertIs(result, expected)
+        self.assertIn("listening unmistakable", submit.call_args.args[0].prompt)
 
     def test_legacy_version_one_frozen_payload_stays_loadable(self) -> None:
         current = json.loads(
