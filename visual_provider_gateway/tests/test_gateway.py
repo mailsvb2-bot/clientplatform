@@ -145,13 +145,13 @@ def test_crash_after_provider_acceptance_becomes_non_retryable_ambiguous_job(
     with pytest.raises(RuntimeError, match="process died"):
         svc.submit(payload(), client_id="client-a")
 
+    with store._connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM visual_jobs WHERE client_id='client-a' LIMIT 1"
+        ).fetchone()
+    assert row is not None
     reserved = store.get(
-        next(
-            row[0]
-            for row in store._connect().execute(
-                "SELECT id FROM visual_jobs WHERE client_id='client-a'"
-            ).fetchall()
-        ),
+        str(row[0]),
         client_id="client-a",
         scope_id="tenant-a",
     )
