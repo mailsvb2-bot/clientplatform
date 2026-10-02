@@ -51,11 +51,11 @@ def test_yandex_adapter_uses_natural_owner_description_without_compiler_meta() -
     assert "Render the owner's requested scene faithfully" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
     assert "Production constraints" not in adapted.prompt
-    assert "Без водяных знаков." in adapted.prompt
+    assert "Без водяных знаков" in adapted.prompt
     assert "Без выдуманных логотипов" in adapted.prompt
     assert "полностью в кадре" in adapted.prompt
     assert "Без читаемого текста" in adapted.prompt
-    assert "warm color temperature" in adapted.prompt
+    assert "тёплая гамма" in adapted.prompt
     assert "missing requested action" in adapted.negative_prompt
     assert len(adapted.prompt) <= 500
 
@@ -116,6 +116,45 @@ def test_yandex_adapter_keeps_generic_action_and_autonomous_story_scene() -> Non
     assert len(adapted.prompt) <= 500
 
 
+def test_yandex_adapter_preserves_multiple_selected_styles_with_semantics() -> None:
+    prompt = "\n".join(
+        [
+            "1. Create one polished visual.",
+            "2. Semantic fidelity to the owner's idea is the primary objective.",
+            '3. Owner request, preserve its meaning exactly: "ёж слушает аудиосессию и становится добрым".',
+            "4. If the subject is listening, make the listening unmistakable through visible audio interaction.",
+            "5. The transformation is mandatory visual evidence. Show the initial and final states of the same subject.",
+            "6. Visible-state translation: turn abstract qualities into concrete visual evidence.",
+            "7. Style choices may shape presentation but must never remove mandatory actions.",
+            "8. Blend in a warm, welcoming and approachable visual character.",
+            "9. Blend in a refined premium feel with restrained, polished visual cues.",
+            "10. Blend in an artistic, crafted visual treatment rather than a generic stock look.",
+            "11. Use credible natural details.",
+        ]
+    )
+    brief = CreativeBrief(
+        kind="image",
+        prompt=prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=(
+            "watermark; invented logo; cropped important subject; "
+            "readable advertising text baked into image"
+        ),
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
+
+    assert "Слушает аудио" in adapted.prompt
+    assert "исходное состояние" in adapted.prompt
+    assert "Стиль:" in adapted.prompt
+    assert "тёплый дружелюбный" in adapted.prompt
+    assert "премиальный" in adapted.prompt
+    assert "художественный" in adapted.prompt
+    assert "Без водяных знаков" in adapted.prompt
+    assert len(adapted.prompt) <= 500
+
+
 def test_yandex_motion_adapter_marks_keyframe_constraint_without_new_story() -> None:
     adapted = adapt_visual_brief_for_provider(
         _compiled_brief(kind="video"),
@@ -127,7 +166,7 @@ def test_yandex_motion_adapter_marks_keyframe_constraint_without_new_story() -> 
     assert "Owner request" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
     assert "Production constraints" not in adapted.prompt
-    assert "Без водяных знаков." in adapted.prompt
+    assert "Без водяных знаков" in adapted.prompt
     assert "Без выдуманных логотипов" in adapted.prompt
     assert "полностью в кадре" in adapted.prompt
     assert "Без читаемого текста" in adapted.prompt
@@ -165,9 +204,9 @@ def test_yandex_adapter_keeps_all_safety_clauses_for_long_owner_request() -> Non
 
     assert len(adapted.prompt) <= 500
     assert adapted.prompt.startswith("a hedgehog listens to a guided audio wellness session")
-    assert "герой слушает аудио" in adapted.prompt
+    assert "Слушает аудио" in adapted.prompt
     assert "исходное состояние" in adapted.prompt
-    assert "Без водяных знаков." in adapted.prompt
+    assert "Без водяных знаков" in adapted.prompt
     assert "Без выдуманных логотипов" in adapted.prompt
     assert "полностью в кадре" in adapted.prompt
     assert "Без читаемого текста" in adapted.prompt
@@ -182,7 +221,7 @@ def test_yandex_motion_adapter_keeps_all_safety_clauses_for_long_owner_request()
 
     assert len(adapted.prompt) <= 500
     assert adapted.prompt.startswith("Ключевой кадр для короткого вертикального видео:")
-    assert "Без водяных знаков." in adapted.prompt
+    assert "Без водяных знаков" in adapted.prompt
     assert "Без выдуманных логотипов" in adapted.prompt
     assert "полностью в кадре" in adapted.prompt
     assert "Без читаемого текста" in adapted.prompt
@@ -199,8 +238,8 @@ def test_runway_adapter_preserves_semantics_and_style_inside_hard_prompt_limit()
     assert "hedgehog listens to an audio session" in adapted.prompt
     assert "listening unmistakable" in adapted.prompt
     assert "transformation is mandatory" in adapted.prompt.casefold()
-    assert "warm color temperature" in adapted.prompt
-    assert "Без водяных знаков." in adapted.prompt
+    assert "тёплая гамма" in adapted.prompt
+    assert "Без водяных знаков" in adapted.prompt
     assert "Без выдуманных логотипов" in adapted.prompt
 
 
@@ -244,7 +283,7 @@ def test_engine_motion_adapter_never_forwards_compiler_control_language(monkeypa
     assert "Owner request" not in prompt
     assert "mandatory" not in prompt.casefold()
     assert "Production constraints" not in prompt
-    assert "Без водяных знаков." in prompt
+    assert "Без водяных знаков" in prompt
     assert "Без читаемого текста" in prompt
     assert len(prompt) <= 500
 
