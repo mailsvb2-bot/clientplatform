@@ -608,6 +608,93 @@ def test_video_button_recovers_from_stale_completed_image_and_keeps_video_flow(
     assert "AI-кадр" in target.answer.await_args.args[0]
 
 
+def test_ambiguous_submit_blocks_automatic_retry_and_requires_explicit_resolution(
+    monkeypatch,
+) -> None:
+    target = SimpleNamespace(answer=AsyncMock())
+    callback = SimpleNamespace(message=target)
+    actor = SimpleNamespace(business_id="business-id")
+    receipt = SimpleNamespace(
+        id="receipt-id",
+        status=CreativeGenerationReceiptStatus.RUNNING,
+        source_job_id="gateway-job-1",
+        delivery_claimed_at=None,
+    )
+    job = SimpleNamespace(
+        status="failed",
+        asset_ready=False,
+        error_code="visual_gateway_submit_ambiguous",
+    )
+
+    monkeypatch.setattr(
+        studio,
+        "_poll_existing",
+        AsyncMock(return_value=(receipt, job)),
+    )
+    monkeypatch.setattr(studio.control, "_callback_message", lambda _callback: target)
+    monkeypatch.setattr(studio.control, "_uuid_token", lambda _value: "business-token")
+
+    asyncio.run(
+        studio._continue_generation(
+            callback,
+            actor=actor,
+            receipt=receipt,
+        )
+    )
+
+    text = target.answer.await_args.args[0]
+    rows = _labels_and_callbacks(target.answer.await_args.kwargs["reply_markup"])
+    assert "не запускает новый платный job автоматически" in text
+    assert "мог уже быть принят провайдером" in text
+    assert (
+        "⚠️ Завершить неопределённый запрос",
+        "cpc:resolve:business-token:receipt-id",
+    ) in rows
+
+
+def test_explicit_ambiguous_resolution_warns_about_possible_prior_spend(
+    monkeypatch,
+) -> None:
+    target = SimpleNamespace(answer=AsyncMock())
+    callback = SimpleNamespace(
+        data="cpc:resolve:business-token:receipt-token",
+        answer=AsyncMock(),
+        from_user=SimpleNamespace(id=101),
+        message=target,
+    )
+    state = SimpleNamespace()
+    actor = SimpleNamespace(business_id="business-id")
+    receipt = SimpleNamespace(id="receipt-id")
+
+    async def immediate_to_thread(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(studio.asyncio, "to_thread", immediate_to_thread)
+    monkeypatch.setattr(studio, "_actor_for_callback", AsyncMock(return_value=actor))
+    monkeypatch.setattr(
+        studio,
+        "_receipt_for_callback",
+        AsyncMock(return_value=receipt),
+    )
+    monkeypatch.setattr(
+        studio,
+        "abandon_ambiguous_creative_generation",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(studio.control, "_callback_message", lambda _callback: target)
+    monkeypatch.setattr(studio, "_result_rows", lambda token: [["result", token]])
+
+    asyncio.run(studio.resolve_ambiguous_creative_generation(callback, state))
+
+    callback.answer.assert_awaited_once_with()
+    text = target.answer.await_args.args[0]
+    assert "предыдущий расход или результат нельзя полностью исключить" in text
+    assert "отдельного подтверждения" in text
+    assert target.answer.await_args.kwargs["reply_markup"] == [
+        ["result", "business-token"]
+    ]
+
+
 def test_checking_expired_completed_asset_ends_deadlock_and_restores_both_entries(
     monkeypatch,
 ) -> None:
