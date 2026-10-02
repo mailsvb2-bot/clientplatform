@@ -1517,7 +1517,13 @@ async def resolve_ambiguous_creative_generation(
             show_alert=True,
         )
         return
-    except (LookupError, TypeError, ValueError, VisualCreativeError):
+    except VisualCreativeError:
+        await callback.answer(
+            "Не удалось подтвердить состояние у генератора. Проверьте запрос ещё раз.",
+            show_alert=True,
+        )
+        return
+    except (LookupError, TypeError, ValueError):
         await callback.answer(
             "Не удалось подтвердить неопределённое состояние. Проверьте запрос ещё раз.",
             show_alert=True,
