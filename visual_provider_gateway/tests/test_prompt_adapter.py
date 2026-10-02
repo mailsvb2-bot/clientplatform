@@ -238,7 +238,7 @@ def test_runway_adapter_preserves_semantics_and_style_inside_hard_prompt_limit()
     assert "hedgehog listens to an audio session" in adapted.prompt
     assert "listening unmistakable" in adapted.prompt
     assert "transformation is mandatory" in adapted.prompt.casefold()
-    assert "тёплая гамма" in adapted.prompt
+    assert "warm color temperature" in adapted.prompt
     assert "Без водяных знаков" in adapted.prompt
     assert "Без выдуманных логотипов" in adapted.prompt
 
