@@ -202,10 +202,41 @@ def _yandex_natural_prompt_parts(brief: CreativeBrief) -> list[str]:
     return parts
 
 
-def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
-    prompt = _bounded_join(
-        _yandex_natural_prompt_parts(brief),
+def _bounded_yandex_prompt(
+    *,
+    scene: str,
+    brief: CreativeBrief,
+    extras: tuple[str, ...] = (),
+) -> str:
+    """Keep mandatory safety clauses inside Alice's hard prompt limit."""
+
+    safety = _natural_safety_parts(brief)
+    safety_block = _bounded_join(list(safety), limit=_YANDEX_PROMPT_LIMIT)
+    reserved = len(safety_block) + (1 if safety_block else 0)
+    scene_limit = max(80, _YANDEX_PROMPT_LIMIT - reserved)
+    bounded_scene = _bounded_join([scene], limit=scene_limit)
+    return _bounded_join(
+        [bounded_scene, *safety, *extras],
         limit=_YANDEX_PROMPT_LIMIT,
+    )
+
+
+def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
+    lines = _compiled_directives(brief.prompt)
+    owner_request = _compiled_owner_request(lines)
+    if not owner_request:
+        prompt = _bounded_join([brief.prompt], limit=_YANDEX_PROMPT_LIMIT)
+        return replace(brief, prompt=prompt)
+
+    extras = list(_compiled_style_directives(lines))
+    if str(brief.brand_context or "").strip():
+        extras.append(
+            "Контекст бренда: " + " ".join(str(brief.brand_context).split())
+        )
+    prompt = _bounded_yandex_prompt(
+        scene=owner_request,
+        brief=brief,
+        extras=tuple(extras),
     )
     return replace(brief, prompt=prompt)
 
@@ -213,24 +244,25 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
 def _adapt_yandex_motion(brief: CreativeBrief) -> CreativeBrief:
     lines = _compiled_directives(brief.prompt)
     owner_request = _compiled_owner_request(lines)
+    extras: list[str] = []
     if owner_request:
-        parts = [
-            "Ключевой кадр для короткого вертикального видео: " + owner_request,
-            *_natural_safety_parts(brief),
-            *_compiled_style_directives(lines),
-        ]
+        scene = "Ключевой кадр для короткого вертикального видео: " + owner_request
+        extras.extend(_compiled_style_directives(lines))
         if str(brief.brand_context or "").strip():
-            parts.append(
+            extras.append(
                 "Контекст бренда: " + " ".join(str(brief.brand_context).split())
             )
     else:
         # Provider-direct/legacy requests are already natural scene descriptions.
-        parts = [
+        scene = (
             "Ключевой кадр для короткого вертикального видео: "
-            + " ".join(str(brief.prompt or "").split()),
-            *_natural_safety_parts(brief),
-        ]
-    prompt = _bounded_join(parts, limit=_YANDEX_PROMPT_LIMIT)
+            + " ".join(str(brief.prompt or "").split())
+        )
+    prompt = _bounded_yandex_prompt(
+        scene=scene,
+        brief=brief,
+        extras=tuple(extras),
+    )
     return replace(brief, prompt=prompt)
 
 

@@ -77,6 +77,59 @@ def test_yandex_motion_adapter_marks_keyframe_constraint_without_new_story() -> 
     assert len(adapted.prompt) <= 500
 
 
+def _long_owner_brief(*, kind: str) -> CreativeBrief:
+    brief = _compiled_brief(kind=kind)
+    long_request = " ".join(
+        [
+            "a hedgehog listens to a guided audio wellness session in a calm room"
+            for _ in range(18)
+        ]
+    )
+    prompt = brief.prompt.replace(
+        "a prickly hedgehog listens to an audio session and becomes gentle",
+        long_request,
+    )
+    return CreativeBrief(
+        kind=brief.kind,
+        prompt=prompt,
+        country_code=brief.country_code,
+        aspect_ratio=brief.aspect_ratio,
+        duration_seconds=brief.duration_seconds,
+        negative_prompt=brief.negative_prompt,
+        brand_context=brief.brand_context,
+    )
+
+
+def test_yandex_adapter_keeps_all_safety_clauses_for_long_owner_request() -> None:
+    adapted = adapt_visual_brief_for_provider(
+        _long_owner_brief(kind="image"),
+        provider="yandexart",
+    )
+
+    assert len(adapted.prompt) <= 500
+    assert adapted.prompt.startswith("a hedgehog listens to a guided audio wellness session")
+    assert "Без водяных знаков." in adapted.prompt
+    assert "Без выдуманных логотипов" in adapted.prompt
+    assert "полностью в кадре" in adapted.prompt
+    assert "Без читаемого текста" in adapted.prompt
+    assert "Owner request" not in adapted.prompt
+
+
+def test_yandex_motion_adapter_keeps_all_safety_clauses_for_long_owner_request() -> None:
+    adapted = adapt_visual_brief_for_provider(
+        _long_owner_brief(kind="video"),
+        provider="yandexart_motion",
+    )
+
+    assert len(adapted.prompt) <= 500
+    assert adapted.prompt.startswith("Ключевой кадр для короткого вертикального видео:")
+    assert "Без водяных знаков." in adapted.prompt
+    assert "Без выдуманных логотипов" in adapted.prompt
+    assert "полностью в кадре" in adapted.prompt
+    assert "Без читаемого текста" in adapted.prompt
+    assert "Owner request" not in adapted.prompt
+
+
 def test_runway_adapter_preserves_semantics_and_style_inside_hard_prompt_limit() -> None:
     adapted = adapt_visual_brief_for_provider(
         _compiled_brief(kind="video"),
