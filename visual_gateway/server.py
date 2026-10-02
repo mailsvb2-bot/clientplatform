@@ -543,6 +543,7 @@ async def proxy_generation_get(request: web.Request) -> web.Response:
 
 
 async def _read_upstream_content_limited(response, *, limit: int) -> bytes:
+    expected_length = response.content_length
     chunks: list[bytes] = []
     total = 0
     async for chunk in response.content.iter_chunked(64 * 1024):
@@ -552,6 +553,8 @@ async def _read_upstream_content_limited(response, *, limit: int) -> bytes:
         if total > limit:
             raise GatewayError(502, "provider_gateway_source_too_large")
         chunks.append(chunk)
+    if expected_length is not None and total != int(expected_length):
+        raise GatewayError(502, "provider_gateway_source_incomplete")
     return b"".join(chunks)
 
 
