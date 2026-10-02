@@ -377,6 +377,132 @@ def test_yandexart_motion_waits_for_native_image_operation(monkeypatch):
     assert result.provider_payload["motion_duration_seconds"] == 5
 
 
+def test_yandex_motion_retries_local_render_without_resubmitting_paid_keyframe(
+    tmp_path,
+    monkeypatch,
+):
+    from visual_provider_gateway.providers import (
+        ProviderTransportError,
+        YandexArtMotionVideoProvider,
+    )
+
+    source = tmp_path / "paid-keyframe.png"
+    source.write_bytes(b"keyframe")
+    video = tmp_path / "recovered.mp4"
+    paid_submits = []
+    render_attempts = []
+
+    def fake_paid_submit(_self, _brief):
+        paid_submits.append(1)
+        return CreativeJob(
+            provider="yandexart",
+            kind="image",
+            status="succeeded",
+            external_id="paid-keyframe-1",
+            model="art://folder/aliceai-image-art-3.0",
+            mime_type="image/png",
+            asset_path=str(source),
+        )
+
+    def fake_render(_config, **kwargs):
+        render_attempts.append(kwargs["image_path"])
+        if len(render_attempts) == 1:
+            raise ProviderTransportError("motion_render_failed")
+        video.write_bytes(b"mp4")
+        return str(video)
+
+    monkeypatch.setattr(providers.YandexArtProvider, "submit", fake_paid_submit)
+    monkeypatch.setattr(providers, "_render_motion_video", fake_render)
+    provider = YandexArtMotionVideoProvider(
+        ProviderConfig(
+            name="yandexart_motion",
+            base_url="https://ai.api.cloud.yandex.net:443",
+            api_key="key",
+            model_image="art://folder/aliceai-image-art-3.0",
+            folder_id="folder",
+            output_dir=str(tmp_path),
+        )
+    )
+
+    first = provider.submit(
+        CreativeBrief(kind="video", prompt="animate", duration_seconds=5)
+    )
+
+    assert first.status == "running"
+    assert first.error_code == "motion_render_retryable"
+    assert first.provider_payload["motion_source_path"] == str(source)
+    assert source.exists()
+    assert len(paid_submits) == 1
+
+    recovered = provider.poll(first)
+
+    assert recovered.status == "succeeded"
+    assert recovered.mime_type == "video/mp4"
+    assert recovered.asset_path == str(video)
+    assert not source.exists()
+    assert "motion_source_path" not in recovered.provider_payload
+    assert len(paid_submits) == 1
+    assert render_attempts == [str(source), str(source)]
+
+
+def test_yandex_motion_bounds_local_render_retries_without_new_provider_submit(
+    tmp_path,
+    monkeypatch,
+):
+    from visual_provider_gateway.providers import (
+        ProviderTransportError,
+        YandexArtMotionVideoProvider,
+    )
+
+    source = tmp_path / "paid-keyframe.png"
+    source.write_bytes(b"keyframe")
+    paid_submits = []
+
+    def fake_paid_submit(_self, _brief):
+        paid_submits.append(1)
+        return CreativeJob(
+            provider="yandexart",
+            kind="image",
+            status="succeeded",
+            external_id="paid-keyframe-1",
+            model="art://folder/aliceai-image-art-3.0",
+            mime_type="image/png",
+            asset_path=str(source),
+        )
+
+    monkeypatch.setattr(providers.YandexArtProvider, "submit", fake_paid_submit)
+    monkeypatch.setattr(
+        providers,
+        "_render_motion_video",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ProviderTransportError("motion_render_failed")
+        ),
+    )
+    provider = YandexArtMotionVideoProvider(
+        ProviderConfig(
+            name="yandexart_motion",
+            base_url="https://ai.api.cloud.yandex.net:443",
+            api_key="key",
+            model_image="art://folder/aliceai-image-art-3.0",
+            folder_id="folder",
+            output_dir=str(tmp_path),
+        )
+    )
+
+    first = provider.submit(
+        CreativeBrief(kind="video", prompt="animate", duration_seconds=5)
+    )
+    second = provider.poll(first)
+    terminal = provider.poll(second)
+
+    assert first.status == "running"
+    assert second.status == "running"
+    assert terminal.status == "failed"
+    assert terminal.error_code == "motion_render_failed"
+    assert not source.exists()
+    assert len(paid_submits) == 1
+
+
 def test_current_alice_model_failure_is_not_masked_by_deprecated_fallback(monkeypatch):
     from visual_provider_gateway.providers import (
         ProviderTransportError,
