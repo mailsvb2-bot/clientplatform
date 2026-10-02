@@ -535,6 +535,19 @@ async def proxy_generation_get(request: web.Request) -> web.Response:
     return web.json_response(value, status=status)
 
 
+async def _read_upstream_content_limited(response, *, limit: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in response.content.iter_chunked(64 * 1024):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > limit:
+            raise GatewayError(502, "provider_gateway_source_too_large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 async def _upstream_content(request: web.Request, job_id: str, scope_id: str) -> tuple[bytes, str]:
     config: GatewayConfig = request.app["config"]
     session: ClientSession = request.app["session"]
@@ -548,9 +561,10 @@ async def _upstream_content(request: web.Request, job_id: str, scope_id: str) ->
                 raise GatewayError(502, f"provider_gateway_http_{response.status}")
             if response.content_length is not None and response.content_length > config.max_source_bytes:
                 raise GatewayError(502, "provider_gateway_source_too_large")
-            raw = await response.content.read(config.max_source_bytes + 1)
-            if len(raw) > config.max_source_bytes:
-                raise GatewayError(502, "provider_gateway_source_too_large")
+            raw = await _read_upstream_content_limited(
+                response,
+                limit=config.max_source_bytes,
+            )
             mime = str(response.headers.get("Content-Type") or "application/octet-stream").split(";", 1)[0].strip().lower()
             return raw, mime
     except (ClientError, asyncio.TimeoutError):
