@@ -8,9 +8,8 @@ from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.creative_generation_receipt_repository import (
     CreativeGenerationReceiptRepository,
 )
+from clientplatform.application.visual_creatives import poll_ad_visual
 from services.db import get_db, get_db_ro
-
-from .visual_creatives import poll_ad_visual
 
 
 def get_active_creative_generation(
@@ -105,6 +104,7 @@ def abandon_creative_generation(
             actor=actor,
             receipt_id=receipt_id,
         )
+
 
 def abandon_ambiguous_creative_generation(
     *,
