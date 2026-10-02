@@ -380,9 +380,14 @@ async def send_creative_studio_menu(
             "Платный AI-вызов ещё не начинался. Можно продолжить или изменить описание."
         )
     elif active.delivery_claimed_at:
+        delivery_subject = (
+            "готового видео"
+            if _receipt_kind(active) == "video"
+            else "готовой картинки"
+        )
         body = (
             "🎨 Картинки и видео\n\n"
-            "Отправка готовой картинки уже начиналась и могла завершиться. "
+            f"Отправка {delivery_subject} уже начиналась и могла завершиться. "
             "ClientPlatform не повторит её автоматически, чтобы не прислать дубль."
         )
     else:
@@ -1400,7 +1405,11 @@ async def generate_creative_image(callback: CallbackQuery, state: FSMContext) ->
     noun = "видео" if _receipt_kind(receipt) == "video" else "картинку"
     await _replace_or_answer(
         control._callback_message(callback),
-        f"⏳ Создаю {noun}. Готовый файл отправлю сюда автоматически.",
+        (
+            f"⏳ Начинаю создавать {noun}. Если генерация завершится в ближайшую "
+            "минуту, сразу отправлю файл сюда. Если потребуется больше времени, "
+            "покажу кнопку проверки готовности — повторный платный job не запускается."
+        ),
         reply_markup=None,
     )
     await _continue_generation(
