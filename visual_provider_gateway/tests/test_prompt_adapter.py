@@ -86,7 +86,10 @@ def test_yandex_adapter_preserves_exact_owner_listening_and_transformation() -> 
     assert "прослушивание аудио" in adapted.prompt
     assert "наушники" in adapted.prompt
     assert "до и после изменения" in adapted.prompt
-    assert "исходное и конечное" in adapted.prompt
+    assert "исходное состояние" in adapted.prompt
+    assert "результат изменения" in adapted.prompt
+    assert "Эмоции и качества" in adapted.prompt
+    assert "выражению, позе и фактуре" in adapted.prompt
     assert "Owner request" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
     assert len(adapted.prompt) <= 500
@@ -141,6 +144,8 @@ def test_yandex_adapter_keeps_all_safety_clauses_for_long_owner_request() -> Non
 
     assert len(adapted.prompt) <= 500
     assert adapted.prompt.startswith("a hedgehog listens to a guided audio wellness session")
+    assert "герой слушает аудио" in adapted.prompt
+    assert "исходное состояние" in adapted.prompt
     assert "Без водяных знаков." in adapted.prompt
     assert "Без выдуманных логотипов" in adapted.prompt
     assert "полностью в кадре" in adapted.prompt
@@ -245,7 +250,7 @@ def test_engine_applies_adapter_only_after_provider_selection(monkeypatch) -> No
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 4
+    assert result.provider_payload["prompt_adapter_version"] == 5
     assert "Owner request" not in captured["brief"].prompt
     assert "hedgehog listens to an audio session" in captured["brief"].prompt
 
