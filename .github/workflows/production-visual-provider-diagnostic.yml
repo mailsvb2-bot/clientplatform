@@ -18,7 +18,7 @@ jobs:
   diagnose:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[probe-production-visual]')
     runs-on: ubuntu-22.04
-    timeout-minutes: 5
+    timeout-minutes: 20
     env:
       SSH_HOST: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_HOST }}
       SSH_USER: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_USER }}
@@ -51,6 +51,42 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$known_hosts"
           chmod 600 "$key" "$known_hosts"
           ssh-keygen -y -f "$key" >/dev/null
+
+      - name: Wait for marked production deploy
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[recover-production-deploy]')
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const ref = context.sha;
+            const statusContext = 'ops/clientplatform-production-deploy-recovery';
+            const deadline = Date.now() + 15 * 60 * 1000;
+
+            while (Date.now() < deadline) {
+              const { data } = await github.rest.repos.listCommitStatusesForRef({
+                owner,
+                repo,
+                ref,
+                per_page: 100,
+              });
+              const deploy = data.find((status) => status.context === statusContext);
+              if (deploy?.state === 'success') {
+                core.info('Exact production deploy recovery completed; starting visual probe.');
+                return;
+              }
+              if (deploy && ['failure', 'error'].includes(deploy.state)) {
+                core.setFailed(
+                  `Production deploy recovery did not succeed: ${deploy.description || deploy.state}`
+                );
+                return;
+              }
+              await new Promise((resolve) => setTimeout(resolve, 10_000));
+            }
+
+            core.setFailed(
+              'Timed out waiting for exact production deploy recovery status before visual probe.'
+            );
 
       - name: Probe live production visual provider state
         id: probe
