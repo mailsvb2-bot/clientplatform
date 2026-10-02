@@ -1594,7 +1594,19 @@ async def open_ad_materials(
             [
                 [("✍️ Подготовить текст", f"cpa:{token}:copy")],
                 [("🖼 Создать картинку", f"cpc:new:{token}")],
+                [
+                    (
+                        "картинка для рекламы (возможность редактирования)",
+                        f"cpc:editad:image:{token}",
+                    )
+                ],
                 [("🎬 Создать видео", f"cpc:video:{token}")],
+                [
+                    (
+                        "видео для рекламы (возможность редактирования)",
+                        f"cpc:editad:video:{token}",
+                    )
+                ],
                 [("📎 Использовать своё медиа", f"cpo:start:{token}")],
                 *_popup_navigation_rows(token, back_callback=f"cpo:ads:{token}"),
             ]

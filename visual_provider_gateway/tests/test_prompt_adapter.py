@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from clientplatform.domain.visual_prompt_compiler import compile_visual_prompt
 from visual_provider_gateway import engine
 from visual_provider_gateway.models import CreativeBrief, CreativeJob
 from visual_provider_gateway.prompt_adapter import adapt_visual_brief_for_provider
@@ -56,6 +57,38 @@ def test_yandex_adapter_uses_natural_owner_description_without_compiler_meta() -
     assert "Без читаемого текста" in adapted.prompt
     assert "warm color temperature" in adapted.prompt
     assert "missing requested action" in adapted.negative_prompt
+    assert len(adapted.prompt) <= 500
+
+
+def test_yandex_adapter_preserves_exact_owner_listening_and_transformation() -> None:
+    removed_product_method = "метро" + "терапию"
+    request = (
+        "ёж, который слушает "
+        + removed_product_method
+        + " и становится добрым и пушистым"
+    )
+    compiled = compile_visual_prompt(
+        request=request,
+        kind="image",
+    )
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
+
+    assert adapted.prompt.startswith(request)
+    assert removed_product_method in adapted.prompt
+    assert "прослушивание аудио" in adapted.prompt
+    assert "наушники" in adapted.prompt
+    assert "до и после изменения" in adapted.prompt
+    assert "исходное и конечное" in adapted.prompt
+    assert "Owner request" not in adapted.prompt
+    assert "mandatory" not in adapted.prompt.casefold()
     assert len(adapted.prompt) <= 500
 
 
@@ -212,7 +245,7 @@ def test_engine_applies_adapter_only_after_provider_selection(monkeypatch) -> No
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 3
+    assert result.provider_payload["prompt_adapter_version"] == 4
     assert "Owner request" not in captured["brief"].prompt
     assert "hedgehog listens to an audio session" in captured["brief"].prompt
 

@@ -56,6 +56,37 @@ def test_result_menu_keeps_video_creation_visible() -> None:
     assert ("✨ Создать ещё картинку", "cpc:new:business-token") in rows
     assert ("🎬 Создать видео", "cpc:video:business-token") in rows
 
+def test_post_image_flow_buttons_are_symmetric_to_post_video_flow(monkeypatch) -> None:
+    image_receipt = SimpleNamespace(
+        id="image-receipt",
+        source_job_id="image-job",
+        kind="image",
+    )
+    video_receipt = SimpleNamespace(
+        id="video-receipt",
+        source_job_id="video-job",
+        kind="video",
+    )
+    monkeypatch.setattr(studio, "_receipt_kind", lambda receipt: receipt.kind)
+    monkeypatch.setattr(
+        studio,
+        "_receipt_callback",
+        lambda action, token, receipt: f"receipt:{action}:{token}:{receipt.id}",
+    )
+
+    image_rows = _labels_and_callbacks(
+        studio._result_rows("business-token", image_receipt)
+    )
+    video_rows = _labels_and_callbacks(
+        studio._result_rows("business-token", video_receipt)
+    )
+
+    assert ("✨ Создать ещё картинку", "cpc:new:business-token") in image_rows
+    assert ("🎬 Создать видео", "cpc:video:business-token") in image_rows
+    assert ("✨ Создать картинку", "cpc:new:business-token") in video_rows
+    assert ("🎬 Создать ещё видео", "cpc:video:business-token") in video_rows
+
+
 def test_prepared_image_can_switch_to_video(monkeypatch) -> None:
     active = SimpleNamespace(
         status=CreativeGenerationReceiptStatus.PREPARED,
@@ -446,7 +477,7 @@ def test_video_delivery_enables_streaming(monkeypatch, tmp_path) -> None:
     assert target.answer_video.await_args.kwargs["supports_streaming"] is True
 
 
-def test_download_creative_file_sends_document(monkeypatch, tmp_path) -> None:
+def test_download_creative_file_sends_document_with_result_actions(monkeypatch, tmp_path) -> None:
     asset = tmp_path / "creative.jpg"
     asset.write_bytes(b"jpeg")
     target = SimpleNamespace(answer_document=AsyncMock())
@@ -457,7 +488,7 @@ def test_download_creative_file_sends_document(monkeypatch, tmp_path) -> None:
     )
     state = SimpleNamespace()
     actor = SimpleNamespace(business_id="business-id")
-    receipt = SimpleNamespace(source_job_id="job-123")
+    receipt = SimpleNamespace(id="receipt-id", source_job_id="job-123")
     job = SimpleNamespace(
         id="job-123",
         status="succeeded",
@@ -471,6 +502,11 @@ def test_download_creative_file_sends_document(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(studio.asyncio, "to_thread", immediate_to_thread)
     monkeypatch.setattr(studio, "_actor_for_callback", AsyncMock(return_value=actor))
     monkeypatch.setattr(studio, "_receipt_for_callback", AsyncMock(return_value=receipt))
+    monkeypatch.setattr(
+        studio,
+        "_receipt_callback",
+        lambda action, token, _receipt: f"receipt:{action}:{token}",
+    )
     monkeypatch.setattr(studio, "poll_ad_visual", lambda **_kwargs: job)
     monkeypatch.setattr(
         studio,
@@ -486,6 +522,12 @@ def test_download_creative_file_sends_document(monkeypatch, tmp_path) -> None:
     document = target.answer_document.await_args.args[0]
     assert document.filename == "clientplatform-image.jpg"
     assert target.answer_document.await_args.kwargs["caption"] == "📥 Файл для сохранения"
+    rows = _labels_and_callbacks(
+        target.answer_document.await_args.kwargs["reply_markup"]
+    )
+    assert ("📥 Скачать файл", "receipt:download:business-token") in rows
+    assert ("✨ Создать ещё картинку", "cpc:new:business-token") in rows
+    assert ("🎬 Создать видео", "cpc:video:business-token") in rows
 
 
 def test_download_creative_file_reports_expired_asset(monkeypatch) -> None:
