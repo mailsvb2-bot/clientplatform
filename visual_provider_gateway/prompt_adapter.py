@@ -114,7 +114,7 @@ def _natural_safety_parts(brief: CreativeBrief) -> tuple[str, ...]:
         or "invented logo" in folded_negative
     )
     if watermark and invented_logo:
-        parts.append("Без водяных знаков и выдуманных логотипов.")
+        parts.append("Без водяных знаков. Без выдуманных логотипов.")
     elif watermark:
         parts.append("Без водяных знаков.")
     elif invented_logo:
