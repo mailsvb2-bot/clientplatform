@@ -224,6 +224,93 @@ def test_video_status_explains_motion_fallback(monkeypatch) -> None:
     assert "не генерация движущейся сцены" in text
 
 
+def test_generate_video_status_does_not_promise_unbounded_auto_delivery(monkeypatch) -> None:
+    target = SimpleNamespace(answer=AsyncMock())
+    callback = SimpleNamespace(
+        data="cpc:generate:business-token:receipt-token",
+        answer=AsyncMock(),
+        from_user=SimpleNamespace(id=101),
+        message=target,
+    )
+    state = SimpleNamespace()
+    actor = SimpleNamespace(business_id="business-id")
+    receipt = SimpleNamespace(
+        id="receipt-id",
+        provider_payload_json="payload",
+    )
+    continue_generation = AsyncMock()
+
+    monkeypatch.setattr(studio, "_actor_for_callback", AsyncMock(return_value=actor))
+    monkeypatch.setattr(
+        studio,
+        "_receipt_for_callback",
+        AsyncMock(return_value=receipt),
+    )
+    monkeypatch.setattr(studio, "_receipt_kind", lambda _receipt: "video")
+    monkeypatch.setattr(studio, "_continue_generation", continue_generation)
+    monkeypatch.setattr(studio.control, "_callback_message", lambda _callback: target)
+
+    asyncio.run(studio.generate_creative_image(callback, state))
+
+    status = target.answer.await_args.args[0]
+    assert "в ближайшую минуту" in status
+    assert "кнопку проверки готовности" in status
+    assert "повторный платный job не запускается" in status
+    assert "отправлю сюда автоматически" not in status
+    continue_generation.assert_awaited_once_with(
+        callback,
+        actor=actor,
+        receipt=receipt,
+        auto_wait=True,
+    )
+
+
+def test_active_video_delivery_recovery_names_video_not_picture(monkeypatch) -> None:
+    active = SimpleNamespace(
+        status=CreativeGenerationReceiptStatus.SUCCEEDED,
+        delivery_claimed_at="2026-10-02T00:00:00+00:00",
+    )
+    monkeypatch.setattr(studio, "_receipt_kind", lambda _receipt: "video")
+    text_target = SimpleNamespace(answer=AsyncMock())
+    actor = SimpleNamespace(
+        user_id=101,
+        business_id="business-id",
+        assert_can_manage_promotions=lambda: None,
+    )
+
+    monkeypatch.setattr(studio.control, "_actor", AsyncMock(return_value=actor))
+    monkeypatch.setattr(studio, "_active", AsyncMock(return_value=active))
+    monkeypatch.setattr(
+        studio,
+        "_retire_unavailable_completed_receipt",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        studio,
+        "visual_generation_ready",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        studio,
+        "visual_video_generation_mode",
+        lambda **_kwargs: "motion",
+    )
+    monkeypatch.setattr(studio.control, "_uuid_token", lambda _value: "business-token")
+    monkeypatch.setattr(studio, "_menu_rows", lambda *_args, **_kwargs: None)
+
+    asyncio.run(
+        studio.send_creative_studio_menu(
+            text_target,
+            user_id=101,
+            business_id="business-id",
+        )
+    )
+
+    body = text_target.answer.await_args.args[0]
+    assert "Отправка готового видео" in body
+    assert "готовой картинки" not in body
+
+
 def test_result_menu_exposes_download_for_completed_receipt(monkeypatch) -> None:
     receipt = SimpleNamespace(source_job_id="job-123")
     monkeypatch.setattr(
