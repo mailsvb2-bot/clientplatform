@@ -69,6 +69,7 @@ _TRANSIENT_CONTENT_ERRORS = frozenset({
     "visual_gateway_http_502",
     "visual_gateway_http_503",
     "visual_gateway_http_504",
+    "visual_gateway_response_incomplete",
 })
 _CONTENT_RETRY_BASE_SECONDS = 0.5
 _CONTENT_RETRY_CAP_SECONDS = 10.0
@@ -219,12 +220,16 @@ def _headers(*, json_body: bool = False) -> dict[str, str]:
 
 def _read_limited(response: Any, limit: int) -> bytes:
     content_length = str(response.headers.get("Content-Length") or "").strip()
+    expected_length: int | None = None
     if content_length:
         try:
-            if int(content_length) > limit:
-                raise VisualCreativeGatewayError("visual_gateway_response_too_large")
+            parsed_length = int(content_length)
         except ValueError:
-            pass
+            parsed_length = -1
+        if parsed_length >= 0:
+            expected_length = parsed_length
+            if expected_length > limit:
+                raise VisualCreativeGatewayError("visual_gateway_response_too_large")
     chunks: list[bytes] = []
     total = 0
     while True:
@@ -235,6 +240,8 @@ def _read_limited(response: Any, limit: int) -> bytes:
         if total > limit:
             raise VisualCreativeGatewayError("visual_gateway_response_too_large")
         chunks.append(chunk)
+    if expected_length is not None and total != expected_length:
+        raise VisualCreativeGatewayError("visual_gateway_response_incomplete")
     return b"".join(chunks)
 
 
