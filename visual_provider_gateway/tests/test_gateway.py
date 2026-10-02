@@ -125,6 +125,58 @@ def test_service_submit_retry_does_not_duplicate_provider_call(tmp_path, monkeyp
     assert mime == "image/png"
 
 
+def test_crash_after_provider_acceptance_becomes_non_retryable_ambiguous_job(
+    tmp_path,
+    monkeypatch,
+):
+    class CrashAfterSubmitEngine:
+        def __init__(self):
+            self.generations = 0
+
+        def generate(self, _brief, *, wait_seconds=0):
+            del wait_seconds
+            self.generations += 1
+            raise RuntimeError("process died after provider submit")
+
+    store = JobStore(str(tmp_path / "jobs.sqlite3"))
+    engine = CrashAfterSubmitEngine()
+    svc = VisualGatewayService(store=store, engine=engine)
+
+    with pytest.raises(RuntimeError, match="process died"):
+        svc.submit(payload(), client_id="client-a")
+
+    reserved = store.get(
+        next(
+            row[0]
+            for row in store._connect().execute(
+                "SELECT id FROM visual_jobs WHERE client_id='client-a'"
+            ).fetchall()
+        ),
+        client_id="client-a",
+        scope_id="tenant-a",
+    )
+    assert reserved.status == "running"
+    assert reserved.provider == ""
+
+    monkeypatch.setattr(
+        "visual_provider_gateway.service.time.time",
+        lambda: reserved.updated_at + 181,
+    )
+    ambiguous = svc.poll(
+        reserved.id,
+        client_id="client-a",
+        scope_id="tenant-a",
+    )
+    assert ambiguous["status"] == "failed"
+    assert ambiguous["error_code"] == "visual_gateway_submit_ambiguous"
+
+    repeated = svc.submit(payload(), client_id="client-a")
+    assert repeated["id"] == reserved.id
+    assert repeated["status"] == "failed"
+    assert repeated["error_code"] == "visual_gateway_submit_ambiguous"
+    assert engine.generations == 1
+
+
 def test_provider_state_survives_service_restart_between_submit_and_poll(tmp_path):
     db_path = tmp_path / "jobs.sqlite3"
 
