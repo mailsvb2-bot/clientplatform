@@ -632,7 +632,11 @@ def test_ambiguous_submit_blocks_automatic_retry_and_requires_explicit_resolutio
         AsyncMock(return_value=(receipt, job)),
     )
     monkeypatch.setattr(studio.control, "_callback_message", lambda _callback: target)
-    monkeypatch.setattr(studio.control, "_uuid_token", lambda _value: "business-token")
+    monkeypatch.setattr(
+        studio.control,
+        "_uuid_token",
+        lambda value: "receipt-token" if value == "receipt-id" else "business-token",
+    )
 
     asyncio.run(
         studio._continue_generation(
@@ -648,7 +652,7 @@ def test_ambiguous_submit_blocks_automatic_retry_and_requires_explicit_resolutio
     assert "мог уже быть принят провайдером" in text
     assert (
         "⚠️ Завершить неопределённый запрос",
-        "cpc:resolve:business-token:receipt-id",
+        "cpc:resolve:business-token:receipt-token",
     ) in rows
 
 
