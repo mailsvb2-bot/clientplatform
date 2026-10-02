@@ -243,7 +243,7 @@ def _adapt_runway(brief: CreativeBrief) -> CreativeBrief:
         "requested actions, relationships and state changes."
     )
     prompt = _bounded_join(
-        [prefix, *_priority_lines(brief)],
+        [prefix, *_priority_lines(brief), *_natural_safety_parts(brief)],
         limit=_RUNWAY_PROMPT_LIMIT,
     )
     return replace(brief, prompt=prompt)
