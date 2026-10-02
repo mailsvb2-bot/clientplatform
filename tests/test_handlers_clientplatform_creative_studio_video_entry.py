@@ -56,6 +56,37 @@ def test_result_menu_keeps_video_creation_visible() -> None:
     assert ("✨ Создать ещё картинку", "cpc:new:business-token") in rows
     assert ("🎬 Создать видео", "cpc:video:business-token") in rows
 
+def test_post_image_flow_buttons_are_symmetric_to_post_video_flow(monkeypatch) -> None:
+    image_receipt = SimpleNamespace(
+        id="image-receipt",
+        source_job_id="image-job",
+        kind="image",
+    )
+    video_receipt = SimpleNamespace(
+        id="video-receipt",
+        source_job_id="video-job",
+        kind="video",
+    )
+    monkeypatch.setattr(studio, "_receipt_kind", lambda receipt: receipt.kind)
+    monkeypatch.setattr(
+        studio,
+        "_receipt_callback",
+        lambda action, token, receipt: f"receipt:{action}:{token}:{receipt.id}",
+    )
+
+    image_rows = _labels_and_callbacks(
+        studio._result_rows("business-token", image_receipt)
+    )
+    video_rows = _labels_and_callbacks(
+        studio._result_rows("business-token", video_receipt)
+    )
+
+    assert ("✨ Создать ещё картинку", "cpc:new:business-token") in image_rows
+    assert ("🎬 Создать видео", "cpc:video:business-token") in image_rows
+    assert ("✨ Создать картинку", "cpc:new:business-token") in video_rows
+    assert ("🎬 Создать ещё видео", "cpc:video:business-token") in video_rows
+
+
 def test_prepared_image_can_switch_to_video(monkeypatch) -> None:
     active = SimpleNamespace(
         status=CreativeGenerationReceiptStatus.PREPARED,
