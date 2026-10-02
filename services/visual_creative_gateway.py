@@ -15,7 +15,15 @@ from typing import Any
 
 
 class VisualCreativeGatewayError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        code: str,
+        *,
+        retry_after_seconds: float | None = None,
+    ) -> None:
+        super().__init__(code)
+        self.code = str(code)
+        self.retry_after_seconds = retry_after_seconds
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,11 +62,17 @@ _RENDER_SHA_RE = re.compile(r"[0-9a-f]{64}")
 _RENDER_FORMATS = frozenset({"square", "feed", "story", "landscape"})
 _TRANSIENT_CONTENT_ERRORS = frozenset({
     "visual_gateway_http_404",
+    "visual_gateway_http_408",
+    "visual_gateway_http_425",
+    "visual_gateway_http_429",
+    "visual_gateway_http_500",
     "visual_gateway_http_502",
     "visual_gateway_http_503",
     "visual_gateway_http_504",
 })
-_CONTENT_RETRY_DELAYS = (0.25, 0.5, 1.0, 2.0)
+_CONTENT_RETRY_BASE_SECONDS = 0.5
+_CONTENT_RETRY_CAP_SECONDS = 10.0
+_CONTENT_RETRY_AFTER_CAP_SECONDS = 30.0
 
 _RENDER_DIMENSIONS = {"square": (1080, 1080), "feed": (1080, 1350), "story": (1080, 1920), "landscape": (1200, 628)}
 
@@ -90,6 +104,86 @@ def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(minimum, min(value, maximum))
+
+
+def _content_recovery_deadline_seconds(kind: str) -> int:
+    normalized = str(kind or "").strip().lower()
+    if normalized == "video":
+        return _env_int(
+            "VISUAL_CONTENT_RECOVERY_VIDEO_SECONDS",
+            120,
+            minimum=10,
+            maximum=600,
+        )
+    return _env_int(
+        "VISUAL_CONTENT_RECOVERY_IMAGE_SECONDS",
+        60,
+        minimum=5,
+        maximum=300,
+    )
+
+
+def _content_transfer_timeout_seconds(kind: str) -> int:
+    normalized = str(kind or "").strip().lower()
+    if normalized == "video":
+        return _env_int(
+            "VISUAL_CONTENT_TRANSFER_VIDEO_TIMEOUT_SECONDS",
+            180,
+            minimum=10,
+            maximum=300,
+        )
+    return _env_int(
+        "VISUAL_CONTENT_TRANSFER_IMAGE_TIMEOUT_SECONDS",
+        60,
+        minimum=5,
+        maximum=300,
+    )
+
+
+def _content_retry_delay(
+    job_id: str,
+    attempt: int,
+    *,
+    retry_after_seconds: float | None = None,
+) -> float:
+    exponent = max(0, min(int(attempt), 8))
+    base = min(
+        _CONTENT_RETRY_BASE_SECONDS * (2 ** exponent),
+        _CONTENT_RETRY_CAP_SECONDS,
+    )
+    digest = hashlib.sha256(
+        f"{str(job_id or '')}:{exponent}".encode("utf-8", "replace")
+    ).digest()
+    jitter = 0.80 + (digest[0] / 255.0) * 0.40
+    delay = base * jitter
+    if retry_after_seconds is not None:
+        try:
+            retry_after = float(retry_after_seconds)
+        except (TypeError, ValueError):
+            retry_after = 0.0
+        if 0.0 < retry_after < 1_000_000.0:
+            delay = max(delay, min(retry_after, _CONTENT_RETRY_AFTER_CAP_SECONDS))
+    return min(delay, _CONTENT_RETRY_AFTER_CAP_SECONDS)
+
+
+def _content_error_is_transient(exc: VisualCreativeGatewayError) -> bool:
+    code = str(exc or "").strip()
+    return code in _TRANSIENT_CONTENT_ERRORS or code.startswith(
+        "visual_gateway_transport_"
+    )
+
+
+def _retry_after_seconds(value: object) -> float | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not (0.0 < seconds < 1_000_000.0):
+        return None
+    return min(seconds, _CONTENT_RETRY_AFTER_CAP_SECONDS)
 
 
 def _base_url() -> str:
@@ -179,12 +273,16 @@ def _request(
             headers = {str(k).lower(): str(v) for k, v in response.headers.items()}
             return headers, raw
     except urllib.error.HTTPError as exc:
+        retry_after = _retry_after_seconds(
+            exc.headers.get("Retry-After") if exc.headers is not None else None
+        )
         try:
             exc.read(65536)
         except OSError:
             pass
         raise VisualCreativeGatewayError(
-            f"visual_gateway_http_{int(exc.code)}"
+            f"visual_gateway_http_{int(exc.code)}",
+            retry_after_seconds=retry_after,
         ) from None
     except urllib.error.URLError as exc:
         raise VisualCreativeGatewayError(
@@ -351,26 +449,35 @@ def download_visual(job: VisualCreativeJob, *, output_dir: str | None = None) ->
         maximum=1024 * 1024 * 1024,
     )
     content_path = f"/v1/creative/generations/{token}/content?{query}"
-    last_error: VisualCreativeGatewayError | None = None
-    for attempt in range(len(_CONTENT_RETRY_DELAYS) + 1):
+    recovery_deadline = (
+        time.monotonic() + _content_recovery_deadline_seconds(job.kind)
+    )
+    transfer_timeout = _content_transfer_timeout_seconds(job.kind)
+    attempt = 0
+    while True:
         try:
             headers, raw = _request(
                 "GET",
                 content_path,
                 max_bytes=max_media,
+                timeout_seconds=transfer_timeout,
             )
             break
         except VisualCreativeGatewayError as exc:
-            code = str(exc or "").strip()
-            transient = code in _TRANSIENT_CONTENT_ERRORS or code.startswith(
-                "visual_gateway_transport_"
-            )
-            if not transient or attempt >= len(_CONTENT_RETRY_DELAYS):
+            if not _content_error_is_transient(exc):
                 raise
-            last_error = exc
-            time.sleep(_CONTENT_RETRY_DELAYS[attempt])
-    else:  # pragma: no cover - loop exits by success or exception
-        raise last_error or VisualCreativeGatewayError("visual_content_not_ready")
+            remaining = recovery_deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            delay = _content_retry_delay(
+                job.id,
+                attempt,
+                retry_after_seconds=exc.retry_after_seconds,
+            )
+            if delay >= remaining:
+                raise
+            time.sleep(delay)
+            attempt += 1
     mime = str(headers.get("content-type") or job.mime_type or "").split(";", 1)[0].strip().lower()
     expected = "video/" if job.kind == "video" else "image/"
     if mime and mime != "application/octet-stream" and not mime.startswith(expected):
