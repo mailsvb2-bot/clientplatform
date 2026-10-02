@@ -200,6 +200,50 @@ class CreativeGenerationReceiptRepositoryTests(unittest.TestCase):
             self.repo.get(actor=self.actor, receipt_id=prepared.id)
         self.assertIsNone(self.repo.get_active(actor=self.actor))
 
+    def test_ambiguous_provider_submit_keeps_receipt_active_until_explicit_resolution(self) -> None:
+        prepared = self.prepare()
+        self.repo.begin_submission(actor=self.actor, receipt_id=prepared.id)
+
+        ambiguous = self.repo.remember_job(
+            actor=self.actor,
+            receipt_id=prepared.id,
+            source_job_id="gateway-job-ambiguous",
+            provider_status="failed",
+            provider_error_code="visual_gateway_submit_ambiguous",
+            now="2026-09-10T06:01:00+00:00",
+        )
+
+        self.assertEqual(ambiguous.status, CreativeGenerationReceiptStatus.RUNNING)
+        self.assertEqual(ambiguous.source_job_id, "gateway-job-ambiguous")
+        self.assertEqual(
+            self.repo.get_active(actor=self.actor).id,
+            prepared.id,
+        )
+        self.assertFalse(
+            self.repo.abandon(actor=self.actor, receipt_id=prepared.id)
+        )
+        self.assertFalse(
+            self.repo.abandon_ambiguous(
+                actor=self.actor,
+                receipt_id=prepared.id,
+                source_job_id="different-gateway-job",
+            )
+        )
+        self.assertTrue(
+            self.repo.abandon_ambiguous(
+                actor=self.actor,
+                receipt_id=prepared.id,
+                source_job_id="gateway-job-ambiguous",
+            )
+        )
+        with self.assertRaises(LookupError):
+            self.repo.get(actor=self.actor, receipt_id=prepared.id)
+        replacement = self.prepare("new visual after explicit resolution")
+        self.assertEqual(
+            replacement.request_text,
+            "new visual after explicit resolution",
+        )
+
     def test_delivered_receipt_remains_addressable_but_is_not_active(self) -> None:
         prepared = self.prepare()
         self.repo.begin_submission(actor=self.actor, receipt_id=prepared.id)
