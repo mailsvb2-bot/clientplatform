@@ -203,7 +203,7 @@ def _compiled_semantic_visual_cues(
 
     if has("if the subject is listening"):
         cues.append(
-            "Явно видно прослушивание аудио через наушники, колонку или устройство."
+            "Явно видно, что герой слушает аудио: наушники, колонка или устройство."
         )
     if has("if the subject is watching"):
         cues.append("Явно видна связь взгляда персонажа с экраном или источником.")
@@ -223,20 +223,19 @@ def _compiled_semantic_visual_cues(
     ):
         if str(kind or "").strip().lower() == "video":
             cues.append(
-                "Тот же персонаж проходит видимое изменение от исходного состояния "
-                "через действие к ясно различимому финалу."
+                "Тот же герой проходит видимое изменение от исходного состояния "
+                "через действие к ясному финалу."
             )
         else:
             cues.append(
-                "Тот же персонаж показан до и после изменения; исходное и конечное "
-                "состояния ясно различимы."
+                "Тот же герой: ясно различимы исходное состояние и результат изменения."
             )
     elif has("respect the requested chronology") or has("the request contains a sequence"):
         cues.append("Причинно-следственная последовательность действий ясно читается.")
 
     if has("visible-state translation"):
         cues.append(
-            "Эмоции и качества читаются по выражению, позе и фактуре, не по надписям."
+            "Эмоции и качества видны по выражению, позе и фактуре, не по надписям."
         )
     if has("autonomous composition default: use a narrative story-scene"):
         cues.append("Сюжетная сцена; запрошенное действие — главный фокус.")
@@ -285,7 +284,7 @@ def _bounded_yandex_prompt(
 
     safety = _natural_safety_parts(brief)
     safety_block = _bounded_join(list(safety), limit=_YANDEX_PROMPT_LIMIT)
-    minimum_scene_head = 90
+    minimum_scene_head = 80
     semantic_budget = max(
         80,
         _YANDEX_PROMPT_LIMIT
