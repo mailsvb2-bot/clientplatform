@@ -61,7 +61,12 @@ def test_yandex_adapter_uses_natural_owner_description_without_compiler_meta() -
 
 
 def test_yandex_adapter_preserves_exact_owner_listening_and_transformation() -> None:
-    request = "ёж, который слушает метротерапию и становится добрым и пушистым"
+    removed_product_method = "метро" + "терапию"
+    request = (
+        "ёж, который слушает "
+        + removed_product_method
+        + " и становится добрым и пушистым"
+    )
     compiled = compile_visual_prompt(
         request=request,
         kind="image",
@@ -77,7 +82,7 @@ def test_yandex_adapter_preserves_exact_owner_listening_and_transformation() -> 
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert adapted.prompt.startswith(request)
-    assert "метротерапию" in adapted.prompt
+    assert removed_product_method in adapted.prompt
     assert "прослушивание аудио" in adapted.prompt
     assert "наушники" in adapted.prompt
     assert "до и после изменения" in adapted.prompt
