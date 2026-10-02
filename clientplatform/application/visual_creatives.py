@@ -31,7 +31,8 @@ class VisualCreativeError(RuntimeError):
 
 _BUSINESS_IMAGE_BRIEF_VERSION = 2
 _SUPPORTED_BUSINESS_IMAGE_BRIEF_VERSIONS = frozenset({1, 2})
-_PROMPT_COMPILER_VERSION = 2
+_PROMPT_COMPILER_VERSION = 3
+_SUPPORTED_PROMPT_COMPILER_VERSIONS = frozenset({2, 3})
 _BUSINESS_IMAGE_WAIT_SECONDS = 20
 _FROZEN_BRIEF_KEYS = frozenset(
     {
@@ -204,7 +205,10 @@ def _load_frozen_business_visual_payload(value: str) -> tuple[VisualCreativeBrie
             "style",
         }:
             raise ValueError("frozen business visual intent is invalid")
-        if intent.get("prompt_compiler_version") != _PROMPT_COMPILER_VERSION:
+        if (
+            intent.get("prompt_compiler_version")
+            not in _SUPPORTED_PROMPT_COMPILER_VERSIONS
+        ):
             raise ValueError("unsupported visual prompt compiler version")
         if intent.get("style_schema_version") not in SUPPORTED_STYLE_SCHEMA_VERSIONS:
             raise ValueError("unsupported visual style schema version")

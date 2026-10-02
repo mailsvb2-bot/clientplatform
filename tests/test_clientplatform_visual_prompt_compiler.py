@@ -21,7 +21,7 @@ class VisualPromptCompilerTests(unittest.TestCase):
 
         self.assertEqual(
             compiled.semantic_flags,
-            ("transformation", "listening"),
+            ("transformation", "listening", "visible_state"),
         )
         self.assertIn(request, compiled.prompt)
         self.assertIn("listening unmistakable", compiled.prompt)
@@ -41,6 +41,44 @@ class VisualPromptCompilerTests(unittest.TestCase):
             compiled.negative_prompt,
         )
         self.assertIn("audio interaction missing", compiled.negative_prompt)
+        self.assertIn("Autonomous composition default", compiled.prompt)
+        self.assertIn("Visible-state translation", compiled.prompt)
+        self.assertIn(
+            "requested emotion or quality not visually readable",
+            compiled.negative_prompt,
+        )
+
+    def test_autopilot_makes_generic_actions_story_events_without_owner_prompt_craft(self) -> None:
+        compiled = compile_visual_prompt(
+            request="мальчик бежит за автобусом по мокрой улице",
+            kind="image",
+        )
+
+        self.assertIn("generic_action", compiled.semantic_flags)
+        self.assertIn("another action", compiled.prompt)
+        self.assertIn("narrative story-scene", compiled.prompt)
+        self.assertIn("Autonomous supporting detail", compiled.prompt)
+        self.assertIn("Autonomous lighting default", compiled.prompt)
+        self.assertIn("Autonomous detail default", compiled.prompt)
+        self.assertIn(
+            "static catalog shot when an action was requested",
+            compiled.negative_prompt,
+        )
+
+    def test_autopilot_does_not_treat_static_russian_nouns_as_actions(self) -> None:
+        for request in (
+            "работа психолога в светлом современном кабинете",
+            "настольная игра на деревянном столе",
+            "готовый ужин на красивой тарелке",
+            "портрет чиновника в деловом костюме",
+        ):
+            with self.subTest(request=request):
+                compiled = compile_visual_prompt(request=request, kind="image")
+                self.assertNotIn("generic_action", compiled.semantic_flags)
+                self.assertNotIn(
+                    "static catalog shot when an action was requested",
+                    compiled.negative_prompt,
+                )
 
     def test_video_transformation_compiles_a_timeline_not_a_static_prompt(self) -> None:
         compiled = compile_visual_prompt(

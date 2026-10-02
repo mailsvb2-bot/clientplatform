@@ -64,6 +64,33 @@ _EATING_RE = re.compile(
     r"\beat(?:s|ing)?\b|\bdrink(?:s|ing)?\b)",
     re.IGNORECASE,
 )
+_GENERIC_ACTION_RE = re.compile(
+    r"(?:"
+    r"\bбеж\w*|\bид[её]т\b|\bидут\b|\bтанцу\w*|\bулыба\w*|\bплач\w*|"
+    r"\bговор\w*|\bпиш\w*|\bрису\w*|\bработа(?:ет|ют|ющий|ющая|ющее|ющие)\w*|"
+    r"\bигра(?:ет|ют|ющий|ющая|ющее|ющие)\w*|\bобнима\w*|"
+    r"\bоткрыва\w*|\bзакрыва\w*|\bмо[её]т\w*|\bчинит\w*|\bремонтиру\w*|"
+    r"\bготовит\w*|\bедет\b|\bедут\b|\bлетит\b|\bлетят\b|"
+    r"\brun(?:s|ning)?\b|\bwalk(?:s|ing)?\b|\bdanc(?:e|es|ing)\b|"
+    r"\bsmil(?:e|es|ing)\b|\bcr(?:y|ies|ying)\b|\bspeak(?:s|ing)?\b|"
+    r"\bwrit(?:e|es|ing)\b|\bdraw(?:s|ing)?\b|\bwork(?:s|ing)?\b|"
+    r"\bplay(?:s|ing)?\b|\bhug(?:s|ging)?\b|\bopen(?:s|ing)?\b|"
+    r"\bclos(?:e|es|ing)\b|\bwash(?:es|ing)?\b|\brepair(?:s|ing)?\b|"
+    r"\bcook(?:s|ing)?\b|\bdriv(?:e|es|ing)\b|\bfl(?:y|ies|ying)\b"
+    r")",
+    re.IGNORECASE,
+)
+_VISIBLE_STATE_RE = re.compile(
+    r"(?:"
+    r"\bдобр\w*|\bзл\w*|\bспокойн\w*|\bтревож\w*|\bсчастлив\w*|"
+    r"\bгруст\w*|\bпушист\w*|\bмягк\w*|\bколюч\w*|\bгрязн\w*|"
+    r"\bчист\w*|\bблестящ\w*|\bуверенн\w*|\bиспуган\w*|"
+    r"\bkind\b|\bgentle\b|\bcalm\b|\bangry\b|\bhappy\b|\bsad\b|"
+    r"\bfluffy\b|\bsoft\b|\bprickly\b|\bdirty\b|\bclean\b|"
+    r"\bshiny\b|\bconfident\b|\bafraid\b"
+    r")",
+    re.IGNORECASE,
+)
 _COMPARISON_RE = re.compile(
     r"(?:слева|справа|две\s+части|сравнен|до\s+и\s+после|"
     r"left|right|split|comparison|before\s+and\s+after)",
@@ -112,11 +139,18 @@ def _semantic_flags(request: str) -> tuple[str, ...]:
         ("using", _USING_RE),
         ("holding", _HOLDING_RE),
         ("eating_or_drinking", _EATING_RE),
+        ("generic_action", _GENERIC_ACTION_RE),
         ("comparison", _COMPARISON_RE),
         ("explicit_text", _TEXT_REQUEST_RE),
         ("portrait", _PORTRAIT_RE),
     )
-    return tuple(name for name, pattern in checks if pattern.search(request))
+    flags = [name for name, pattern in checks if pattern.search(request)]
+    # Descriptive words such as "calm" may refer only to visual style in a static
+    # request. Treat them as state evidence only when the owner actually asks for
+    # a transformation, so autopilot does not invent a character-state narrative.
+    if "transformation" in flags and _VISIBLE_STATE_RE.search(request):
+        flags.append("visible_state")
+    return tuple(flags)
 
 
 def _interaction_directives(flags: tuple[str, ...]) -> list[str]:
@@ -152,6 +186,12 @@ def _interaction_directives(flags: tuple[str, ...]) -> list[str]:
         directives.append(
             "If eating or drinking is requested, show the action itself and its "
             "source object, not only the food, drink or subject separately."
+        )
+    if "generic_action" in flags:
+        directives.append(
+            "If the request contains another action, make that action visually "
+            "legible through body pose, contact, motion cues and relevant objects; "
+            "do not reduce it to a static portrait or symbolic substitute."
         )
     return directives
 
@@ -191,6 +231,125 @@ def _sequence_directives(kind: str, flags: tuple[str, ...]) -> list[str]:
         "using a clear multi-stage or cause-and-effect composition instead of "
         "dropping later actions."
     ]
+
+
+def _autonomous_scene_directives(
+    *,
+    kind: str,
+    flags: tuple[str, ...],
+    style: VisualStyleIntent,
+) -> list[str]:
+    """Fill production details automatically without changing the owner's meaning."""
+
+    directives = [
+        "Autonomous supporting detail: infer the environment, camera distance, "
+        "supporting props and lighting conservatively. Add only details that make "
+        "the requested subject, action, relationship or state easier to read; never "
+        "replace the owner's idea with decorative stock imagery.",
+    ]
+    dynamic_flags = {
+        "listening",
+        "watching",
+        "reading",
+        "using",
+        "holding",
+        "eating_or_drinking",
+        "generic_action",
+        "sequence",
+        "transformation",
+    }
+    has_action = bool(dynamic_flags.intersection(flags))
+
+    if style.composition == "auto":
+        if kind == "image" and "transformation" in flags:
+            directives.append(
+                "Autonomous composition default: use a clear before/after, paired, "
+                "or continuous transformation composition that keeps the same subject "
+                "recognizable and makes cause and result understandable at a glance."
+            )
+        elif kind == "image" and has_action and "portrait" not in flags:
+            directives.append(
+                "Autonomous composition default: use a narrative story-scene rather "
+                "than a catalog portrait, with the requested action as the focal event."
+            )
+        elif "portrait" in flags:
+            directives.append(
+                "Autonomous composition default: use a clean close or medium portrait "
+                "while preserving every explicitly requested prop or interaction."
+            )
+        elif kind == "video":
+            directives.append(
+                "Autonomous composition default: use a readable story-scene with a "
+                "clear focal subject and enough environment to understand the action."
+            )
+        else:
+            directives.append(
+                "Autonomous composition default: use a balanced medium story-oriented "
+                "composition with one clear focal subject and no arbitrary empty bands."
+            )
+
+    if "visible_state" in flags or "transformation" in flags:
+        directives.append(
+            "Visible-state translation: turn abstract qualities, emotions and state "
+            "changes into concrete visual evidence such as facial expression, posture, "
+            "gesture, texture, material condition, grooming and lighting. Never rely "
+            "on captions, labels or generic symbols to explain the change."
+        )
+
+    if kind == "video":
+        directives.append(
+            "Autonomous video staging: prefer one coherent shot or only necessary "
+            "cuts; establish the subject, show the requested action clearly, and end "
+            "with the requested result instead of spending time on decorative motion."
+        )
+
+    return directives
+
+
+def _autonomous_quality_directives(
+    *,
+    kind: str,
+    purpose: str,
+    style: VisualStyleIntent,
+) -> list[str]:
+    """Provide sensible defaults only for dimensions the owner left on auto."""
+
+    directives: list[str] = []
+    if style.lighting == "auto":
+        directives.append(
+            "Autonomous lighting default: use coherent balanced lighting that clearly "
+            "reveals the subject, action and important textures."
+        )
+    if style.contrast == "auto":
+        directives.append(
+            "Autonomous contrast default: keep foreground/background separation clear "
+            "without crushing shadows or washing out important details."
+        )
+    if style.detail == "auto":
+        directives.append(
+            "Autonomous detail default: use rich but controlled detail; prioritize "
+            "anatomy, materials, expression and interaction over decorative clutter."
+        )
+    if style.realism == "auto" and not style.quick_style_names():
+        directives.append(
+            "Autonomous rendering default: choose a polished believable visual language "
+            "appropriate to the subject; avoid a generic stock or clip-art appearance."
+        )
+    if style.commercial_tone == "auto":
+        directives.append(
+            "Autonomous presentation default: "
+            + (
+                "keep advertising polish professional, human and non-generic."
+                if purpose == "advertising"
+                else "keep the result visually polished and natural rather than salesy."
+            )
+        )
+    if kind == "video" and style.motion == "auto":
+        directives.append(
+            "Autonomous motion default: use purposeful, stable motion that supports "
+            "the requested action; avoid random camera movement."
+        )
+    return directives
 
 
 def _business_context_directive(brand_context: str) -> list[str]:
@@ -270,10 +429,20 @@ def compile_visual_prompt(
         *_interaction_directives(flags),
         *_transformation_directives(visual_kind, flags),
         *_sequence_directives(visual_kind, flags),
+        *_autonomous_scene_directives(
+            kind=visual_kind,
+            flags=flags,
+            style=resolved_style,
+        ),
         *_business_context_directive(brand),
         "Style choices may shape presentation but must never remove or contradict "
         "mandatory subjects, actions, relationships, chronology or state changes.",
         *visual_style_prompt_directives(resolved_style, kind=visual_kind),
+        *_autonomous_quality_directives(
+            kind=visual_kind,
+            purpose=visual_purpose,
+            style=resolved_style,
+        ),
     ]
 
     if "comparison" in flags and "transformation" not in flags:
@@ -317,6 +486,7 @@ def compile_visual_prompt(
         "using",
         "holding",
         "eating_or_drinking",
+        "generic_action",
     }
     has_dynamic_action = bool(dynamic_flags.intersection(flags))
     negatives = [
@@ -346,6 +516,14 @@ def compile_visual_prompt(
                 "single-state image with no visible transformation",
                 "before and after shown as unrelated characters",
                 "unchanged final state",
+                "state change conveyed only by text or a generic symbol",
+            ]
+        )
+    if "visible_state" in flags:
+        negatives.extend(
+            [
+                "requested emotion or quality not visually readable",
+                "final texture or expression inconsistent with requested state",
             ]
         )
     if "listening" in flags:

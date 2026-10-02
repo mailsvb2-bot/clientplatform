@@ -120,6 +120,12 @@ def test_short_prompt_enters_optional_style_step_before_any_paid_preparation(
     ]
     assert "cpc:st:go:business-token" in buttons
     assert "cpc:st:open:business-token" in buttons
+    labels = [
+        button.text
+        for row in message.answer.await_args.kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert "🤖 Сделать всё автоматически" in labels
 
 
 def test_receive_prompt_rejects_corrupt_creative_kind_before_actor_lookup(
@@ -207,6 +213,16 @@ def test_quick_style_buttons_are_additive_multi_select_and_do_not_call_provider(
     )
     style = VisualStyleIntent.from_mapping(state.data["creative_style_intent"])
     assert style.quick_style_names() == ("warm_friendly", "illustrative")
+
+
+def test_style_dashboard_stays_within_owner_button_budget() -> None:
+    dashboard = studio.style_dashboard_rows("business-token", VisualStyleIntent())
+    buttons = [button for row in dashboard for button in row]
+
+    assert len(buttons) <= 20
+    labels = [label for label, _callback in buttons]
+    assert "🤖 Авто — всё решит ClientPlatform" in labels
+    assert "✅ Готово — к созданию" in labels
 
 
 def test_style_rows_show_checkmark_for_current_choice_and_compact_finish_action() -> None:
