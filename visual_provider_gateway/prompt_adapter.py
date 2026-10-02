@@ -212,7 +212,9 @@ def _compiled_semantic_visual_cues(
     if has("if eating or drinking is requested"):
         cues.append("Явно видно само действие еды или питья и его источник.")
 
-    if has("the transformation is a mandatory"):
+    if has("the transformation is mandatory") or has(
+        "the transformation is a mandatory"
+    ):
         if str(kind or "").strip().lower() == "video":
             cues.append(
                 "Тот же персонаж проходит видимое изменение от исходного состояния "
