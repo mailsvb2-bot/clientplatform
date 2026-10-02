@@ -874,12 +874,13 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
     )
     await state.set_state(ClientPlatformCreativeStudioState.choosing_style)
     await message.answer(
-        "Идею понял. Технический промпт писать не нужно — ClientPlatform составит "
-        "его сама. Можно продолжить сразу или уточнить, как именно Вы представляете "
-        "гамму, настроение, динамику и композицию.",
+        "Идею понял. Технический промпт писать не нужно — ClientPlatform сама "
+        "разложит запрос на сцену, действия, взаимодействия, видимый результат, "
+        "композицию, свет, детали и ограничения для генератора. Можно сразу отдать "
+        "всё автоматике или при желании уточнить стиль кнопками.",
         reply_markup=control._keyboard(
             [
-                [("✨ Продолжить без уточнений", f"cpc:st:go:{token}")],
+                [("🤖 Сделать всё автоматически", f"cpc:st:go:{token}")],
                 [("🎨 Уточнить стиль", f"cpc:st:open:{token}")],
                 [
                     (
