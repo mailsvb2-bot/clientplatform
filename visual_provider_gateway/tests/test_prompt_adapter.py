@@ -83,10 +83,10 @@ def test_yandex_adapter_preserves_exact_owner_listening_and_transformation() -> 
 
     assert adapted.prompt.startswith(request)
     assert removed_product_method in adapted.prompt
-    assert "слушает аудио" in adapted.prompt
+    assert "Слушает аудио" in adapted.prompt
     assert "наушники" in adapted.prompt
     assert "исходное состояние" in adapted.prompt
-    assert "результат изменения" in adapted.prompt
+    assert "и результат." in adapted.prompt
     assert "Эмоции и качества" in adapted.prompt
     assert "выражению, позе и фактуре" in adapted.prompt
     assert "Owner request" not in adapted.prompt
