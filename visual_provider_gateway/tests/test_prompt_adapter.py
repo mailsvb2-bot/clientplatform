@@ -95,6 +95,28 @@ def test_yandex_adapter_preserves_exact_owner_listening_and_transformation() -> 
     assert len(adapted.prompt) <= 500
 
 
+def test_yandex_adapter_keeps_generic_action_and_autonomous_story_scene() -> None:
+    compiled = compile_visual_prompt(
+        request="мальчик бежит за автобусом по мокрой улице",
+        kind="image",
+    )
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
+
+    assert adapted.prompt.startswith("мальчик бежит за автобусом")
+    assert "действие явно видно" in adapted.prompt
+    assert "Сюжетная сцена" in adapted.prompt
+    assert "статичный портрет" in adapted.prompt
+    assert len(adapted.prompt) <= 500
+
+
 def test_yandex_motion_adapter_marks_keyframe_constraint_without_new_story() -> None:
     adapted = adapt_visual_brief_for_provider(
         _compiled_brief(kind="video"),
