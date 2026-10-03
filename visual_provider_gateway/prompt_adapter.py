@@ -224,18 +224,38 @@ def _compiled_scene_direction_cue(lines: tuple[str, ...]) -> str:
         if not folded.startswith("selected presentation direction"):
             continue
         value = line.split(":", 1)[-1].strip()
-        lower = value.casefold()
+        base_value = value
+        supplement = ""
+        marker = ". Owner refinement: "
+        if marker in value:
+            base_value, raw_supplement = value.split(marker, 1)
+            supplement = raw_supplement.split(
+                ". Apply this only where compatible",
+                1,
+            )[0].strip(" .")
+        lower = base_value.casefold()
         if "left-to-right" in lower or "narrative progression" in lower:
-            return "последовательная история слева направо"
-        if "cinematic" in lower:
-            return "кинематографичная постановка"
-        if "editorial" in lower:
-            return "чистая редакционная композиция"
-        if "focused" in lower or "uncluttered" in lower:
-            return "минимум лишнего, сильный фокус на главном"
-        if "semantic readability" in lower or "one glance" in lower:
-            return "максимально ясная сюжетная композиция"
-        return " ".join(value.split())[:120].rstrip(" ,;:.")
+            base_cue = "последовательная история слева направо"
+        elif "cinematic" in lower:
+            base_cue = "кинематографичная постановка"
+        elif "editorial" in lower:
+            base_cue = "чистая редакционная композиция"
+        elif "focused" in lower or "uncluttered" in lower:
+            base_cue = "минимум лишнего, сильный фокус на главном"
+        elif "semantic readability" in lower or "one glance" in lower:
+            base_cue = "максимально ясная сюжетная композиция"
+        else:
+            base_cue = " ".join(base_value.split())[:100].rstrip(" ,;:.")
+        if supplement:
+            # Owner-authored refinement outranks generic art-direction style when
+            # Alice's provider prompt must fit the official 500-character ceiling.
+            return (
+                "Уточнение пользователя: "
+                + " ".join(supplement.split())[:150].rstrip(" ,;:.")
+                + "; "
+                + base_cue
+            )
+        return base_cue
     return ""
 
 
@@ -889,7 +909,7 @@ def _bounded_yandex_prompt(
         # but useful style budget, reserve the first anti-lettering clauses, and let
         # the owner scene use whatever remains.
         bounded_semantics = _bounded_join(list(semantic_cues), limit=300)
-        style_block = _bounded_join(list(style_cues), limit=96)
+        style_block = _bounded_join(list(style_cues), limit=125)
         # Reserve the whole compact safety block when it fits. Only in an
         # impossible all-at-once 500-char case may the ordered tail be trimmed.
         safety_reserve = _bounded_join(list(safety), limit=180)
