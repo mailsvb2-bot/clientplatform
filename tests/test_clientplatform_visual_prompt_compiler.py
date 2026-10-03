@@ -333,6 +333,43 @@ class VisualPromptCompilerTests(unittest.TestCase):
         self.assertIn("Brand name: Тишина", provider_prompt)
         self.assertIn("audio interaction missing", provider_negative)
 
+    def test_legacy_v2_frozen_receipt_never_gains_semantic_qa(self) -> None:
+        frozen = visual_creatives.freeze_business_image_payload(
+            request="Замена раковины",
+            country_code="RU",
+        )
+        payload = json.loads(frozen)
+        payload["version"] = 2
+        payload.pop("semantic_qa")
+        legacy = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+        self.assertEqual(
+            visual_creatives.frozen_business_visual_kind(legacy),
+            "image",
+        )
+        self.assertIsNone(
+            visual_creatives.frozen_business_visual_semantic_qa(legacy)
+        )
+
+    def test_new_video_receipt_explicitly_disables_semantic_qa(self) -> None:
+        frozen = visual_creatives.freeze_business_video_payload(
+            request="ёж слушает аудио и становится спокойнее",
+            country_code="RU",
+        )
+        payload = json.loads(frozen)
+
+        self.assertEqual(payload["version"], 3)
+        self.assertIsNone(payload["semantic_qa"])
+        self.assertIsNone(
+            visual_creatives.frozen_business_visual_semantic_qa(frozen)
+        )
+
+
     def test_ad_visual_brief_uses_the_same_semantic_compiler(self) -> None:
         brief = visual_creatives.build_ad_visual_brief(
             title="Тишина",
