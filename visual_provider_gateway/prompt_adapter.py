@@ -13,7 +13,7 @@ import re
 from .models import CreativeBrief
 
 
-PROMPT_ADAPTER_VERSION = 8
+PROMPT_ADAPTER_VERSION = 9
 
 _RUNWAY_PROMPT_LIMIT = 1000
 _YANDEX_PROMPT_LIMIT = 500
@@ -282,6 +282,120 @@ def _compiled_style_cues(lines: tuple[str, ...]) -> tuple[str, ...]:
     return ("Стиль: " + "; ".join(dict.fromkeys(selected)) + ".",)
 
 
+_TRANSFORMATION_TARGET_RE = re.compile(
+    r"(?:\\bстанов\\w*|\\bпревращ\\w*\\s+в\\b|\\bbecomes?\\b|"
+    r"\\bturns?\\s+into\\b|\\btransforms?\\s+into\\b)\\s+"
+    r"([^.!?;]{1,180})",
+    re.IGNORECASE,
+)
+
+_STATE_EVIDENCE_RULES = (
+    (
+        re.compile(r"(?:\\bдобр\\w*|\\bkind\\b|\\bgentle\\b)", re.IGNORECASE),
+        "мягкий доброжелательный взгляд, расслабленная поза",
+    ),
+    (
+        re.compile(r"(?:\\bпушист\\w*|\\bfluffy\\b)", re.IGNORECASE),
+        "шерсть/мех заметно гуще и пушистее",
+    ),
+    (
+        re.compile(r"(?:\\bмягк\\w*|\\bsoft\\b)", re.IGNORECASE),
+        "фактура визуально мягче",
+    ),
+    (
+        re.compile(r"(?:\\bспокойн\\w*|\\bcalm\\b)", re.IGNORECASE),
+        "спокойный взгляд и расслабленная поза",
+    ),
+    (
+        re.compile(r"(?:\\bзл\\w*|\\bangry\\b)", re.IGNORECASE),
+        "напряжённый взгляд и жёсткая поза",
+    ),
+    (
+        re.compile(r"(?:\\bтревож\\w*|\\bиспуган\\w*|\\banxious\\b|\\bafraid\\b)", re.IGNORECASE),
+        "тревожный взгляд и заметное напряжение тела",
+    ),
+    (
+        re.compile(r"(?:\\bсчастлив\\w*|\\bhappy\\b)", re.IGNORECASE),
+        "явно радостное выражение и открытая поза",
+    ),
+    (
+        re.compile(r"(?:\\bгруст\\w*|\\bsad\\b)", re.IGNORECASE),
+        "опущенный взгляд и сдержанная закрытая поза",
+    ),
+    (
+        re.compile(r"(?:\\bколюч\\w*|\\bprickly\\b)", re.IGNORECASE),
+        "явно колючая жёсткая фактура или иглы",
+    ),
+    (
+        re.compile(r"(?:\\bгрязн\\w*|\\bdirty\\b)", re.IGNORECASE),
+        "видимые грязь, пятна или налёт",
+    ),
+    (
+        re.compile(r"(?:\\bчист\\w*|\\bclean\\b)", re.IGNORECASE),
+        "явно чистая поверхность или шерсть",
+    ),
+    (
+        re.compile(r"(?:\\bблестящ\\w*|\\bshiny\\b)", re.IGNORECASE),
+        "чистый блеск и правдоподобные световые блики",
+    ),
+    (
+        re.compile(r"(?:\\bуверенн\\w*|\\bconfident\\b)", re.IGNORECASE),
+        "устойчивая открытая поза и уверенный взгляд",
+    ),
+)
+
+
+def _state_evidence(text: str, *, limit: int = 3) -> tuple[str, ...]:
+    selected: list[str] = []
+    value = str(text or "")
+    for pattern, evidence in _STATE_EVIDENCE_RULES:
+        if pattern.search(value):
+            selected.append(evidence)
+        if len(selected) >= limit:
+            break
+    return tuple(dict.fromkeys(selected))
+
+
+def _detailed_transformation_stage_cue(
+    owner_request: str,
+    *,
+    listening: bool,
+) -> str:
+    request = " ".join(str(owner_request or "").split()).strip()
+    match = _TRANSFORMATION_TARGET_RE.search(request)
+    initial_text = request[: match.start()] if match else ""
+    target_text = match.group(1).strip() if match else ""
+
+    initial_evidence = _state_evidence(initial_text, limit=2)
+    final_evidence = _state_evidence(target_text, limit=3)
+    opening = (
+        "; ".join(initial_evidence)
+        if initial_evidence
+        else "нейтральное начало без финальных признаков"
+    )
+    if listening:
+        middle = (
+            "явно слушает аудио в наушниках или через физическое устройство, "
+            "не абстрактный символ волны"
+        )
+    else:
+        middle = "видима причина/действие и первые признаки изменения"
+    final = (
+        "; ".join(final_evidence)
+        if final_evidence
+        else "запрошенный итог зримо отличается от начала"
+    )
+    return (
+        "Три сцены без подписей, один и тот же субъект: сначала — "
+        + opening
+        + "; затем — "
+        + middle
+        + "; в финале — "
+        + final
+        + "."
+    )
+
+
 def _compiled_semantic_visual_cues(
     lines: tuple[str, ...],
     *,
@@ -303,16 +417,26 @@ def _compiled_semantic_visual_cues(
     transformation = has("the transformation is mandatory") or has(
         "the transformation is a mandatory"
     )
+    detailed_stages = has("transformation stage detail")
     visible_state = has("visible-state translation")
     listening = has("if the subject is listening")
+    owner_request = _compiled_owner_request(lines)
 
     # Highest priority: one compact cue carries the state change and, when present,
-    # its listening cause. This survives Alice's 500-character ceiling as a unit.
+    # its causal interaction. Compiler v5+ receives concrete stage descriptions;
+    # frozen older prompts keep the previous adapter contract unchanged.
     if transformation:
         if str(kind or "").strip().lower() == "video":
             cues.append(
                 "Тот же герой проходит видимое изменение: исходное состояние → "
                 "причина/действие → ясный финал."
+            )
+        elif detailed_stages and owner_request:
+            cues.append(
+                _detailed_transformation_stage_cue(
+                    owner_request,
+                    listening=listening,
+                )
             )
         elif listening:
             suffix = (
@@ -415,8 +539,11 @@ def _bounded_yandex_prompt(
 
     safety = _natural_safety_parts(brief)
     safety_block = _bounded_join(list(safety), limit=_YANDEX_PROMPT_LIMIT)
-    style_block = _bounded_join(list(style_cues), limit=120)
-    minimum_scene_head = 180
+    stage_priority = any(
+        cue.startswith("Три сцены без подписей") for cue in semantic_cues
+    )
+    style_block = _bounded_join(list(style_cues), limit=60 if stage_priority else 120)
+    minimum_scene_head = 90 if stage_priority else 180
     fixed_reserved = (
         len(safety_block)
         + len(style_block)
@@ -460,10 +587,13 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
     style_cues = _compiled_style_cues(lines)
     folded = tuple(line.casefold() for line in lines)
     if any(line.startswith("the transformation is mandatory") for line in folded):
-        scene_head = (
-            "Сториборд в одном изображении: один и тот же герой повторён как "
-            "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ. " + owner_request
-        )
+        if any(line.startswith("transformation stage detail") for line in folded):
+            scene_head = owner_request
+        else:
+            scene_head = (
+                "Сториборд в одном изображении: один и тот же герой повторён как "
+                "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ. " + owner_request
+            )
     elif any(
         line.startswith("treat object replacement as a constrained")
         for line in folded
@@ -562,10 +692,13 @@ def _adapt_gigachat(brief: CreativeBrief) -> CreativeBrief:
     style_cues = _compiled_style_cues(lines)
     folded = tuple(line.casefold() for line in lines)
     if any(line.startswith("the transformation is mandatory") for line in folded):
-        scene_head = (
-            "Сториборд в одном изображении: один и тот же герой повторён как "
-            "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ. " + owner_request
-        )
+        if any(line.startswith("transformation stage detail") for line in folded):
+            scene_head = owner_request
+        else:
+            scene_head = (
+                "Сториборд в одном изображении: один и тот же герой повторён как "
+                "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ. " + owner_request
+            )
     elif any(
         line.startswith("treat object replacement as a constrained")
         for line in folded
