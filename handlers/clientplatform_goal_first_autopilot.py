@@ -72,7 +72,11 @@ from clientplatform.domain.ad_publication_assets import (
     AdPublicationAssetSource,
 )
 from clientplatform.domain.ad_spend import AdSpendError
-from clientplatform.domain.editable_advertising import EditableAdProjectStatus
+from clientplatform.domain.editable_advertising import (
+    EDITABLE_AD_FONT_LABELS_RU,
+    EDITABLE_AD_FONT_PRESETS,
+    EditableAdProjectStatus,
+)
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.integrations.yandex_direct import YandexDirectError
@@ -219,7 +223,11 @@ def _result_keyboard(business_token: str, data: dict):
     )
 
 
-def _editable_keyboard(business_token: str):
+def _editable_keyboard(business_token: str, font_preset: str = "auto"):
+    label = EDITABLE_AD_FONT_LABELS_RU.get(
+        str(font_preset or "auto"),
+        EDITABLE_AD_FONT_LABELS_RU["auto"],
+    )
     return control._keyboard(
         [
             [
@@ -227,12 +235,36 @@ def _editable_keyboard(business_token: str):
                 ("📝 Текст", f"cpo:editfield:body:{business_token}"),
             ],
             [("🔘 CTA", f"cpo:editfield:cta:{business_token}")],
+            [("🔤 Шрифт: " + label, f"cpo:editfont:{business_token}")],
             [("↕️ Переместить текстовый блок", f"cpo:editlayout:{business_token}")],
             [("🔄 Обновить превью", f"cpo:editpreview:{business_token}")],
             [("✅ Завершить редактирование", f"cpo:editdone:{business_token}")],
             [("↩️ Назад к настройкам", f"cpo:custom:{business_token}")],
         ]
     )
+
+
+def _editable_font_keyboard(business_token: str, current: str):
+    rows: list[list[tuple[str, str]]] = []
+    pairs = (
+        ("auto", "modern"),
+        ("strict", "friendly"),
+        ("premium", "editorial"),
+        ("elegant", "bold_ad"),
+    )
+    for left, right in pairs:
+        row: list[tuple[str, str]] = []
+        for preset in (left, right):
+            marker = "✓ " if preset == current else ""
+            row.append(
+                (
+                    marker + EDITABLE_AD_FONT_LABELS_RU[preset],
+                    f"cpo:editfontset:{preset}:{business_token}",
+                )
+            )
+        rows.append(row)
+    rows.append([("⬅️ К редактору", f"cpo:editpreview:{business_token}")])
+    return control._keyboard(rows)
 
 
 def _editable_source_keyboard(kind: str, business_token: str):
