@@ -5,14 +5,14 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 
-
-_COLOR_RE = re.compile(r"#[0-9A-Fa-f]{6}")
-
 from clientplatform.domain.visual_typography import (
     VISUAL_TYPOGRAPHY_LABELS_RU,
     VISUAL_TYPOGRAPHY_PRESETS,
     normalize_visual_typography_preset,
 )
+
+
+_COLOR_RE = re.compile(r"#[0-9A-Fa-f]{6}")
 
 EDITABLE_AD_FONT_PRESETS = VISUAL_TYPOGRAPHY_PRESETS
 EDITABLE_AD_FONT_LABELS_RU = VISUAL_TYPOGRAPHY_LABELS_RU
