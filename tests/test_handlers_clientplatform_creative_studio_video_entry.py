@@ -93,8 +93,9 @@ def test_prepared_image_menu_discloses_semantic_qa_before_continue(
         delivery_claimed_at=None,
         source_job_id="",
     )
+    business_id = "11111111-1111-4111-8111-111111111111"
     actor = SimpleNamespace(
-        business_id="business-id",
+        business_id=business_id,
         assert_can_manage_promotions=lambda: None,
     )
     message = SimpleNamespace(answer=AsyncMock())
@@ -117,7 +118,7 @@ def test_prepared_image_menu_discloses_semantic_qa_before_continue(
         studio.send_creative_studio_menu(
             message,
             user_id=101,
-            business_id="business-id",
+            business_id=business_id,
         )
     )
 
