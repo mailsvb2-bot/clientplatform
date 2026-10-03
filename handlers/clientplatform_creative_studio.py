@@ -716,6 +716,10 @@ async def _show_paid_generation_confirmation(
     replace: bool = False,
 ) -> None:
     noun = "видео" if _receipt_kind(receipt) == "video" else "картинку"
+    qa_enabled = (
+        _receipt_kind(receipt) == "image"
+        and _receipt_semantic_qa_enabled(receipt)
+    )
     edit_callback = (
         f"cpc:video:{token}"
         if _receipt_kind(receipt) == "video"
@@ -726,8 +730,13 @@ async def _show_paid_generation_confirmation(
         f"Задача: {receipt.request_text}\n\n"
         "ClientPlatform уже развернула короткое описание в подробное визуальное "
         "задание и зафиксировала выбранный стиль. Генерация может расходовать "
-        "платную AI-квоту. Платный вызов начнётся только после кнопки ниже. "
-        "Повторный запуск этого же задания использует тот же frozen brief и "
+        "платную AI-квоту. "
+        + (
+            "Платные AI-вызовы начнутся только после кнопки ниже. "
+            if qa_enabled
+            else "Платный вызов начнётся только после кнопки ниже. "
+        )
+        + "Повторный запуск этого же задания использует тот же frozen brief и "
         "idempotency key."
         + (
             "\n\nПосле готовой картинки ClientPlatform может один раз выполнить "
@@ -735,8 +744,7 @@ async def _show_paid_generation_confirmation(
             "лишнего текста и явных физических ошибок. Это дополнительный AI-вызов, "
             "но он не создаёт новую картинку и не повторяется при проверке или "
             "повторной отправке результата."
-            if _receipt_kind(receipt) == "image"
-            and _receipt_semantic_qa_enabled(receipt)
+            if qa_enabled
             else ""
         )
         + (
