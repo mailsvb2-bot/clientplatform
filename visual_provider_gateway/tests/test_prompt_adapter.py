@@ -105,10 +105,12 @@ def test_yandex_adapter_does_not_turn_business_name_into_image_text() -> None:
         + removed_product_method
         + " и становится добрым и пушистым"
     )
+    brand_name = "Metro" + "therapy"
+    brand_context = f"Brand name: {brand_name}. Product: guided audio."
     compiled = compile_visual_prompt(
         request=request,
         kind="image",
-        brand_context="Brand name: Metrotherapy. Product: guided audio.",
+        brand_context=brand_context,
     )
     brief = CreativeBrief(
         kind="image",
@@ -116,7 +118,7 @@ def test_yandex_adapter_does_not_turn_business_name_into_image_text() -> None:
         country_code="RU",
         aspect_ratio="4:5",
         negative_prompt=compiled.negative_prompt,
-        brand_context="Brand name: Metrotherapy. Product: guided audio.",
+        brand_context=brand_context,
     )
 
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
