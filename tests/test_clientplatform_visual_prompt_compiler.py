@@ -144,6 +144,24 @@ class VisualPromptCompilerTests(unittest.TestCase):
             compiled.negative_prompt,
         )
 
+    def test_brand_context_stays_contextual_when_other_text_is_requested(self) -> None:
+        compiled = compile_visual_prompt(
+            request='афиша с надписью "Открытая встреча"',
+            kind="image",
+            brand_context="Example Wellness: guided resource audio.",
+        )
+
+        self.assertIn("explicit_text", compiled.semantic_flags)
+        self.assertIn("Readable text is explicitly part", compiled.prompt)
+        self.assertIn(
+            "Names from business grounding are semantic context only",
+            compiled.prompt,
+        )
+        self.assertIn(
+            "unless the owner explicitly requested that exact name as visible text",
+            compiled.prompt,
+        )
+
     def test_explicit_transformation_labels_are_not_forbidden(self) -> None:
         compiled = compile_visual_prompt(
             request='коллаж до/после, подпись слева «ДО», справа «ПОСЛЕ»',
