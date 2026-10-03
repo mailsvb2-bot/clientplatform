@@ -186,6 +186,7 @@ def test_semantic_qa_is_claimed_once_and_reused_across_retries(
     contract = {
         "version": 1,
         "kind": "image",
+        "country_code": "RU",
         "owner_request": "Замена раковины",
         "semantic_flags": ["object_replacement"],
     }
@@ -255,6 +256,7 @@ def test_semantic_qa_running_claim_never_repeats_external_review(
     contract = {
         "version": 1,
         "kind": "image",
+        "country_code": "RU",
         "owner_request": "ёж слушает аудио и становится добрым",
         "semantic_flags": ["transformation", "listening"],
     }
