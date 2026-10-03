@@ -144,6 +144,21 @@ class VisualPromptCompilerTests(unittest.TestCase):
             compiled.negative_prompt,
         )
 
+    def test_explicit_transformation_labels_are_not_forbidden(self) -> None:
+        compiled = compile_visual_prompt(
+            request='коллаж до/после, подпись слева «ДО», справа «ПОСЛЕ»',
+            kind="image",
+        )
+
+        self.assertIn("transformation", compiled.semantic_flags)
+        self.assertIn("explicit_text", compiled.semantic_flags)
+        self.assertIn("Readable text is explicitly part", compiled.prompt)
+        self.assertIn("unless the owner explicitly requested", compiled.prompt)
+        self.assertNotIn(
+            "storyboard stage labels, arrows, numbers or captions",
+            compiled.negative_prompt,
+        )
+
     def test_resource_audio_transformation_preserves_cause_and_visible_result(self) -> None:
         compiled = compile_visual_prompt(
             request=(
@@ -168,7 +183,8 @@ class VisualPromptCompilerTests(unittest.TestCase):
         self.assertIn("opening stage", compiled.prompt)
         self.assertIn("middle stage", compiled.prompt)
         self.assertIn("final stage", compiled.prompt)
-        self.assertIn("never render BEFORE/AFTER words", compiled.prompt)
+        self.assertIn("Do not render BEFORE/AFTER words", compiled.prompt)
+        self.assertIn("unless the owner explicitly requested", compiled.prompt)
         self.assertIn("Never rely on captions", compiled.prompt)
         self.assertIn(
             "storyboard stage labels, arrows, numbers or captions",
