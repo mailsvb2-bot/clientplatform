@@ -26,6 +26,7 @@ def ensure(c: sqlite3.Connection) -> None:
             brand_primary_color TEXT,
             brand_accent_color TEXT,
             brand_text_color TEXT,
+            brand_font_preset TEXT,
             brand_updated_at TEXT,
             FOREIGN KEY(business_id) REFERENCES businesses(id) ON DELETE CASCADE,
             FOREIGN KEY(created_by_member_id, business_id)
@@ -48,6 +49,7 @@ def ensure(c: sqlite3.Connection) -> None:
         "brand_primary_color": "brand_primary_color TEXT",
         "brand_accent_color": "brand_accent_color TEXT",
         "brand_text_color": "brand_text_color TEXT",
+        "brand_font_preset": "brand_font_preset TEXT",
         "brand_updated_at": "brand_updated_at TEXT",
     }.items():
         if column not in have_profile:
