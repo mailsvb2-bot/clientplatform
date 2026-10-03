@@ -164,7 +164,16 @@ class VisualPromptCompilerTests(unittest.TestCase):
         self.assertIn("neutral ordinary baseline", compiled.prompt)
         self.assertIn("every requested changed quality visibly stronger", compiled.prompt)
         self.assertIn("same subject may appear", compiled.prompt)
+        self.assertIn("Transformation stage detail", compiled.prompt)
+        self.assertIn("opening stage", compiled.prompt)
+        self.assertIn("middle stage", compiled.prompt)
+        self.assertIn("final stage", compiled.prompt)
+        self.assertIn("never render BEFORE/AFTER words", compiled.prompt)
         self.assertIn("Never rely on captions", compiled.prompt)
+        self.assertIn(
+            "storyboard stage labels, arrows, numbers or captions",
+            compiled.negative_prompt,
+        )
         self.assertIn("audio interaction missing", compiled.negative_prompt)
 
     def test_object_replacement_is_a_constrained_physical_scene(self) -> None:
@@ -331,7 +340,7 @@ class VisualPromptCompilerTests(unittest.TestCase):
         )
         payload = json.loads(frozen)
         self.assertEqual(payload["version"], 3)
-        self.assertEqual(payload["intent"]["prompt_compiler_version"], 4)
+        self.assertEqual(payload["intent"]["prompt_compiler_version"], 5)
         self.assertEqual(payload["semantic_qa"]["version"], 1)
         self.assertEqual(payload["semantic_qa"]["kind"], "image")
         self.assertEqual(payload["semantic_qa"]["country_code"], "RU")
