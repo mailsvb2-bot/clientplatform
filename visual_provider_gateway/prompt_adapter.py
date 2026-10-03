@@ -289,6 +289,22 @@ _TRANSFORMATION_TARGET_RE = re.compile(
     re.IGNORECASE,
 )
 
+_TRANSFORMATION_FOLLOWUP_ACTION_RE = re.compile(
+    r"\s+(?:и|а|затем|потом|then|and)\s+(?="
+    r"(?:обнима\w*|слуша\w*|смотр\w*|чит\w*|использу\w*|пользу\w*|"
+    r"держ\w*|нес[её]\w*|куша\w*|пь[её]\w*|беж\w*|ид[её]т\b|"
+    r"танцу\w*|улыба\w*|плач\w*|говор\w*|пиш\w*|рису\w*|"
+    r"работа(?:ет|ют)\w*|игра(?:ет|ют)\w*|открыва\w*|закрыва\w*|"
+    r"мо[её]т\w*|чинит\w*|ремонтиру\w*|готовит\w*|едет\b|летит\b|"
+    r"hugs?\b|listens?\b|watch(?:es)?\b|reads?\b|uses?\b|holds?\b|"
+    r"eats?\b|drinks?\b|runs?\b|walks?\b|dances?\b|smiles?\b|"
+    r"cries?\b|speaks?\b|writes?\b|draws?\b|works?\b|plays?\b|"
+    r"opens?\b|closes?\b|washes?\b|repairs?\b|cooks?\b|drives?\b|flies?\b)"
+    r")",
+    re.IGNORECASE,
+)
+
+
 _STATE_EVIDENCE_RULES = (
     (
         re.compile(r"(?:\bдобр\w*|\bkind\b|\bgentle\b)", re.IGNORECASE),
@@ -364,6 +380,9 @@ def _detailed_transformation_stage_cue(
     match = _TRANSFORMATION_TARGET_RE.search(request)
     initial_text = request[: match.start()] if match else ""
     target_text = match.group(1).strip() if match else ""
+    followup = _TRANSFORMATION_FOLLOWUP_ACTION_RE.search(target_text)
+    if followup:
+        target_text = target_text[: followup.start()].rstrip(" ,;:-")
 
     initial_evidence = _state_evidence(initial_text, limit=2)
     final_evidence = _state_evidence(target_text, limit=3)
