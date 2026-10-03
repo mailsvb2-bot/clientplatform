@@ -558,7 +558,10 @@ async def test_reopening_finished_editable_project_skips_paid_generation(monkeyp
 
 @pytest.mark.asyncio
 async def test_new_editable_project_inherits_saved_brand_typography(monkeypatch) -> None:
-    project = _project(status=EditableAdProjectStatus.DRAFT)
+    project = replace(
+        _project(status=EditableAdProjectStatus.DRAFT),
+        font_preset="premium",
+    )
     state = _State(_goal_data())
     target = _goal_target()
     callback = _goal_callback("cpo:editask:image:business-token", target)
