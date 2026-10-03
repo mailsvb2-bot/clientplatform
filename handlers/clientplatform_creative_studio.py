@@ -113,6 +113,16 @@ def _receipt_noun(receipt: CreativeGenerationReceipt | None) -> str:
     return "видео" if _receipt_kind(receipt) == "video" else "картинка"
 
 
+def _receipt_semantic_qa_enabled(receipt: CreativeGenerationReceipt) -> bool:
+    payload = str(getattr(receipt, "provider_payload_json", "") or "").strip()
+    if not payload:
+        return False
+    try:
+        return frozen_business_visual_semantic_qa(payload) is not None
+    except (TypeError, ValueError):
+        return False
+
+
 def _semantic_qa_warning(qa) -> str:
     if qa is None or str(getattr(qa, "status", "") or "") != "needs_review":
         return ""
@@ -726,9 +736,7 @@ async def _show_paid_generation_confirmation(
             "но он не создаёт новую картинку и не повторяется при проверке или "
             "повторной отправке результата."
             if _receipt_kind(receipt) == "image"
-            and frozen_business_visual_semantic_qa(
-                receipt.provider_payload_json
-            ) is not None
+            and _receipt_semantic_qa_enabled(receipt)
             else ""
         )
         + (
