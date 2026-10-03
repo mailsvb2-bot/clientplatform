@@ -713,6 +713,11 @@ class VisualGatewayService:
                             image_path=candidate,
                             owner_request=str(normalized["owner_request"]),
                             semantic_flags=tuple(str(item) for item in raw_flags),
+                            scene_contract=(
+                                normalized.get("scene_contract")
+                                if isinstance(normalized.get("scene_contract"), dict)
+                                else None
+                            ),
                         )
         except (
             ProviderTransportError,
