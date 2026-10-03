@@ -37,6 +37,27 @@ _OBJECT_REPLACEMENT_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+_ABSTRACT_REPLACEMENT_TARGET_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:цвет|цвета|цвету|цветом|цвете)\b(?:\s+(?:фона|фон)\b)?|"
+    r"(?:стиль|стиля|стилю|стилем|стиле)\b|"
+    r"(?:настроение|настроения|настроению|настроением|настроении)\b|"
+    r"(?:тон|тона|тону|тоном|тоне)\b|"
+    r"(?:фон|фона|фону|фоном|фоне)\b|"
+    r"(?:освещение|освещения|освещению|освещением|освещении)\b|"
+    r"(?:контраст|контраста|контрасту|контрастом|контрасте)\b|"
+    r"(?:композиция|композиции|композицию|композицией)\b|"
+    r"(?:шрифт|шрифта|шрифту|шрифтом|шрифте)\b|"
+    r"(?:текст|текста|тексту|текстом|тексте)\b|"
+    r"(?:ракурс|ракурса|ракурсу|ракурсом|ракурсе)\b|"
+    r"(?:формат|формата|формату|форматом|формате)\b|"
+    r"(?:палитра|палитры|палитру|палитрой)\b|"
+    r"(?:атмосфера|атмосферы|атмосферу|атмосферой)\b|"
+    r"(?:the\s+)?(?:visual\s+)?(?:color|style|mood|tone|background|lighting|"
+    r"contrast|composition|font|text|angle|format|palette)\b"
+    r")",
+    re.IGNORECASE,
+)
 _SEQUENCE_RE = re.compile(
     r"(?:сначала|затем|потом|после|вначале|в\s+конце|"
     r"first|then|after|finally|at\s+the\s+end)",
@@ -139,7 +160,6 @@ def _clean(value: str, *, field: str, limit: int) -> str:
 def _semantic_flags(request: str) -> tuple[str, ...]:
     checks = (
         ("transformation", _TRANSFORMATION_RE),
-        ("object_replacement", _OBJECT_REPLACEMENT_RE),
         ("sequence", _SEQUENCE_RE),
         ("listening", _LISTENING_RE),
         ("watching", _WATCHING_RE),
@@ -153,6 +173,20 @@ def _semantic_flags(request: str) -> tuple[str, ...]:
         ("portrait", _PORTRAIT_RE),
     )
     flags = [name for name, pattern in checks if pattern.search(request)]
+    replacement_matches = tuple(_OBJECT_REPLACEMENT_RE.finditer(request))
+    physical_replacement = any(
+        not _ABSTRACT_REPLACEMENT_TARGET_RE.match(request[match.end() :])
+        for match in replacement_matches
+    )
+    if physical_replacement:
+        # Classify the target governed by each replacement operator instead of using
+        # a finite object allowlist. This keeps arbitrary physical nouns (pipe, car,
+        # flower, street lamp, etc.) in replacement mode while "change the style",
+        # "background color replacement" and similar presentation edits stay out.
+        # In mixed requests, any physical replacement is preserved even if another
+        # clause also changes an abstract presentation property.
+        insert_at = 1 if "transformation" in flags else 0
+        flags.insert(insert_at, "object_replacement")
     # Descriptive words such as "calm" may refer only to visual style in a static
     # request. Treat them as state evidence only when the owner actually asks for
     # a transformation, so autopilot does not invent a character-state narrative.
@@ -247,7 +281,8 @@ def _replacement_directives(kind: str, flags: tuple[str, ...]) -> list[str]:
         "Make the replacement itself visually legible. If no reference image is "
         "available downstream, show either the installation action or a clear before/"
         "after in the same environment; do not show only a finished isolated object.",
-        "Show the replacement as complete, installed and physically usable. For "
+        "Show the replacement as complete and physically coherent. When the request "
+        "implies an installed result, make it visibly installed and usable. For "
         "functional fixtures, appliances or furniture, include the necessary visible "
         "controls, supports, mounting and connections and keep geometry, scale, shadows "
         "and contact with surrounding surfaces believable.",

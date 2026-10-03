@@ -164,7 +164,8 @@ class VisualPromptCompilerTests(unittest.TestCase):
         self.assertIn("installation action", compiled.prompt)
         self.assertIn("before/after", compiled.prompt)
         self.assertIn("do not show only a finished isolated object", compiled.prompt)
-        self.assertIn("complete, installed and physically usable", compiled.prompt)
+        self.assertIn("complete and physically coherent", compiled.prompt)
+        self.assertIn("visibly installed and usable", compiled.prompt)
         self.assertIn("essential controls", compiled.prompt)
         self.assertIn(
             "missing essential functional hardware or controls",
@@ -174,6 +175,39 @@ class VisualPromptCompilerTests(unittest.TestCase):
             "unrelated room redesign instead of requested replacement",
             compiled.negative_prompt,
         )
+
+    def test_abstract_style_changes_do_not_enter_physical_replacement_mode(self) -> None:
+        for request in (
+            "смена настроения на более спокойное",
+            "поменять стиль изображения на премиальный",
+            "замена цвета фона на синий",
+            "replace the visual style with a premium style",
+            "swap the background color to blue",
+        ):
+            with self.subTest(request=request):
+                compiled = compile_visual_prompt(request=request, kind="image")
+                self.assertNotIn("object_replacement", compiled.semantic_flags)
+                self.assertNotIn("constrained replacement event", compiled.prompt)
+                self.assertNotIn(
+                    "missing essential functional hardware or controls",
+                    compiled.negative_prompt,
+                )
+
+    def test_physical_replacement_phrasings_still_enter_replacement_mode(self) -> None:
+        for request in (
+            "поменять раковину на новую",
+            "сменить кран в ванной",
+            "поменять цветок в вазе",
+            "заменить фонарь на новый",
+            "заменить трубу и сделать фон светлее",
+            "replace the sink with a new one",
+            "swap the faucet",
+            "replace the car and make the background blue",
+        ):
+            with self.subTest(request=request):
+                compiled = compile_visual_prompt(request=request, kind="image")
+                self.assertIn("object_replacement", compiled.semantic_flags)
+                self.assertIn("constrained replacement event", compiled.prompt)
 
     def test_brand_context_is_explicitly_non_renderable_without_text_request(self) -> None:
         compiled = compile_visual_prompt(
