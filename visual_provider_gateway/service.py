@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .engine import VisualCreativeEngine, build_provider, provider_snapshot
+from .engine import VisualCreativeEngine, build_provider, provider_order, provider_snapshot
 from .models import CreativeBrief, CreativeJob
 from .providers import GigaChatImageProvider, ProviderTransportError
 from .store import JobStore, StoredJob
@@ -160,15 +160,22 @@ class VisualGatewayService:
         if not isinstance(value, dict) or set(value) != {
             "version",
             "kind",
+            "country_code",
             "owner_request",
             "semantic_flags",
         }:
             raise ValueError("visual_semantic_qa_contract_invalid")
         request = " ".join(str(value.get("owner_request") or "").split()).strip()
+        country_code = str(value.get("country_code") or "").strip().upper()
         raw_flags = value.get("semantic_flags")
         if (
             value.get("version") != 1
             or str(value.get("kind") or "").strip().lower() != "image"
+            or len(country_code) > 16
+            or any(
+                not (char.isalnum() or char in {"-", "_"})
+                for char in country_code
+            )
             or not request
             or len(request) > 1500
             or any(ord(char) < 32 for char in request)
@@ -185,6 +192,7 @@ class VisualGatewayService:
         return {
             "version": 1,
             "kind": "image",
+            "country_code": country_code,
             "owner_request": request,
             "semantic_flags": list(flags),
         }
@@ -550,24 +558,31 @@ class VisualGatewayService:
             return self._semantic_qa_public(completed)
 
         try:
-            provider = build_provider("gigachat")
-            if (
-                not isinstance(provider, GigaChatImageProvider)
-                or not provider.configured("image")
-            ):
+            allowed = provider_order(
+                "image",
+                country_code=str(normalized.get("country_code") or ""),
+            )
+            if "gigachat" not in allowed:
                 result = unavailable
             else:
-                root = self._output_root()
-                candidate = Path(stored.asset_path).expanduser().resolve()
-                candidate.relative_to(root)
-                raw_flags = normalized.get("semantic_flags")
-                if not isinstance(raw_flags, list):
-                    raise ValueError("visual_semantic_qa_contract_invalid")
-                result = provider.review_image_semantics(
-                    image_path=candidate,
-                    owner_request=str(normalized["owner_request"]),
-                    semantic_flags=tuple(str(item) for item in raw_flags),
-                )
+                provider = build_provider("gigachat")
+                if (
+                    not isinstance(provider, GigaChatImageProvider)
+                    or not provider.configured("image")
+                ):
+                    result = unavailable
+                else:
+                    root = self._output_root()
+                    candidate = Path(stored.asset_path).expanduser().resolve()
+                    candidate.relative_to(root)
+                    raw_flags = normalized.get("semantic_flags")
+                    if not isinstance(raw_flags, list):
+                        raise ValueError("visual_semantic_qa_contract_invalid")
+                    result = provider.review_image_semantics(
+                        image_path=candidate,
+                        owner_request=str(normalized["owner_request"]),
+                        semantic_flags=tuple(str(item) for item in raw_flags),
+                    )
         except (
             ProviderTransportError,
             OSError,
