@@ -20,10 +20,12 @@ from services.visual_creative_gateway import (
     VisualCreativeBrief,
     VisualCreativeGatewayError,
     VisualCreativeJob,
+    VisualSemanticQA,
     configured_visual_providers,
     configured_visual_video_mode,
     download_visual,
     poll_visual,
+    review_visual_semantics,
     submit_visual,
     wait_visual,
 )
@@ -283,7 +285,7 @@ def frozen_business_visual_kind(value: str) -> str:
 
 
 def frozen_business_visual_style(value: str) -> VisualStyleIntent | None:
-    """Return the exact style snapshot for v2 receipts; legacy v1 has none."""
+    """Return the exact style snapshot for v2/v3 receipts; legacy v1 has none."""
 
     _load_frozen_business_visual_payload(value)
     raw = json.loads(str(value or ""))
@@ -412,6 +414,28 @@ def create_business_visual_from_frozen_payload(
         )
     except VisualCreativeGatewayError as exc:
         raise VisualCreativeError("visual_creative_generation_failed") from exc
+
+
+def review_business_image_semantics_from_frozen_payload(
+    *,
+    provider_payload_json: str,
+    job: VisualCreativeJob,
+) -> VisualSemanticQA | None:
+    """Run advisory QA only when the frozen receipt proves new-consent v3 semantics."""
+
+    contract = frozen_business_visual_semantic_qa(provider_payload_json)
+    if contract is None:
+        return None
+    if job.kind != "image":
+        return None
+    try:
+        return review_visual_semantics(
+            job,
+            contract=contract.to_mapping(),
+        )
+    except VisualCreativeGatewayError:
+        # QA never converts a successfully generated image into a failed image.
+        return VisualSemanticQA(status="unavailable")
 
 
 def create_business_image_from_frozen_payload(
