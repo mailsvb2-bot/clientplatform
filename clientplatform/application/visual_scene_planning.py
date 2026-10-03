@@ -81,7 +81,7 @@ def _grounded_text(owner_request: str, value: object, *, limit: int = 240) -> st
     return text
 
 
-def _merge_planner_result(
+def grounded_scene_contract_from_mapping(
     *,
     owner_request: str,
     semantic_flags: tuple[str, ...],
@@ -197,7 +197,7 @@ def plan_visual_scene_contract(
     value = _json_object(raw or "")
     if value is None:
         return fallback, "deterministic"
-    planned = _merge_planner_result(
+    planned = grounded_scene_contract_from_mapping(
         owner_request=owner_request,
         semantic_flags=semantic_flags,
         value=value,
@@ -207,4 +207,7 @@ def plan_visual_scene_contract(
     return planned, "ai"
 
 
-__all__ = ["plan_visual_scene_contract"]
+__all__ = [
+    "grounded_scene_contract_from_mapping",
+    "plan_visual_scene_contract",
+]
