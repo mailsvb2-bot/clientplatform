@@ -13,7 +13,7 @@ import re
 from .models import CreativeBrief
 
 
-PROMPT_ADAPTER_VERSION = 7
+PROMPT_ADAPTER_VERSION = 8
 
 _RUNWAY_PROMPT_LIMIT = 1000
 _YANDEX_PROMPT_LIMIT = 500
@@ -287,11 +287,11 @@ def _compiled_semantic_visual_cues(
     *,
     kind: str,
 ) -> tuple[str, ...]:
-    """Translate compiler semantics into short, natural provider-visible scene cues.
+    """Translate compiler semantics into compact provider-visible scene cues.
 
-    Alice AI ART should not receive compiler control language such as "mandatory",
-    but dropping those directives entirely loses the visible verbs and state changes
-    that distinguish the owner's request from a generic portrait.
+    Alice AI ART has a hard prompt limit. Related semantic obligations are packed
+    together so a transformation cannot crowd out its causal interaction (or vice
+    versa) during compaction.
     """
 
     folded = tuple(line.casefold() for line in lines)
@@ -300,10 +300,58 @@ def _compiled_semantic_visual_cues(
     def has(prefix: str) -> bool:
         return any(line.startswith(prefix) for line in folded)
 
-    if has("if the subject is listening"):
+    transformation = has("the transformation is mandatory") or has(
+        "the transformation is a mandatory"
+    )
+    visible_state = has("visible-state translation")
+    listening = has("if the subject is listening")
+
+    # Highest priority: one compact cue carries the state change and, when present,
+    # its listening cause. This survives Alice's 500-character ceiling as a unit.
+    if transformation:
+        if str(kind or "").strip().lower() == "video":
+            cues.append(
+                "Тот же герой проходит видимое изменение: исходное состояние → "
+                "причина/действие → ясный финал."
+            )
+        elif listening:
+            suffix = (
+                "; ПОСЛЕ заметно меняется по всем указанным признакам."
+                if visible_state
+                else "; не один финальный портрет."
+            )
+            cues.append(
+                "Сториборд в одном кадре: тот же герой ДО → Слушает аудио "
+                "(видны наушники, колонка или устройство) → ПОСЛЕ" + suffix
+            )
+        else:
+            suffix = (
+                "; ПОСЛЕ заметно меняется по всем указанным признакам."
+                if visible_state
+                else "; не один финальный портрет."
+            )
+            cues.append(
+                "Сториборд в одном кадре: тот же герой ДО → видимая причина/действие "
+                "→ ПОСЛЕ" + suffix
+            )
+    elif visible_state:
         cues.append(
-            "Слушает аудио: видны наушники, колонка или устройство."
+            "Запрошенное состояние явно читается по выражению, позе, фактуре/шерсти "
+            "или материальному состоянию."
         )
+
+    if has("treat object replacement as a constrained") or has(
+        "object replacement is the core event"
+    ):
+        cues.append(
+            "Замена видна: монтаж или до/после в том же окружении, не одиночный "
+            "предмет. Результат физически правдоподобен; для монтажа видны крепления, "
+            "управление и подключения."
+        )
+
+    # Do not duplicate listening when it is already packed into a transformation.
+    if listening and not transformation:
+        cues.append("Слушает аудио: видны наушники, колонка или устройство.")
     if has("if the subject is watching"):
         cues.append("Явно видна связь взгляда персонажа с экраном или источником.")
     if has("if the subject is reading"):
@@ -316,43 +364,18 @@ def _compiled_semantic_visual_cues(
         cues.append("Явно видно само действие еды или питья и его источник.")
     if has("if the request contains another action"):
         cues.append("Запрошенное действие явно видно в кадре, это не статичный портрет.")
-    if has("treat object replacement as a constrained") or has(
-        "object replacement is the core event"
-    ):
-        cues.append(
-            "Замена видна: монтаж или до/после в том же окружении, не одиночный "
-            "предмет. Результат физически правдоподобен; для монтажа видны крепления, "
-            "управление и подключения."
-        )
 
-    if has("the transformation is mandatory") or has(
-        "the transformation is a mandatory"
+    if not transformation and (
+        has("respect the requested chronology") or has("the request contains a sequence")
     ):
-        if str(kind or "").strip().lower() == "video":
-            cues.append(
-                "Тот же герой проходит видимое изменение от исходного состояния "
-                "через действие к ясному финалу."
-            )
-        else:
-            cues.append(
-                "Три фазы одного субъекта: исходное состояние, действие/причина, "
-                "ясный результат; не один финальный портрет."
-            )
-    elif has("respect the requested chronology") or has("the request contains a sequence"):
         cues.append("Причинно-следственная последовательность действий ясно читается.")
 
-    if has("visible-state translation"):
-        cues.append(
-            "Финальное состояние визуально отличается по выражению, позе, фактуре "
-            "или материальному состоянию; смысл понятен без подписи."
-        )
     if has("autonomous composition default: use a narrative story-scene"):
         cues.append("Сюжетная сцена; запрошенное действие — главный фокус.")
     elif has("autonomous composition default: use a balanced medium"):
         cues.append("Сбалансированная композиция с одним ясным главным объектом.")
 
     return tuple(dict.fromkeys(cues))
-
 
 def _yandex_natural_prompt_parts(brief: CreativeBrief) -> list[str]:
     """Shape compiler output as a natural image description for Alice AI ART.
@@ -438,7 +461,8 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
     folded = tuple(line.casefold() for line in lines)
     if any(line.startswith("the transformation is mandatory") for line in folded):
         scene_head = (
-            "Один субъект: до → действие/причина → после. " + owner_request
+            "Сториборд в одном изображении: один и тот же герой повторён как "
+            "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ. " + owner_request
         )
     elif any(
         line.startswith("treat object replacement as a constrained")
@@ -538,7 +562,10 @@ def _adapt_gigachat(brief: CreativeBrief) -> CreativeBrief:
     style_cues = _compiled_style_cues(lines)
     folded = tuple(line.casefold() for line in lines)
     if any(line.startswith("the transformation is mandatory") for line in folded):
-        scene_head = "Один субъект: до → действие/причина → после. " + owner_request
+        scene_head = (
+            "Сториборд в одном изображении: один и тот же герой повторён как "
+            "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ. " + owner_request
+        )
     elif any(
         line.startswith("treat object replacement as a constrained")
         for line in folded
