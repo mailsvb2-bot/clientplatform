@@ -113,6 +113,82 @@ def test_transformation_final_state_does_not_absorb_another_subject_state() -> N
     assert len(adapted.prompt) <= 500
 
 
+def test_from_to_transformation_preserves_explicit_initial_and_final_states() -> None:
+    request = "кот меняется из злого в доброго"
+    compiled = compile_visual_prompt(request=request, kind="image")
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
+
+    assert "напряжённый взгляд и жёсткая поза" in adapted.prompt
+    assert "мягкий доброжелательный взгляд" in adapted.prompt
+    assert "нейтральное начало без финальных признаков" not in adapted.prompt
+    assert len(adapted.prompt) <= 500
+
+
+def test_transformation_state_scope_stops_before_secondary_subject_without_action() -> None:
+    request = "злой ёж становится добрым рядом с грустным другом"
+    compiled = compile_visual_prompt(request=request, kind="image")
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
+
+    assert "напряжённый взгляд и жёсткая поза" in adapted.prompt
+    assert "мягкий доброжелательный взгляд" in adapted.prompt
+    assert "опущенный взгляд и сдержанная закрытая поза" not in adapted.prompt
+    assert len(adapted.prompt) <= 500
+
+
+def test_unparsed_transformation_does_not_invent_neutral_or_final_state() -> None:
+    request = "кот меняется из красного в синего"
+    compiled = compile_visual_prompt(request=request, kind="image")
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
+
+    assert "исходное и итоговое состояния бери только из запроса" in adapted.prompt
+    assert "нейтральное начало без финальных признаков" not in adapted.prompt
+    assert len(adapted.prompt) <= 500
+
+
+def test_explicit_before_after_labels_are_not_suppressed_by_provider_cue() -> None:
+    request = 'злой ёж становится добрым, коллаж до/после, подпись слева «ДО», справа «ПОСЛЕ»'
+    compiled = compile_visual_prompt(request=request, kind="image")
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
+
+    assert adapted.prompt.startswith(request)
+    assert "Три сцены, один и тот же субъект" in adapted.prompt
+    assert "Три сцены без подписей" not in adapted.prompt
+    assert "Без читаемого текста" not in adapted.prompt
+    assert len(adapted.prompt) <= 500
+
+
 def test_yandex_adapter_does_not_turn_business_name_into_image_text() -> None:
     removed_product_method = "метро" + "терапию"
     request = (
