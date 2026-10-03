@@ -126,7 +126,12 @@ def _natural_safety_parts(brief: CreativeBrief) -> tuple[str, ...]:
         or "cropped important subject" in folded_negative
     ):
         parts.append("Главные объекты полностью в кадре.")
-    if (
+    explicit_text = "readable text is explicitly part" in folded_prompt
+    if explicit_text:
+        parts.append(
+            "Показывай только явно запрошенный текст; без других надписей или букв."
+        )
+    elif (
         "no readable text, letters, captions or ui" in folded_prompt
         or "readable advertising text baked into image" in folded_negative
     ):
@@ -150,7 +155,9 @@ def _yandex_safety_parts(brief: CreativeBrief) -> tuple[str, ...]:
     natural = _natural_safety_parts(brief)
     joined = " ".join(natural)
     clauses: list[str] = []
-    if "Без читаемого текста" in joined:
+    if "только явно запрошенный текст" in joined.casefold():
+        clauses.append("Только запрошенный текст; без других надписей.")
+    elif "Без читаемого текста" in joined:
         clauses.append("Без читаемого текста/UI.")
     if "названия бренда/услуг/методов" in joined.casefold():
         clauses.append("Названия бренда/услуг не печатать без явного запроса.")
@@ -642,7 +649,8 @@ def _compiled_semantic_visual_cues(
 
     # Highest priority: one compact cue carries the state change and, when present,
     # its causal interaction. Compiler v5+ receives concrete stage descriptions;
-    # frozen older prompts keep the previous adapter contract unchanged.
+    # frozen older compiler prompts are normalized too, so internal stage labels
+    # cannot leak into newly submitted provider prompts.
     if transformation:
         if str(kind or "").strip().lower() == "video":
             cues.append(
