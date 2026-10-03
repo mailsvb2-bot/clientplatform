@@ -4,6 +4,7 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
+from clientplatform.application import visual_creatives
 from clientplatform.domain.creative_generation import CreativeGenerationReceiptStatus
 from handlers import clientplatform_creative_studio as studio
 
@@ -33,6 +34,47 @@ def test_creative_studio_menu_labels_motion_fallback_truthfully() -> None:
     )
     assert ("🎞 Оживить картинку", "cpc:video:business-token") in rows
     assert ("🎬 Создать AI-видео", "cpc:video:business-token") not in rows
+
+
+def test_new_image_consent_discloses_one_extra_non_rendering_qa_call(
+    monkeypatch,
+) -> None:
+    request = "ёж слушает аудио и становится добрым и пушистым"
+    frozen = visual_creatives.freeze_business_image_payload(
+        request=request,
+        country_code="RU",
+    )
+    receipt = SimpleNamespace(
+        id="receipt-id",
+        request_text=request,
+        provider_payload_json=frozen,
+    )
+    target = SimpleNamespace(answer=AsyncMock())
+
+    monkeypatch.setattr(
+        studio,
+        "_receipt_callback",
+        lambda action, token, _receipt: f"receipt:{action}:{token}",
+    )
+    monkeypatch.setattr(
+        studio.control,
+        "_keyboard",
+        lambda rows: rows,
+    )
+
+    asyncio.run(
+        studio._show_paid_generation_confirmation(
+            target,
+            token="business-token",
+            receipt=receipt,
+        )
+    )
+
+    message = target.answer.await_args.args[0]
+    assert "Платные AI-вызовы начнутся только после кнопки ниже" in message
+    assert "один раз выполнить отдельную AI-проверку смысла" in message
+    assert "не создаёт новую картинку" in message
+    assert "не повторяется" in message
 
 
 def test_prepared_video_keeps_video_edit_path(monkeypatch) -> None:
