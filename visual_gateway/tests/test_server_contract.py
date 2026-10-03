@@ -11,7 +11,16 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from PIL import Image
 
-from visual_gateway.server import FORMATS, GatewayConfig, Store, create_app
+from visual_gateway.server import (
+    FONT_PRESETS,
+    FORMATS,
+    GatewayConfig,
+    GatewayError,
+    Store,
+    _font_preset,
+    _render_request,
+    create_app,
+)
 
 TOKEN = "test-gateway-token"
 UPSTREAM_TOKEN = "test-upstream-token"
@@ -360,6 +369,7 @@ async def test_render_pack_exact_assets_digest_scope_and_idempotency(gateway, up
             "body": "Точный текст",
             "cta": "Записаться",
             "layout": "lower_card",
+            "typography": {"preset": "premium"},
             "brand": {
                 "primary_color": "#172033",
                 "accent_color": "#E9C46A",
@@ -411,6 +421,85 @@ async def test_render_pack_exact_assets_digest_scope_and_idempotency(gateway, up
         f"/v1/creative/render-packs/{pack_id}?scope_id=tenant-b", headers=auth()
     )
     assert cross_scope.status == 404
+
+
+def test_typography_preset_contract_and_auto_resolution_are_deterministic():
+    base = {
+        "source_job_id": "job1",
+        "scope_id": "tenant-a",
+        "idempotency_key": "tenant-a:font:test",
+        "formats": ["square"],
+    }
+    for preset in FONT_PRESETS:
+        _render_request(
+            {
+                **base,
+                "composition": {
+                    "headline": "Заголовок",
+                    "body": "Текст",
+                    "cta": "Записаться",
+                    "typography": {"preset": preset},
+                },
+            }
+        )
+
+    assert _font_preset(
+        {
+            "headline": "Короткий оффер",
+            "body": "Короткий текст",
+            "cta": "Купить",
+            "typography": {"preset": "auto"},
+        },
+        resolve_auto=True,
+    ) == "bold_ad"
+    assert _font_preset(
+        {
+            "headline": "Подробный материал",
+            "body": "длинный текст " * 30,
+            "cta": "",
+            "typography": {"preset": "auto"},
+        },
+        resolve_auto=True,
+    ) == "editorial"
+    assert _font_preset(
+        {
+            "headline": "Очень длинный заголовок " * 5,
+            "body": "Обычный текст",
+            "cta": "",
+            "typography": {"preset": "auto"},
+        },
+        resolve_auto=True,
+    ) == "strict"
+    assert _font_preset(
+        {
+            "headline": "Обычный заголовок средней длины",
+            "body": "Обычный текст средней длины",
+            "cta": "",
+            "typography": {"preset": "auto"},
+        },
+        resolve_auto=True,
+    ) == "modern"
+
+    with pytest.raises(GatewayError, match="invalid_render_typography"):
+        _render_request(
+            {
+                **base,
+                "composition": {
+                    "headline": "x",
+                    "typography": {"preset": "comic"},
+                },
+            }
+        )
+    with pytest.raises(GatewayError, match="invalid_render_typography"):
+        _render_request(
+            {
+                **base,
+                "composition": {
+                    "headline": "x",
+                    "typography": {"preset": "modern", "family": "override"},
+                },
+            }
+        )
 
 
 @pytest.mark.asyncio
