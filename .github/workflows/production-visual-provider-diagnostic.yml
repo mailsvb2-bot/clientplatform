@@ -18,7 +18,9 @@ jobs:
   diagnose:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[probe-production-visual]')
     runs-on: ubuntu-22.04
-    timeout-minutes: 20
+    # The diagnostic is intentionally sequenced after the marked production
+    # recovery and therefore needs the deploy budget plus time for live probes.
+    timeout-minutes: 40
     env:
       SSH_HOST: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_HOST }}
       SSH_USER: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_USER }}
@@ -61,7 +63,7 @@ jobs:
             const repo = context.repo.repo;
             const ref = context.sha;
             const statusContext = 'ops/clientplatform-production-deploy-recovery';
-            const deadline = Date.now() + 15 * 60 * 1000;
+            const deadline = Date.now() + 30 * 60 * 1000;
 
             while (Date.now() < deadline) {
               const { data } = await github.rest.repos.listCommitStatusesForRef({
