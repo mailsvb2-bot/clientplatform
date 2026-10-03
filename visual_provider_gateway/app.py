@@ -20,6 +20,24 @@ class GatewayPrincipal:
     client_id: str
 
 
+class SemanticQAContractRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: int = Field(ge=1, le=1)
+    kind: str = Field(pattern="^image$")
+    owner_request: str = Field(min_length=1, max_length=1500)
+    semantic_flags: list[str] = Field(default_factory=list, max_length=16)
+
+
+class SemanticQARequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    scope_id: str = Field(
+        min_length=1,
+        max_length=160,
+        pattern=r"^[A-Za-z0-9_.:@/-]+$",
+    )
+    contract: SemanticQAContractRequest
+
+
 class GenerateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: str = Field(pattern="^(image|video)$")
@@ -130,6 +148,25 @@ def poll(gateway_id: str, scope_id: str, principal: GatewayPrincipal = Depends(r
         return service().poll(gateway_id, client_id=principal.client_id, scope_id=scope_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="job_not_found") from None
+
+
+@app.post("/v1/creative/generations/{gateway_id}/semantic-qa")
+def semantic_qa(
+    gateway_id: str,
+    request: SemanticQARequest,
+    principal: GatewayPrincipal = Depends(require_auth),
+) -> dict[str, object]:
+    try:
+        return service().semantic_qa(
+            gateway_id,
+            client_id=principal.client_id,
+            scope_id=request.scope_id,
+            contract=request.contract.model_dump(),
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="job_not_found") from None
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 @app.get("/v1/creative/generations/{gateway_id}/content")
