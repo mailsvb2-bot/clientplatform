@@ -5,6 +5,7 @@ from pathlib import Path
 import os
 
 from clientplatform.application.visual_scene_planning import plan_visual_scene_contract
+from clientplatform.application.visual_scene_variants import VisualSceneVariant
 from clientplatform.domain.visual_prompt_compiler import (
     VisualSemanticQAContract,
     build_visual_semantic_qa_contract,
@@ -112,6 +113,9 @@ def freeze_business_visual_payload(
     preferred_provider: str = "",
     binding: dict[str, str] | None = None,
     style_intent: VisualStyleIntent | None = None,
+    scene_contract: VisualSceneContract | None = None,
+    scene_planner_source: str = "",
+    scene_variant: VisualSceneVariant | None = None,
 ) -> str:
     """Freeze the exact versioned image/video brief before owner paid consent."""
 
@@ -121,10 +125,15 @@ def freeze_business_visual_payload(
     )
     owner_request = normalize_business_image_request(request)
     semantic_flags = semantic_flags_for_request(owner_request)
-    scene_contract, planner_source = plan_visual_scene_contract(
-        request=owner_request,
-        semantic_flags=semantic_flags,
-    )
+    if scene_contract is None:
+        scene_contract, planner_source = plan_visual_scene_contract(
+            request=owner_request,
+            semantic_flags=semantic_flags,
+        )
+    else:
+        planner_source = str(scene_planner_source or "deterministic").strip().lower()
+        if planner_source not in {"ai", "deterministic"}:
+            raise ValueError("visual scene planner source is invalid")
     resolved_country = str(
         country_code
         or os.getenv("VISUAL_DEPLOYMENT_COUNTRY", "RU")
@@ -138,6 +147,7 @@ def freeze_business_visual_payload(
         preferred_provider=preferred_provider,
         style_intent=resolved_style,
         scene_contract=scene_contract,
+        scene_direction=("" if scene_variant is None else scene_variant.direction),
     )
     semantic_qa = build_visual_semantic_qa_contract(
         request=owner_request,
@@ -155,6 +165,9 @@ def freeze_business_visual_payload(
             "style": resolved_style.to_mapping(),
             "scene_planner_version": 1,
             "scene_planner_source": planner_source,
+            "scene_variant": (
+                None if scene_variant is None else scene_variant.to_mapping()
+            ),
         },
         # Version 3 proves that a newly prepared image receipt used the consent
         # surface that discloses one advisory semantic-QA AI call. Legacy v1/v2
@@ -188,6 +201,9 @@ def freeze_business_image_payload(
     country_code: str = "",
     preferred_provider: str = "",
     style_intent: VisualStyleIntent | None = None,
+    scene_contract: VisualSceneContract | None = None,
+    scene_planner_source: str = "",
+    scene_variant: VisualSceneVariant | None = None,
 ) -> str:
     return freeze_business_visual_payload(
         request=request,
@@ -196,6 +212,9 @@ def freeze_business_image_payload(
         country_code=country_code,
         preferred_provider=preferred_provider,
         style_intent=style_intent,
+        scene_contract=scene_contract,
+        scene_planner_source=scene_planner_source,
+        scene_variant=scene_variant,
     )
 
 
@@ -206,6 +225,9 @@ def freeze_business_video_payload(
     country_code: str = "",
     preferred_provider: str = "",
     style_intent: VisualStyleIntent | None = None,
+    scene_contract: VisualSceneContract | None = None,
+    scene_planner_source: str = "",
+    scene_variant: VisualSceneVariant | None = None,
 ) -> str:
     return freeze_business_visual_payload(
         request=request,
@@ -214,6 +236,9 @@ def freeze_business_video_payload(
         country_code=country_code,
         preferred_provider=preferred_provider,
         style_intent=style_intent,
+        scene_contract=scene_contract,
+        scene_planner_source=scene_planner_source,
+        scene_variant=scene_variant,
     )
 
 
@@ -244,7 +269,9 @@ def _load_frozen_business_visual_payload(value: str) -> tuple[VisualCreativeBrie
             "style",
         }
         if version == 4:
-            expected_intent.update({"scene_planner_version", "scene_planner_source"})
+            expected_intent.update(
+                {"scene_planner_version", "scene_planner_source", "scene_variant"}
+            )
         if not isinstance(intent, dict) or set(intent) != expected_intent:
             raise ValueError("frozen business visual intent is invalid")
         if version == 4 and (
@@ -252,6 +279,8 @@ def _load_frozen_business_visual_payload(value: str) -> tuple[VisualCreativeBrie
             or intent.get("scene_planner_source") not in {"ai", "deterministic"}
         ):
             raise ValueError("frozen business visual scene planner is invalid")
+        if version == 4 and intent.get("scene_variant") is not None:
+            VisualSceneVariant.from_mapping(intent["scene_variant"])
         if (
             intent.get("prompt_compiler_version")
             not in _SUPPORTED_PROMPT_COMPILER_VERSIONS
@@ -396,6 +425,7 @@ def build_business_visual_brief(
     preferred_provider: str = "",
     style_intent: VisualStyleIntent | None = None,
     scene_contract: VisualSceneContract | None = None,
+    scene_direction: str = "",
 ) -> VisualCreativeBrief:
     owner_request = normalize_business_image_request(request)
     visual_kind = str(kind or "").strip().lower()
@@ -408,6 +438,7 @@ def build_business_visual_brief(
         purpose="owner_visual",
         style_intent=style_intent,
         scene_contract=scene_contract,
+        scene_direction=scene_direction,
     )
     return VisualCreativeBrief(
         kind=visual_kind,
