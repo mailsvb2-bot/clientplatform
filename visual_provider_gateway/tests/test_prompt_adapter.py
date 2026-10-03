@@ -213,7 +213,7 @@ def test_yandex_adapter_preserves_multiple_selected_styles_with_semantics() -> N
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert "Слушает аудио" in adapted.prompt
-    assert "исходное состояние" in adapted.prompt
+    assert "ДО" in adapted.prompt
     assert "Стиль:" in adapted.prompt
     assert "тёплый дружелюбный" in adapted.prompt
     assert "премиальный" in adapted.prompt
@@ -276,7 +276,7 @@ def test_yandex_adapter_keeps_all_safety_clauses_for_long_owner_request() -> Non
     )
     assert "a hedgehog listens to a guided audio wellness session" in adapted.prompt
     assert "Слушает аудио" in adapted.prompt
-    assert "исходное состояние" in adapted.prompt
+    assert "ДО" in adapted.prompt
     assert "Без водяных знаков" in adapted.prompt
     assert "Без выдуманных логотипов" in adapted.prompt
     assert "полностью в кадре" in adapted.prompt
@@ -531,7 +531,7 @@ def test_engine_applies_adapter_only_after_provider_selection(monkeypatch) -> No
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 7
+    assert result.provider_payload["prompt_adapter_version"] == 8
     assert "Owner request" not in captured["brief"].prompt
     assert "hedgehog listens to an audio session" in captured["brief"].prompt
 
@@ -558,7 +558,7 @@ def test_engine_applies_meaning_adapter_to_gigachat_fallback(monkeypatch) -> Non
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 7
+    assert result.provider_payload["prompt_adapter_version"] == 8
     prompt = captured["brief"].prompt
     assert prompt.startswith("Один субъект: до → действие/причина → после.")
     assert "hedgehog listens to an audio session" in prompt
