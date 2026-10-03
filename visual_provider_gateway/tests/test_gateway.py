@@ -458,6 +458,21 @@ def test_provider_state_survives_service_restart_between_submit_and_poll(tmp_pat
         "motion_duration_seconds": 8,
         "motion_aspect_ratio": "9:16",
     }
+    stored = restarted.store.get(
+        created["id"],
+        client_id="client-a",
+        scope_id="tenant-a",
+    )
+    assert restarted._provider_policy_country(stored.provider_state_json) == "RU"
+
+
+def test_legacy_raw_provider_state_remains_readable_after_envelope_upgrade():
+    raw = '{"motion_duration_seconds":8,"motion_aspect_ratio":"9:16"}'
+    assert VisualGatewayService._provider_state(raw) == {
+        "motion_duration_seconds": 8,
+        "motion_aspect_ratio": "9:16",
+    }
+    assert VisualGatewayService._provider_policy_country(raw) == ""
 
 
 def test_succeeded_job_is_not_asset_ready_after_transient_file_disappears(tmp_path, monkeypatch):
