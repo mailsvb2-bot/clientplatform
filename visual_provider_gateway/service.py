@@ -195,21 +195,86 @@ class VisualGatewayService:
         }
 
     @staticmethod
+    def _scene_contract(value: object) -> dict[str, object] | None:
+        if value is None:
+            return None
+        required = {
+            "version",
+            "topology",
+            "primary_subject",
+            "initial_state",
+            "actions",
+            "cause",
+            "transition",
+            "final_state",
+            "explicit_text",
+            "required_evidence",
+            "forbidden",
+        }
+        if not isinstance(value, dict) or set(value) != required:
+            raise ValueError("visual_scene_contract_invalid")
+        topology = str(value.get("topology") or "").strip().lower()
+        if value.get("version") != 1 or topology not in {
+            "static",
+            "action",
+            "transformation",
+            "sequence",
+            "comparison",
+            "replacement",
+        }:
+            raise ValueError("visual_scene_contract_invalid")
+
+        def text(raw: object, *, limit: int) -> str:
+            token = " ".join(str(raw or "").replace("\x00", " ").split()).strip()
+            if len(token) > limit or any(ord(char) < 32 for char in token):
+                raise ValueError("visual_scene_contract_invalid")
+            return token
+
+        def items(raw: object) -> list[str]:
+            if not isinstance(raw, list) or len(raw) > 8:
+                raise ValueError("visual_scene_contract_invalid")
+            out: list[str] = []
+            for item in raw:
+                token = text(item, limit=240)
+                if token and token not in out:
+                    out.append(token)
+            return out
+
+        return {
+            "version": 1,
+            "topology": topology,
+            "primary_subject": text(value.get("primary_subject"), limit=160),
+            "initial_state": items(value.get("initial_state")),
+            "actions": items(value.get("actions")),
+            "cause": text(value.get("cause"), limit=240),
+            "transition": items(value.get("transition")),
+            "final_state": items(value.get("final_state")),
+            "explicit_text": items(value.get("explicit_text")),
+            "required_evidence": items(value.get("required_evidence")),
+            "forbidden": items(value.get("forbidden")),
+        }
+
+    @staticmethod
     def _semantic_qa_contract(value: object) -> dict[str, object]:
-        if not isinstance(value, dict) or set(value) != {
+        if not isinstance(value, dict):
+            raise ValueError("visual_semantic_qa_contract_invalid")
+        version = value.get("version")
+        expected = {
             "version",
             "kind",
             "country_code",
             "owner_request",
             "semantic_flags",
-        }:
+        }
+        if version == 2:
+            expected.add("scene_contract")
+        if version not in {1, 2} or set(value) != expected:
             raise ValueError("visual_semantic_qa_contract_invalid")
         request = " ".join(str(value.get("owner_request") or "").split()).strip()
         country_code = str(value.get("country_code") or "").strip().upper()
         raw_flags = value.get("semantic_flags")
         if (
-            value.get("version") != 1
-            or str(value.get("kind") or "").strip().lower() != "image"
+            str(value.get("kind") or "").strip().lower() != "image"
             or len(country_code) > 16
             or any(
                 not (char.isalnum() or char in {"-", "_"})
@@ -228,13 +293,23 @@ class VisualGatewayService:
             or any(not item or item not in _SEMANTIC_QA_FLAGS for item in flags)
         ):
             raise ValueError("visual_semantic_qa_contract_invalid")
-        return {
-            "version": 1,
+        scene_contract = None
+        if version == 2:
+            scene_contract = VisualGatewayService._scene_contract(
+                value.get("scene_contract")
+            )
+            if scene_contract is None:
+                raise ValueError("visual_semantic_qa_contract_invalid")
+        result: dict[str, object] = {
+            "version": int(version),
             "kind": "image",
             "country_code": country_code,
             "owner_request": request,
             "semantic_flags": list(flags),
         }
+        if version == 2:
+            result["scene_contract"] = scene_contract
+        return result
 
     @staticmethod
     def _semantic_qa_digest(contract: dict[str, object]) -> str:
@@ -388,7 +463,8 @@ class VisualGatewayService:
             key: payload.get(key)
             for key in (
                 "kind", "prompt", "preferred_provider", "aspect_ratio",
-                "duration_seconds", "negative_prompt", "reference_url", "brand_context", "seed", "scope_id"
+                "duration_seconds", "negative_prompt", "reference_url", "brand_context",
+                "seed", "scene_contract", "scope_id"
             )
         }
         fingerprint_payload["country_code"] = effective_country
@@ -435,6 +511,7 @@ class VisualGatewayService:
                 preferred_provider=str(payload.get("preferred_provider") or ""),
                 brand_context=str(payload.get("brand_context") or ""),
                 seed=(None if payload.get("seed") in (None, "") else int(payload["seed"])),
+                scene_contract=self._scene_contract(payload.get("scene_contract")),
                 metadata={"client_id": client_id, "scope_id": scope_id},
             )
             wait = max(0, min(int(payload.get("wait_seconds") or 0), 60))
