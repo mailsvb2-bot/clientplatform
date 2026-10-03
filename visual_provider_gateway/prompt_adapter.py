@@ -140,6 +140,23 @@ def _natural_safety_parts(brief: CreativeBrief) -> tuple[str, ...]:
     return tuple(parts)
 
 
+def _natural_policy_parts(brief: CreativeBrief) -> tuple[str, ...]:
+    """Preserve product-level truthfulness rules in provider-natural language."""
+
+    folded_prompt = " ".join(str(brief.prompt or "").casefold().split())
+    parts: list[str] = []
+    if (
+        "do not add fake awards, fake reviews, invented statistics" in folded_prompt
+        or "medical or money guarantees" in folded_prompt
+        or "manipulative urgency" in folded_prompt
+    ):
+        parts.append(
+            "Не выдумывай награды, отзывы, статистику, гарантии, срочность "
+            "или рекламные утверждения, которых нет в запросе."
+        )
+    return tuple(parts)
+
+
 def _compiled_directives(prompt: str) -> tuple[str, ...]:
     # CreativeBrief.normalized() intentionally collapses all whitespace before the
     # provider adapter runs. Compiler v2 output therefore arrives as
@@ -470,6 +487,36 @@ def _adapt_yandex_motion(brief: CreativeBrief) -> CreativeBrief:
     return replace(brief, prompt=prompt)
 
 
+def _bounded_gigachat_prompt(
+    *,
+    scene_head: str,
+    semantic_cues: tuple[str, ...],
+    style_cues: tuple[str, ...],
+    brief: CreativeBrief,
+) -> str:
+    """Keep meaning and mandatory safety even for a near-limit owner request."""
+
+    safety = (*_natural_safety_parts(brief), *_natural_policy_parts(brief))
+    safety_block = _bounded_join(list(safety), limit=520)
+    semantic_block = _bounded_join(list(semantic_cues), limit=520)
+    style_block = _bounded_join(list(style_cues), limit=180)
+
+    reserved_blocks = [block for block in (semantic_block, style_block, safety_block) if block]
+    reserved = sum(len(block) for block in reserved_blocks) + len(reserved_blocks)
+    scene_limit = max(420, _GIGACHAT_PROMPT_LIMIT - reserved)
+    bounded_scene = _bounded_join([scene_head], limit=scene_limit)
+
+    return _bounded_join(
+        [
+            bounded_scene,
+            semantic_block,
+            style_block,
+            safety_block,
+        ],
+        limit=_GIGACHAT_PROMPT_LIMIT,
+    )
+
+
 def _adapt_gigachat(brief: CreativeBrief) -> CreativeBrief:
     """Send GigaChat a natural scene description instead of compiler meta-language.
 
@@ -502,14 +549,11 @@ def _adapt_gigachat(brief: CreativeBrief) -> CreativeBrief:
     else:
         scene_head = owner_request
 
-    prompt = _bounded_join(
-        [
-            scene_head,
-            *semantic_cues,
-            *style_cues,
-            *_natural_safety_parts(brief),
-        ],
-        limit=_GIGACHAT_PROMPT_LIMIT,
+    prompt = _bounded_gigachat_prompt(
+        scene_head=scene_head,
+        semantic_cues=semantic_cues,
+        style_cues=style_cues,
+        brief=brief,
     )
     return replace(brief, prompt=prompt)
 
