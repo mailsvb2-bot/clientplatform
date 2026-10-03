@@ -66,6 +66,7 @@ class VisualCreativeBrief:
     reference_url: str = ""
     brand_context: str = ""
     seed: int | None = None
+    scene_contract: dict[str, object] | None = None
 
 _RENDER_PACK_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _RENDER_IDEMPOTENCY_RE = re.compile(r"[A-Za-z0-9_.:@/-]{8,200}")
@@ -410,6 +411,7 @@ def submit_visual(
         "brand_context": str(brief.brand_context or ""),
         "wait_seconds": bounded_wait,
         "seed": brief.seed,
+        "scene_contract": brief.scene_contract,
         "scope_id": scope,
         "idempotency_key": idem,
     }
