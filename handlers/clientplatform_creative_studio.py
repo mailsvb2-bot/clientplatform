@@ -32,6 +32,13 @@ from clientplatform.application.event_content_assets import (
     EventContentAssetError,
     store_generated_event_content_asset,
 )
+from clientplatform.application.visual_scene_planning import plan_visual_scene_contract
+from clientplatform.application.visual_scene_variants import (
+    VisualSceneVariant,
+    build_visual_scene_variants,
+    recommended_scene_variant,
+    supplement_scene_variant,
+)
 from clientplatform.application.visual_style_preferences import (
     clear_visual_style_preference,
     load_visual_style_preference,
@@ -62,6 +69,8 @@ from clientplatform.domain.creative_generation import (
 from clientplatform.domain.event_content import EventContentStage
 from clientplatform.domain.programs import ContentKind
 from clientplatform.domain.tenancy import TenantPermissionDenied
+from clientplatform.domain.visual_prompt_compiler import semantic_flags_for_request
+from clientplatform.domain.visual_scene_contract import VisualSceneContract
 from clientplatform.domain.visual_style_intent import (
     VisualStyleIntent,
     infer_visual_style_intent,
@@ -95,6 +104,102 @@ router.callback_query.filter(control.ClientPlatformControlEnabled())
 class ClientPlatformCreativeStudioState(StatesGroup):
     waiting_prompt = State()
     choosing_style = State()
+    waiting_scene_supplement = State()
+
+
+def _scene_variant_text(variants: tuple[VisualSceneVariant, ...]) -> str:
+    chunks = [
+        "🎬 Варианты постановки\n\n"
+        "Смысл исходного запроса у всех вариантов одинаковый — меняется только "
+        "способ его визуально показать. Можно выбрать готовый вариант или "
+        "дополнить понравившийся своим уточнением."
+    ]
+    for index, variant in enumerate(variants, start=1):
+        chunks.append(
+            f"\n{index}. {variant.title}\n{variant.description}"
+        )
+    return "\n".join(chunks)
+
+
+def _scene_variant_rows(
+    token: str,
+    variants: tuple[VisualSceneVariant, ...],
+) -> list[list[tuple[str, str]]]:
+    rows: list[list[tuple[str, str]]] = []
+    for index, variant in enumerate(variants, start=1):
+        rows.append(
+            [
+                (f"✅ {index}. {variant.title}", f"cpc:sv:pick:{variant.id}:{token}"),
+                ("✍️ Дополнить своим", f"cpc:sv:add:{variant.id}:{token}"),
+            ]
+        )
+    rows.extend(
+        [
+            [("🤖 Выбрать лучший автоматически", f"cpc:sv:auto:{token}")],
+            [("🎨 К настройкам стиля", f"cpc:st:open:{token}")],
+        ]
+    )
+    return rows
+
+
+def _scene_contract_from_state(data: dict) -> VisualSceneContract:
+    return VisualSceneContract.from_mapping(data.get("creative_scene_contract"))
+
+
+def _scene_variants_from_state(data: dict) -> tuple[VisualSceneVariant, ...]:
+    raw = data.get("creative_scene_variants")
+    if not isinstance(raw, list):
+        raise ValueError("visual scene variants are unavailable")
+    variants = tuple(VisualSceneVariant.from_mapping(item) for item in raw)
+    if len(variants) != 5:
+        raise ValueError("visual scene variants are unavailable")
+    return variants
+
+
+async def _ensure_scene_variants(
+    state: FSMContext,
+    data: dict,
+) -> tuple[VisualSceneContract, str, tuple[VisualSceneVariant, ...]]:
+    try:
+        contract = _scene_contract_from_state(data)
+        variants = _scene_variants_from_state(data)
+        source = str(data.get("creative_scene_planner_source") or "").strip().lower()
+        if source not in {"ai", "deterministic"}:
+            raise ValueError("visual scene planner source is invalid")
+        return contract, source, variants
+    except (TypeError, ValueError):
+        pass
+
+    request = normalize_business_image_request(str(data["creative_pending_prompt"]))
+    style = _style_intent_from_state(data)
+    flags = semantic_flags_for_request(request)
+    contract, source = await asyncio.to_thread(
+        plan_visual_scene_contract,
+        request=request,
+        semantic_flags=flags,
+    )
+    variants = await asyncio.to_thread(
+        build_visual_scene_variants,
+        request=request,
+        scene_contract=contract,
+        style_intent=style,
+    )
+    await state.update_data(
+        creative_scene_contract=contract.to_mapping(),
+        creative_scene_planner_source=source,
+        creative_scene_variants=[item.to_mapping() for item in variants],
+    )
+    return contract, source, variants
+
+
+def _variant_by_id(
+    variants: tuple[VisualSceneVariant, ...],
+    variant_id: str,
+) -> VisualSceneVariant:
+    for variant in variants:
+        if variant.id == variant_id:
+            return variant
+    raise ValueError("visual scene variant is unavailable")
 
 
 def _receipt_kind(receipt: CreativeGenerationReceipt | None) -> str:
