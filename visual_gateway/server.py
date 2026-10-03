@@ -32,6 +32,109 @@ _SCOPE_RE = re.compile(r"[A-Za-z0-9_.:@/-]{1,160}")
 _ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _IDEMPOTENCY_RE = re.compile(r"[A-Za-z0-9_.:@/-]{8,200}")
 _COLOR_RE = re.compile(r"#[0-9A-Fa-f]{6}")
+FONT_PRESETS = (
+    "auto",
+    "modern",
+    "strict",
+    "friendly",
+    "premium",
+    "editorial",
+    "elegant",
+    "bold_ad",
+)
+_FONT_PRESET_PATHS: dict[str, dict[str, tuple[str, ...]]] = {
+    "modern": {
+        "headline": (
+            "/usr/share/fonts/truetype/lato/Lato-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ),
+        "body": (
+            "/usr/share/fonts/truetype/lato/Lato-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ),
+        "cta": (
+            "/usr/share/fonts/truetype/lato/Lato-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ),
+    },
+    "strict": {
+        "headline": (
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ),
+        "body": (
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ),
+        "cta": (
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ),
+    },
+    "friendly": {
+        "headline": ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",),
+        "body": ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",),
+        "cta": ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",),
+    },
+    "premium": {
+        "headline": (
+            "/usr/share/fonts/truetype/noto/NotoSerif-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+        ),
+        "body": (
+            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ),
+        "cta": (
+            "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ),
+    },
+    "editorial": {
+        "headline": (
+            "/usr/share/fonts/truetype/noto/NotoSerif-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+        ),
+        "body": (
+            "/usr/share/fonts/truetype/noto/NotoSerif-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+        ),
+        "cta": (
+            "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ),
+    },
+    "elegant": {
+        "headline": (
+            "/usr/share/fonts/truetype/liberation2/LiberationSerif-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+        ),
+        "body": (
+            "/usr/share/fonts/truetype/liberation2/LiberationSerif-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+        ),
+        "cta": (
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ),
+    },
+    "bold_ad": {
+        "headline": (
+            "/usr/share/fonts/truetype/lato/Lato-Heavy.ttf",
+            "/usr/share/fonts/truetype/lato/Lato-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ),
+        "body": (
+            "/usr/share/fonts/truetype/lato/Lato-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ),
+        "cta": (
+            "/usr/share/fonts/truetype/lato/Lato-Heavy.ttf",
+            "/usr/share/fonts/truetype/lato/Lato-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ),
+    },
+}
 
 
 class GatewayError(RuntimeError):
@@ -627,6 +730,7 @@ def _render_request(payload: dict[str, Any]) -> tuple[str, str, str, list[str], 
     composition = payload.get("composition")
     if not isinstance(composition, dict):
         raise GatewayError(400, "invalid_render_composition")
+    _font_preset(composition, resolve_auto=False)
     composition_json = _canonical(composition)
     if len(composition_json.encode("utf-8")) > 64 * 1024:
         raise GatewayError(413, "render_composition_too_large")
@@ -664,11 +768,51 @@ def _color(value: object, default: str) -> str:
     return token if _COLOR_RE.fullmatch(token) else default
 
 
-def _font(config: GatewayConfig, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    try:
-        return ImageFont.truetype(config.font_path, size=size)
-    except (OSError, ValueError):
-        return ImageFont.load_default(size=size)
+def _font_preset(
+    composition: dict[str, Any],
+    *,
+    resolve_auto: bool,
+) -> str:
+    typography = composition.get("typography")
+    if typography is None:
+        preset = "auto"
+    else:
+        if not isinstance(typography, dict) or set(typography) != {"preset"}:
+            raise GatewayError(400, "invalid_render_typography")
+        preset = str(typography.get("preset") or "auto").strip().lower()
+        if preset not in FONT_PRESETS:
+            raise GatewayError(400, "invalid_render_typography")
+    if preset != "auto" or not resolve_auto:
+        return preset
+
+    headline = " ".join(str(composition.get("headline") or "").split())
+    body = " ".join(str(composition.get("body") or "").split())
+    cta = " ".join(str(composition.get("cta") or "").split())
+    if len(body) >= 220:
+        return "editorial"
+    if len(headline) <= 28 and len(body) <= 110 and cta:
+        return "bold_ad"
+    if len(headline) >= 72:
+        return "strict"
+    return "modern"
+
+
+def _font(
+    config: GatewayConfig,
+    size: int,
+    *,
+    preset: str,
+    role: str,
+) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    candidates = list(_FONT_PRESET_PATHS.get(preset, {}).get(role, ()))
+    if config.font_path and config.font_path not in candidates:
+        candidates.append(config.font_path)
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size=size)
+        except (OSError, ValueError):
+            continue
+    return ImageFont.load_default(size=size)
 
 
 def _wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int, max_lines: int) -> list[str]:
@@ -711,9 +855,25 @@ def _overlay(config: GatewayConfig, width: int, height: int, composition: dict[s
     x = left + pad
     y = top + pad
     maxw = right - x - pad
-    hfont = _font(config, max(32, int(width * 0.052)))
-    bfont = _font(config, max(24, int(width * 0.030)))
-    cfont = _font(config, max(24, int(width * 0.032)))
+    font_preset = _font_preset(composition, resolve_auto=True)
+    hfont = _font(
+        config,
+        max(32, int(width * 0.052)),
+        preset=font_preset,
+        role="headline",
+    )
+    bfont = _font(
+        config,
+        max(24, int(width * 0.030)),
+        preset=font_preset,
+        role="body",
+    )
+    cfont = _font(
+        config,
+        max(24, int(width * 0.032)),
+        preset=font_preset,
+        role="cta",
+    )
     for line in _wrap(draw, headline, hfont, maxw, 2):
         draw.text((x, y), line, font=hfont, fill=text_color)
         y += int(hfont.size * 1.22) if hasattr(hfont, "size") else 42
