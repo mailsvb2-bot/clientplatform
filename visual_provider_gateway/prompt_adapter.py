@@ -133,8 +133,7 @@ def _natural_safety_parts(brief: CreativeBrief) -> tuple[str, ...]:
         parts.append("Без читаемого текста и UI.")
     if str(brief.brand_context or "").strip():
         parts.append(
-            "Названия бренда, услуг и методов не печатать в кадре, кроме точного "
-            "названия, которое пользователь явно попросил показать."
+            "Не печатай названия бренда/услуг/методов без явного запроса на это."
         )
 
     return tuple(parts)
@@ -314,11 +313,11 @@ _STATE_CONNECTOR_RE = re.compile(
 _STATE_EVIDENCE_RULES = (
     (
         re.compile(r"(?:\bдобр\w*|\bkind\b|\bgentle\b)", re.IGNORECASE),
-        "мягкий доброжелательный взгляд, расслабленная поза",
+        "доброжелательный расслабленный взгляд",
     ),
     (
         re.compile(r"(?:\bпушист\w*|\bfluffy\b)", re.IGNORECASE),
-        "шерсть/мех заметно гуще и пушистее",
+        "заметно более густой пушистый мех",
     ),
     (
         re.compile(r"(?:\bмягк\w*|\bsoft\b)", re.IGNORECASE),
@@ -326,7 +325,7 @@ _STATE_EVIDENCE_RULES = (
     ),
     (
         re.compile(r"(?:\bспокойн\w*|\bcalm\b)", re.IGNORECASE),
-        "спокойный взгляд и расслабленная поза",
+        "спокойный расслабленный взгляд",
     ),
     (
         re.compile(r"(?:\bзл\w*|\bangry\b)", re.IGNORECASE),
@@ -338,7 +337,7 @@ _STATE_EVIDENCE_RULES = (
     ),
     (
         re.compile(r"(?:\bсчастлив\w*|\bhappy\b)", re.IGNORECASE),
-        "явно радостное выражение и открытая поза",
+        "радостное выражение, открытая поза",
     ),
     (
         re.compile(r"(?:\bгруст\w*|\bsad\b)", re.IGNORECASE),
@@ -455,20 +454,17 @@ def _detailed_transformation_stage_cue(
     opening = (
         "; ".join(initial_evidence)
         if initial_evidence
-        else "нейтральное начало без финальных признаков"
+        else "обычное исходное состояние"
     )
     if listening:
-        middle = (
-            "явно слушает аудио в наушниках или через физическое устройство, "
-            "не абстрактный символ волны"
-        )
+        middle = "слушает аудио в заметных наушниках и начинает меняться"
     else:
-        middle = "видима причина/действие и первые признаки изменения"
+        middle = "видна причина/действие и первые признаки изменения"
     final = "; ".join(final_evidence)
     prefix = (
-        "Три сцены, один и тот же субъект: "
+        "Один герой, три последовательные стадии: "
         if allow_labels
-        else "Три сцены без подписей, один и тот же субъект: "
+        else "Один герой, три последовательные стадии без подписей: "
     )
     return (
         prefix
@@ -476,7 +472,7 @@ def _detailed_transformation_stage_cue(
         + opening
         + "; затем — "
         + middle
-        + "; в финале — "
+        + "; финал — "
         + final
         + "."
     )
@@ -640,10 +636,14 @@ def _bounded_yandex_prompt(
     safety = _natural_safety_parts(brief)
     safety_block = _bounded_join(list(safety), limit=_YANDEX_PROMPT_LIMIT)
     stage_priority = any(
-        cue.startswith("Три сцены") for cue in semantic_cues
+        cue.startswith("Один герой, три последовательные стадии")
+        or cue.startswith("Три сцены")
+        for cue in semantic_cues
     )
-    style_block = _bounded_join(list(style_cues), limit=60 if stage_priority else 120)
+    style_block = _bounded_join(list(style_cues), limit=96 if stage_priority else 120)
     minimum_scene_head = 90 if stage_priority else 180
+    normalized_scene_head = " ".join(str(scene_head or "").split()).strip()
+    scene_reserve = min(len(normalized_scene_head), minimum_scene_head)
     fixed_reserved = (
         len(safety_block)
         + len(style_block)
@@ -654,7 +654,7 @@ def _bounded_yandex_prompt(
         70,
         _YANDEX_PROMPT_LIMIT
         - fixed_reserved
-        - minimum_scene_head
+        - scene_reserve
         - 1,
     )
     bounded_semantics = _bounded_join(list(semantic_cues), limit=semantic_budget)
@@ -667,7 +667,7 @@ def _bounded_yandex_prompt(
         + len(bounded_semantics)
         + (1 if bounded_semantics else 0)
     )
-    scene_limit = max(minimum_scene_head, _YANDEX_PROMPT_LIMIT - reserved)
+    scene_limit = max(scene_reserve, _YANDEX_PROMPT_LIMIT - reserved)
     bounded_scene_head = _bounded_join([scene_head], limit=scene_limit)
     return _bounded_join(
         [bounded_scene_head, *semantic_parts, *style_parts, *safety, *extras],
