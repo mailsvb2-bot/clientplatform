@@ -45,8 +45,9 @@ def test_yandex_adapter_uses_natural_owner_description_without_compiler_meta() -
     adapted = adapt_visual_brief_for_provider(_compiled_brief(), provider="yandexart")
 
     assert adapted.prompt.startswith(
-        "a prickly hedgehog listens to an audio session and becomes gentle"
+        "Причинно-следственная трансформация одного и того же главного субъекта."
     )
+    assert "a prickly hedgehog listens to an audio session and becomes gentle" in adapted.prompt
     assert "Owner request" not in adapted.prompt
     assert "Render the owner's requested scene faithfully" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
@@ -81,16 +82,76 @@ def test_yandex_adapter_preserves_exact_owner_listening_and_transformation() -> 
 
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
-    assert adapted.prompt.startswith(request)
+    assert adapted.prompt.startswith(
+        "Причинно-следственная трансформация одного и того же главного субъекта."
+    )
+    assert request in adapted.prompt
     assert removed_product_method in adapted.prompt
     assert "Слушает аудио" in adapted.prompt
     assert "наушники" in adapted.prompt
-    assert "исходное состояние" in adapted.prompt
-    assert "и результат." in adapted.prompt
-    assert "Эмоции и качества" in adapted.prompt
-    assert "выражению, позе и фактуре" in adapted.prompt
+    assert "трёх читаемых фазах" in adapted.prompt
+    assert "действие или причина изменения" in adapted.prompt
+    assert "одному финальному портрету" in adapted.prompt
+    assert "Финальное состояние визуально отличается" in adapted.prompt
     assert "Owner request" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
+    assert len(adapted.prompt) <= 500
+
+
+def test_yandex_adapter_does_not_turn_business_name_into_image_text() -> None:
+    removed_product_method = "метро" + "терапию"
+    request = (
+        "ёж, который слушает "
+        + removed_product_method
+        + " и становится добрым и пушистым"
+    )
+    compiled = compile_visual_prompt(
+        request=request,
+        kind="image",
+        brand_context="Brand name: Metrotherapy. Product: guided audio.",
+    )
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+        brand_context="Brand name: Metrotherapy. Product: guided audio.",
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
+
+    assert "Контекст бренда:" not in adapted.prompt
+    assert "Brand name:" not in adapted.prompt
+    assert "не печатай" in adapted.prompt
+    assert "логотип" in adapted.prompt
+    assert "Без читаемого текста" in adapted.prompt
+    assert len(adapted.prompt) <= 500
+
+
+def test_yandex_adapter_compiles_sink_replacement_as_complete_installation() -> None:
+    compiled = compile_visual_prompt(
+        request="Замена раковины",
+        kind="image",
+    )
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
+
+    assert adapted.prompt.startswith(
+        "Реалистичная завершённая замена только указанного объекта"
+    )
+    assert "Замена раковины" in adapted.prompt
+    assert "сохрани окружение" in adapted.prompt
+    assert "физически рабочий" in adapted.prompt
+    assert "органами управления" in adapted.prompt
+    assert "Без читаемого текста" in adapted.prompt
     assert len(adapted.prompt) <= 500
 
 
@@ -203,7 +264,10 @@ def test_yandex_adapter_keeps_all_safety_clauses_for_long_owner_request() -> Non
     )
 
     assert len(adapted.prompt) <= 500
-    assert adapted.prompt.startswith("a hedgehog listens to a guided audio wellness session")
+    assert adapted.prompt.startswith(
+        "Причинно-следственная трансформация одного и того же главного субъекта."
+    )
+    assert "a hedgehog listens to a guided audio wellness session" in adapted.prompt
     assert "Слушает аудио" in adapted.prompt
     assert "исходное состояние" in adapted.prompt
     assert "Без водяных знаков" in adapted.prompt
@@ -310,7 +374,7 @@ def test_engine_applies_adapter_only_after_provider_selection(monkeypatch) -> No
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 5
+    assert result.provider_payload["prompt_adapter_version"] == 6
     assert "Owner request" not in captured["brief"].prompt
     assert "hedgehog listens to an audio session" in captured["brief"].prompt
 
@@ -343,7 +407,10 @@ def test_yandex_adapter_prioritizes_owner_request_before_style_and_brand_context
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert adapted.prompt.startswith(
-        "a prickly hedgehog listens to an audio session and becomes gentle"
+        "Причинно-следственная трансформация одного и того же главного субъекта."
     )
+    assert "a prickly hedgehog listens to an audio session and becomes gentle" in adapted.prompt
+    assert "Example brand context" not in adapted.prompt
+    assert "не печатай" in adapted.prompt
     assert len(adapted.prompt) <= 500
     assert "Owner request" not in adapted.prompt
