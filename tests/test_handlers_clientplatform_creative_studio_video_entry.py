@@ -77,6 +77,58 @@ def test_new_image_consent_discloses_one_extra_non_rendering_qa_call(
     assert "не повторяется" in message
 
 
+def test_prepared_image_menu_discloses_semantic_qa_before_continue(
+    monkeypatch,
+) -> None:
+    request = "ёж слушает аудио и становится добрым и пушистым"
+    frozen = visual_creatives.freeze_business_image_payload(
+        request=request,
+        country_code="RU",
+    )
+    active = SimpleNamespace(
+        id="receipt-id",
+        request_text=request,
+        provider_payload_json=frozen,
+        status=CreativeGenerationReceiptStatus.PREPARED,
+        delivery_claimed_at=None,
+        source_job_id="",
+    )
+    actor = SimpleNamespace(
+        business_id="business-id",
+        assert_can_manage_promotions=lambda: None,
+    )
+    message = SimpleNamespace(answer=AsyncMock())
+
+    monkeypatch.setattr(studio.control, "_actor", AsyncMock(return_value=actor))
+    monkeypatch.setattr(studio, "_active", AsyncMock(return_value=active))
+    monkeypatch.setattr(
+        studio,
+        "_retire_unavailable_completed_receipt",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(studio, "visual_generation_ready", lambda **_kwargs: True)
+    monkeypatch.setattr(
+        studio,
+        "visual_video_generation_mode",
+        lambda **_kwargs: "native",
+    )
+
+    asyncio.run(
+        studio.send_creative_studio_menu(
+            message,
+            user_id=101,
+            business_id="business-id",
+        )
+    )
+
+    body = message.answer.await_args.args[0]
+    assert "Платные AI-вызовы ещё не начинались" in body
+    assert "Кнопка «Продолжить создание» подтверждает генерацию" in body
+    assert "один раз выполнит отдельную AI-проверку смысла" in body
+    assert "не создаёт новую картинку" in body
+    assert "не повторяется" in body
+
+
 def test_prepared_video_keeps_video_edit_path(monkeypatch) -> None:
     active = SimpleNamespace(
         status=CreativeGenerationReceiptStatus.PREPARED,
