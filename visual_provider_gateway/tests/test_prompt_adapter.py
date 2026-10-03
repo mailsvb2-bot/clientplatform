@@ -92,8 +92,8 @@ def test_yandex_adapter_preserves_exact_owner_listening_and_transformation() -> 
     assert "Слушает аудио" in adapted.prompt
     assert "наушники" in adapted.prompt
     assert "Сториборд в одном кадре" in adapted.prompt
-    assert "действие/причина" in adapted.prompt
-    assert "не один финальный портрет" in adapted.prompt
+    assert "Слушает аудио" in adapted.prompt
+    assert "ПОСЛЕ заметно меняется по всем указанным признакам" in adapted.prompt
     assert "становится добрым и пушистым" in adapted.prompt
     assert "Owner request" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
@@ -325,7 +325,7 @@ def test_gigachat_adapter_preserves_listening_transformation_without_compiler_me
     assert "Слушает аудио" in adapted.prompt
     assert "наушники" in adapted.prompt
     assert "Сториборд в одном кадре" in adapted.prompt
-    assert "не один финальный портрет" in adapted.prompt
+    assert "ПОСЛЕ заметно меняется по всем указанным признакам" in adapted.prompt
     assert "Owner request" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
     assert len(adapted.prompt) <= 1800
@@ -560,8 +560,12 @@ def test_engine_applies_meaning_adapter_to_gigachat_fallback(monkeypatch) -> Non
     assert result.status == "succeeded"
     assert result.provider_payload["prompt_adapter_version"] == 8
     prompt = captured["brief"].prompt
-    assert prompt.startswith("Один субъект: до → действие/причина → после.")
+    assert prompt.startswith(
+        "Сториборд в одном изображении: один и тот же герой повторён как "
+        "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ."
+    )
     assert "hedgehog listens to an audio session" in prompt
+    assert "Сториборд в одном кадре" in prompt
     assert "Owner request" not in prompt
     assert "mandatory" not in prompt.casefold()
 
