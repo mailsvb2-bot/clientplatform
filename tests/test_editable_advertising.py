@@ -557,6 +557,37 @@ async def test_reopening_finished_editable_project_skips_paid_generation(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_new_editable_project_inherits_saved_brand_typography(monkeypatch) -> None:
+    project = _project(status=EditableAdProjectStatus.DRAFT)
+    state = _State(_goal_data())
+    target = _goal_target()
+    callback = _goal_callback("cpo:editask:image:business-token", target)
+    create_project = Mock(return_value=project)
+
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(
+        goal.control,
+        "_actor",
+        AsyncMock(return_value=SimpleNamespace(business_id=project.business_id)),
+    )
+    monkeypatch.setattr(goal.control, "_callback_message", lambda _callback: target)
+    monkeypatch.setattr(
+        goal,
+        "load_goal_visual_brand",
+        lambda **_kwargs: SimpleNamespace(
+            font_preset="premium",
+            render_brand=lambda: BRAND,
+        ),
+    )
+    monkeypatch.setattr(goal, "create_editable_ad_project", create_project)
+
+    await goal.ask_editable_ad_confirmation(callback, state)
+
+    assert create_project.call_args.kwargs["font_preset"] == "premium"
+    assert state.data["editable_font_preset"] == project.font_preset
+
+
+@pytest.mark.asyncio
 async def test_expired_editable_project_requires_explicit_new_source_confirmation(
     monkeypatch,
 ) -> None:
