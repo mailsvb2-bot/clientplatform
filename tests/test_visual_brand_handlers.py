@@ -535,6 +535,7 @@ def test_apply_visual_brand_requires_fresh_proposal_and_manager_permission(monke
                 "primary_color": proposal.primary_color,
                 "accent_color": proposal.accent_color,
                 "text_color": proposal.text_color,
+                "font_preset": proposal.font_preset,
             },
         }
     )
@@ -568,6 +569,7 @@ def test_apply_visual_brand_saves_confirmed_identity_and_handles_invalid_proposa
                 "primary_color": proposal.primary_color,
                 "accent_color": proposal.accent_color,
                 "text_color": proposal.text_color,
+                "font_preset": proposal.font_preset,
             },
         }
     )
