@@ -125,6 +125,230 @@ def test_service_submit_retry_does_not_duplicate_provider_call(tmp_path, monkeyp
     assert mime == "image/png"
 
 
+def test_semantic_qa_is_claimed_once_and_reused_across_retries(
+    tmp_path,
+    monkeypatch,
+):
+    output = tmp_path / "out"
+    output.mkdir()
+    asset = output / "image-ready.png"
+    asset.write_bytes(b"\x89PNG\r\n\x1a\nsemantic")
+    monkeypatch.setenv("VISUAL_CREATIVE_OUTPUT_DIR", str(output))
+    monkeypatch.setenv("VISUAL_SEMANTIC_QA_ENABLED", "1")
+
+    store = JobStore(str(tmp_path / "jobs.sqlite3"))
+    reserved, _ = store.reserve(
+        client_id="client-a",
+        scope_id="business-a",
+        idempotency_key="request-semantic-qa-1",
+        request_fingerprint="a" * 64,
+        kind="image",
+    )
+    store.update(
+        reserved.id,
+        client_id="client-a",
+        scope_id="business-a",
+        provider="yandexart",
+        kind="image",
+        status="succeeded",
+        model="art://model",
+        mime_type="image/png",
+        asset_path=str(asset),
+        provider_state_json=VisualGatewayService._provider_state_json(
+            {},
+            country_code="RU",
+        ),
+    )
+
+    class Reviewer:
+        def __init__(self):
+            self.calls = 0
+
+        def configured(self, kind):
+            return kind == "image"
+
+        def review_image_semantics(self, **kwargs):
+            self.calls += 1
+            assert kwargs["image_path"] == asset.resolve()
+            assert "object_replacement" in kwargs["semantic_flags"]
+            return {
+                "status": "needs_review",
+                "issues": ["у раковины не видно крана"],
+                "summary": "замена показана неполно",
+            }
+
+    reviewer = Reviewer()
+    monkeypatch.setattr(
+        "visual_provider_gateway.service.build_provider",
+        lambda name: reviewer if name == "gigachat" else None,
+    )
+    monkeypatch.setattr(
+        "visual_provider_gateway.service.GigaChatImageProvider",
+        Reviewer,
+    )
+    svc = VisualGatewayService(store=store, engine=FakeEngine(asset))
+    contract = {
+        "version": 1,
+        "kind": "image",
+        "country_code": "RU",
+        "owner_request": "Замена раковины",
+        "semantic_flags": ["object_replacement"],
+    }
+
+    first = svc.semantic_qa(
+        reserved.id,
+        client_id="client-a",
+        scope_id="business-a",
+        contract=contract,
+    )
+    second = svc.semantic_qa(
+        reserved.id,
+        client_id="client-a",
+        scope_id="business-a",
+        contract=contract,
+    )
+
+    assert first == second
+    assert first["status"] == "needs_review"
+    assert reviewer.calls == 1
+    with pytest.raises(KeyError):
+        svc.semantic_qa(
+            reserved.id,
+            client_id="client-a",
+            scope_id="business-b",
+            contract=contract,
+        )
+    conflicting = dict(contract)
+    conflicting["owner_request"] = "Замена двери"
+    with pytest.raises(ValueError, match="contract_conflict"):
+        svc.semantic_qa(
+            reserved.id,
+            client_id="client-a",
+            scope_id="business-a",
+            contract=conflicting,
+        )
+
+
+def test_semantic_qa_obeys_operator_provider_policy_before_any_egress(
+    tmp_path,
+    monkeypatch,
+):
+    output = tmp_path / "out"
+    output.mkdir()
+    asset = output / "image-ready.png"
+    asset.write_bytes(b"\x89PNG\r\n\x1a\nsemantic")
+    monkeypatch.setenv("VISUAL_CREATIVE_OUTPUT_DIR", str(output))
+    monkeypatch.setenv("VISUAL_SEMANTIC_QA_ENABLED", "1")
+    monkeypatch.setenv("VISUAL_IMAGE_PROVIDER", "openai")
+
+    store = JobStore(str(tmp_path / "jobs.sqlite3"))
+    reserved, _ = store.reserve(
+        client_id="client-a",
+        scope_id="business-a",
+        idempotency_key="request-semantic-qa-policy-1",
+        request_fingerprint="c" * 64,
+        kind="image",
+    )
+    store.update(
+        reserved.id,
+        client_id="client-a",
+        scope_id="business-a",
+        provider="openai",
+        kind="image",
+        status="succeeded",
+        mime_type="image/png",
+        asset_path=str(asset),
+        provider_state_json=VisualGatewayService._provider_state_json(
+            {},
+            country_code="RU",
+        ),
+    )
+    svc = VisualGatewayService(store=store, engine=FakeEngine(asset))
+    contract = {
+        "version": 1,
+        "kind": "image",
+        "country_code": "RU",
+        "owner_request": "Замена раковины",
+        "semantic_flags": ["object_replacement"],
+    }
+
+    monkeypatch.setattr(
+        "visual_provider_gateway.service.build_provider",
+        lambda _name: pytest.fail("provider policy must block QA egress"),
+    )
+
+    result = svc.semantic_qa(
+        reserved.id,
+        client_id="client-a",
+        scope_id="business-a",
+        contract=contract,
+    )
+
+    assert result == {"status": "unavailable", "issues": [], "summary": ""}
+
+
+def test_semantic_qa_running_claim_never_repeats_external_review(
+    tmp_path,
+    monkeypatch,
+):
+    output = tmp_path / "out"
+    output.mkdir()
+    asset = output / "image-ready.png"
+    asset.write_bytes(b"\x89PNG\r\n\x1a\nsemantic")
+    monkeypatch.setenv("VISUAL_CREATIVE_OUTPUT_DIR", str(output))
+
+    store = JobStore(str(tmp_path / "jobs.sqlite3"))
+    reserved, _ = store.reserve(
+        client_id="client-a",
+        scope_id="business-a",
+        idempotency_key="request-semantic-qa-2",
+        request_fingerprint="b" * 64,
+        kind="image",
+    )
+    store.update(
+        reserved.id,
+        client_id="client-a",
+        scope_id="business-a",
+        provider="yandexart",
+        kind="image",
+        status="succeeded",
+        mime_type="image/png",
+        asset_path=str(asset),
+        provider_state_json=VisualGatewayService._provider_state_json(
+            {},
+            country_code="RU",
+        ),
+    )
+    contract = {
+        "version": 1,
+        "kind": "image",
+        "country_code": "RU",
+        "owner_request": "ёж слушает аудио и становится добрым",
+        "semantic_flags": ["transformation", "listening"],
+    }
+    svc = VisualGatewayService(store=store, engine=FakeEngine(asset))
+    normalized = svc._semantic_qa_contract(contract)
+    digest = svc._semantic_qa_digest(normalized)
+    store.claim_semantic_qa(
+        reserved.id,
+        client_id="client-a",
+        scope_id="business-a",
+        contract_digest=digest,
+    )
+
+    monkeypatch.setattr(
+        "visual_provider_gateway.service.build_provider",
+        lambda _name: pytest.fail("running claim must not repeat provider QA"),
+    )
+    result = svc.semantic_qa(
+        reserved.id,
+        client_id="client-a",
+        scope_id="business-a",
+        contract=contract,
+    )
+    assert result == {"status": "unavailable", "issues": [], "summary": ""}
+
+
 def test_crash_after_provider_acceptance_becomes_non_retryable_ambiguous_job(
     tmp_path,
     monkeypatch,
@@ -234,6 +458,21 @@ def test_provider_state_survives_service_restart_between_submit_and_poll(tmp_pat
         "motion_duration_seconds": 8,
         "motion_aspect_ratio": "9:16",
     }
+    stored = restarted.store.get(
+        created["id"],
+        client_id="client-a",
+        scope_id="tenant-a",
+    )
+    assert restarted._provider_policy_country(stored.provider_state_json) == "RU"
+
+
+def test_legacy_raw_provider_state_remains_readable_after_envelope_upgrade():
+    raw = '{"motion_duration_seconds":8,"motion_aspect_ratio":"9:16"}'
+    assert VisualGatewayService._provider_state(raw) == {
+        "motion_duration_seconds": 8,
+        "motion_aspect_ratio": "9:16",
+    }
+    assert VisualGatewayService._provider_policy_country(raw) == ""
 
 
 def test_succeeded_job_is_not_asset_ready_after_transient_file_disappears(tmp_path, monkeypatch):

@@ -10,11 +10,31 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .engine import VisualCreativeEngine, provider_snapshot
+from .engine import VisualCreativeEngine, build_provider, provider_order, provider_snapshot
 from .models import CreativeBrief, CreativeJob
+from .providers import GigaChatImageProvider, ProviderTransportError
 from .store import JobStore, StoredJob
 
 
+
+_SEMANTIC_QA_FLAGS = frozenset(
+    {
+        "transformation",
+        "object_replacement",
+        "sequence",
+        "listening",
+        "watching",
+        "reading",
+        "using",
+        "holding",
+        "eating_or_drinking",
+        "generic_action",
+        "comparison",
+        "explicit_text",
+        "portrait",
+        "visible_state",
+    }
+)
 
 _SAFE_EXPLICIT_RETRY_ERRORS = frozenset(
     {
@@ -37,11 +57,29 @@ class VisualGatewayService:
         self.engine = engine or VisualCreativeEngine()
 
     @staticmethod
-    def _provider_state_json(value: object) -> str:
-        if not isinstance(value, dict) or not value:
+    def _provider_state_json(
+        value: object,
+        *,
+        country_code: str = "",
+    ) -> str:
+        provider_state = value if isinstance(value, dict) else {}
+        country = re.sub(
+            r"[^A-Z0-9]",
+            "",
+            str(country_code or "").strip().upper(),
+        )
+        if not provider_state and not country:
             return ""
+        encoded_value: dict[str, object]
+        if country:
+            encoded_value = {
+                "_gateway": {"country_code": country},
+                "provider": dict(provider_state),
+            }
+        else:
+            encoded_value = dict(provider_state)
         encoded = json.dumps(
-            value,
+            encoded_value,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -51,7 +89,7 @@ class VisualGatewayService:
         return encoded
 
     @staticmethod
-    def _provider_state(value: object) -> dict[str, Any]:
+    def _decoded_provider_state(value: object) -> dict[str, Any]:
         raw = str(value or "").strip()
         if not raw:
             return {}
@@ -62,6 +100,27 @@ class VisualGatewayService:
         if not isinstance(decoded, dict):
             raise ValueError("invalid_visual_provider_state")
         return decoded
+
+    @classmethod
+    def _provider_state(cls, value: object) -> dict[str, Any]:
+        decoded = cls._decoded_provider_state(value)
+        provider = decoded.get("provider")
+        gateway = decoded.get("_gateway")
+        if isinstance(gateway, dict) and isinstance(provider, dict):
+            return dict(provider)
+        return decoded
+
+    @classmethod
+    def _provider_policy_country(cls, value: object) -> str:
+        decoded = cls._decoded_provider_state(value)
+        gateway = decoded.get("_gateway")
+        if not isinstance(gateway, dict):
+            return ""
+        return re.sub(
+            r"[^A-Z0-9]",
+            "",
+            str(gateway.get("country_code") or "").strip().upper(),
+        )
 
     @staticmethod
     def _output_root() -> Path:
@@ -134,6 +193,83 @@ class VisualGatewayService:
             "error_code": job.error_code,
             "asset_ready": self._asset_ready(job),
         }
+
+    @staticmethod
+    def _semantic_qa_contract(value: object) -> dict[str, object]:
+        if not isinstance(value, dict) or set(value) != {
+            "version",
+            "kind",
+            "country_code",
+            "owner_request",
+            "semantic_flags",
+        }:
+            raise ValueError("visual_semantic_qa_contract_invalid")
+        request = " ".join(str(value.get("owner_request") or "").split()).strip()
+        country_code = str(value.get("country_code") or "").strip().upper()
+        raw_flags = value.get("semantic_flags")
+        if (
+            value.get("version") != 1
+            or str(value.get("kind") or "").strip().lower() != "image"
+            or len(country_code) > 16
+            or any(
+                not (char.isalnum() or char in {"-", "_"})
+                for char in country_code
+            )
+            or not request
+            or len(request) > 1500
+            or any(ord(char) < 32 for char in request)
+            or not isinstance(raw_flags, list)
+            or len(raw_flags) > len(_SEMANTIC_QA_FLAGS)
+        ):
+            raise ValueError("visual_semantic_qa_contract_invalid")
+        flags = tuple(str(item or "").strip() for item in raw_flags)
+        if (
+            len(set(flags)) != len(flags)
+            or any(not item or item not in _SEMANTIC_QA_FLAGS for item in flags)
+        ):
+            raise ValueError("visual_semantic_qa_contract_invalid")
+        return {
+            "version": 1,
+            "kind": "image",
+            "country_code": country_code,
+            "owner_request": request,
+            "semantic_flags": list(flags),
+        }
+
+    @staticmethod
+    def _semantic_qa_digest(contract: dict[str, object]) -> str:
+        return hashlib.sha256(
+            json.dumps(
+                contract,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+
+    @staticmethod
+    def _semantic_qa_public(value: object) -> dict[str, object]:
+        if not isinstance(value, dict):
+            return {"status": "unavailable", "issues": [], "summary": ""}
+        status = str(value.get("status") or "").strip().lower()
+        if status == "running":
+            return {"status": "unavailable", "issues": [], "summary": ""}
+        if status not in {"pass", "needs_review", "unavailable"}:
+            return {"status": "unavailable", "issues": [], "summary": ""}
+        raw_issues = value.get("issues")
+        issues = (
+            [
+                " ".join(str(item or "").split()).strip()[:180]
+                for item in raw_issues[:5]
+                if " ".join(str(item or "").split()).strip()
+            ]
+            if isinstance(raw_issues, list)
+            else []
+        )
+        if status != "needs_review":
+            issues = []
+        summary = " ".join(str(value.get("summary") or "").split()).strip()[:500]
+        return {"status": status, "issues": issues, "summary": summary}
 
     @staticmethod
     def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
@@ -338,7 +474,10 @@ class VisualGatewayService:
             mime_type=job.mime_type,
             asset_path=job.asset_path,
             error_code=job.error_code,
-            provider_state_json=self._provider_state_json(job.provider_payload),
+            provider_state_json=self._provider_state_json(
+                job.provider_payload,
+                country_code=effective_country,
+            ),
         )
         return self._response(stored)
 
@@ -389,7 +528,10 @@ class VisualGatewayService:
             asset_path=refreshed.asset_path,
             error_code=refreshed.error_code,
             provider_state_json=self._provider_state_json(
-                refreshed.provider_payload
+                refreshed.provider_payload,
+                country_code=self._provider_policy_country(
+                    stored.provider_state_json
+                ),
             ),
         )
         return self._response(updated)
@@ -408,6 +550,110 @@ class VisualGatewayService:
         if not candidate.is_file():
             raise FileNotFoundError(gateway_id)
         return candidate, stored.mime_type or "application/octet-stream"
+
+    def semantic_qa(
+        self,
+        gateway_id: str,
+        *,
+        client_id: str,
+        scope_id: str,
+        contract: object,
+    ) -> dict[str, object]:
+        """Run at most one advisory vision review for a succeeded image job.
+
+        The durable claim happens before provider I/O. A retry, redelivery or crash
+        can therefore never trigger a second vision review for the same contract.
+        The review is advisory only and cannot change the image job status.
+        """
+
+        normalized = self._semantic_qa_contract(contract)
+        digest = self._semantic_qa_digest(normalized)
+        stored = self.store.get(
+            gateway_id,
+            client_id=client_id,
+            scope_id=scope_id,
+        )
+        if stored.kind != "image" or stored.status != "succeeded":
+            raise ValueError("visual_semantic_qa_job_not_reviewable")
+        if not self._asset_ready(stored):
+            return {"status": "unavailable", "issues": [], "summary": ""}
+
+        existing, created = self.store.claim_semantic_qa(
+            stored.id,
+            client_id=client_id,
+            scope_id=scope_id,
+            contract_digest=digest,
+        )
+        if not created:
+            return self._semantic_qa_public(existing)
+
+        unavailable: dict[str, object] = {
+            "status": "unavailable",
+            "issues": [],
+            "summary": "",
+        }
+        if not self._truthy_env("VISUAL_SEMANTIC_QA_ENABLED", "1"):
+            completed = self.store.complete_semantic_qa(
+                stored.id,
+                client_id=client_id,
+                scope_id=scope_id,
+                contract_digest=digest,
+                result=unavailable,
+            )
+            return self._semantic_qa_public(completed)
+
+        try:
+            job_country = self._provider_policy_country(stored.provider_state_json)
+            requested_country = re.sub(
+                r"[^A-Z0-9]",
+                "",
+                str(normalized.get("country_code") or "").strip().upper(),
+            )
+            if not job_country or requested_country != job_country:
+                result = unavailable
+            else:
+                allowed = provider_order(
+                    "image",
+                    country_code=job_country,
+                )
+                if "gigachat" not in allowed:
+                    result = unavailable
+                else:
+                    provider = build_provider("gigachat")
+                    if (
+                        not isinstance(provider, GigaChatImageProvider)
+                        or not provider.configured("image")
+                    ):
+                        result = unavailable
+                    else:
+                        root = self._output_root()
+                        candidate = Path(stored.asset_path).expanduser().resolve()
+                        candidate.relative_to(root)
+                        raw_flags = normalized.get("semantic_flags")
+                        if not isinstance(raw_flags, list):
+                            raise ValueError("visual_semantic_qa_contract_invalid")
+                        result = provider.review_image_semantics(
+                            image_path=candidate,
+                            owner_request=str(normalized["owner_request"]),
+                            semantic_flags=tuple(str(item) for item in raw_flags),
+                        )
+        except (
+            ProviderTransportError,
+            OSError,
+            TypeError,
+            ValueError,
+        ):
+            result = unavailable
+
+        public = self._semantic_qa_public(result)
+        completed = self.store.complete_semantic_qa(
+            stored.id,
+            client_id=client_id,
+            scope_id=scope_id,
+            contract_digest=digest,
+            result=public,
+        )
+        return self._semantic_qa_public(completed)
 
     def usage_snapshot(self, client_id: str) -> dict[str, Any]:
         client = str(client_id or "").strip()

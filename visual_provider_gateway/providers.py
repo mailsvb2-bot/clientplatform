@@ -910,6 +910,218 @@ class GigaChatImageProvider:
         )
         return _store_asset(self.config, job, raw)
 
+    def review_image_semantics(
+        self,
+        *,
+        image_path: Path,
+        owner_request: str,
+        semantic_flags: tuple[str, ...],
+    ) -> dict[str, object]:
+        """Advisory vision review only; this path is forbidden from generating media."""
+
+        if not self.configured("image"):
+            raise ProviderTransportError("semantic_qa_provider_not_configured")
+        request_text = " ".join(str(owner_request or "").split()).strip()
+        if not request_text or len(request_text) > 1500:
+            raise ValueError("semantic_qa_owner_request_invalid")
+        flags = tuple(
+            dict.fromkeys(
+                str(item or "").strip()
+                for item in semantic_flags
+                if str(item or "").strip()
+            )
+        )
+        if len(flags) > 16:
+            raise ValueError("semantic_qa_flags_invalid")
+        try:
+            size = image_path.stat().st_size
+            raw = image_path.read_bytes()
+        except OSError as exc:
+            raise ProviderTransportError("semantic_qa_asset_unavailable") from exc
+        if size <= 0 or size > 15 * 1024 * 1024 or len(raw) != size:
+            raise ProviderTransportError("semantic_qa_asset_size_invalid")
+        mime_type = _sniff_media_type(raw, "image")
+        if not mime_type:
+            raise ProviderTransportError("semantic_qa_asset_type_invalid")
+
+        token = self._access_token()
+        upload_body, upload_type = _multipart_file(
+            fields={"purpose": "general"},
+            file_field="file",
+            filename=(
+                "clientplatform-semantic-qa"
+                + _suffix_for_mime(mime_type, "image")
+            ),
+            content_type=mime_type,
+            data=raw,
+        )
+        _, _, upload_raw = _request(
+            "POST",
+            self.config.base_url.rstrip("/") + "/files",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": upload_type,
+                "Accept": "application/json",
+            },
+            body=upload_body,
+            timeout=self.config.timeout_seconds,
+            max_bytes=self.config.max_json_bytes,
+            ca_bundle_file=self.config.ca_bundle_file,
+        )
+        try:
+            upload_obj = json.loads(upload_raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ProviderTransportError("semantic_qa_upload_invalid_json") from exc
+        file_id = (
+            str(upload_obj.get("id") or "").strip()
+            if isinstance(upload_obj, dict)
+            else ""
+        )
+        if not file_id or len(file_id) > 256:
+            raise ProviderTransportError("semantic_qa_upload_missing_file_id")
+
+        criteria = [
+            "Передан ли основной смысл исходного запроса.",
+            (
+                "Нет ли явных физических нелепостей, сломанных или "
+                "функционально неполных объектов."
+            ),
+        ]
+        flag_set = set(flags)
+        if flag_set.intersection(
+            {
+                "listening",
+                "watching",
+                "reading",
+                "using",
+                "holding",
+                "eating_or_drinking",
+                "generic_action",
+            }
+        ):
+            criteria.append(
+                "Видно ли запрошенное действие, а не только статичный объект или портрет."
+            )
+        if "transformation" in flag_set:
+            criteria.append(
+                "Видна ли трансформация одного и того же субъекта: "
+                "исходное состояние, причина/действие и результат."
+            )
+        if "visible_state" in flag_set:
+            criteria.append(
+                "Отличается ли финальное состояние визуально, а не только подразумевается."
+            )
+        if "object_replacement" in flag_set:
+            criteria.append(
+                "Показана ли именно замена в том же окружении и выглядит ли "
+                "результат установленным и физически правдоподобным."
+            )
+        if "explicit_text" not in flag_set:
+            criteria.append(
+                "Нет ли лишнего читаемого текста, случайных надписей, "
+                "логотипов или брендов в пикселях."
+            )
+
+        prompt = (
+            "Ты выполняешь только контроль качества уже готовой картинки. "
+            "Ничего не генерируй и не редактируй. Исходный запрос владельца: "
+            + json.dumps(request_text, ensure_ascii=False)
+            + ". Проверь картинку по критериям: "
+            + " ".join(criteria)
+            + " Ответь только JSON-объектом без markdown: "
+            + '{"status":"pass|needs_review","issues":["короткая проблема"],'
+            + '"summary":"краткий вывод"}. '
+            + "status=pass только если смысл запроса визуально читается и "
+            + "нет существенных проблем. issues максимум 5, каждое до 180 символов."
+        )
+
+        try:
+            data = _json_request(
+                "POST",
+                self.config.base_url.rstrip("/") + "/chat/completions",
+                headers={"Authorization": f"Bearer {token}"},
+                payload={
+                    "model": self.config.model_image or "GigaChat-2-Pro",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt,
+                            "attachments": [file_id],
+                        }
+                    ],
+                    "function_call": "none",
+                    "temperature": 0.0,
+                    "max_tokens": 600,
+                },
+                timeout=self.config.timeout_seconds,
+                max_bytes=self.config.max_json_bytes,
+                ca_bundle_file=self.config.ca_bundle_file,
+            )
+            choices = (
+                data.get("choices")
+                if isinstance(data.get("choices"), list)
+                else []
+            )
+            message = (
+                choices[0].get("message", {})
+                if choices and isinstance(choices[0], dict)
+                else {}
+            )
+            content = (
+                str(message.get("content") or "").strip()
+                if isinstance(message, dict)
+                else ""
+            )
+            fence = chr(96) * 3
+            if content.startswith(fence) and content.endswith(fence):
+                content = content.strip(chr(96)).strip()
+                if content.casefold().startswith("json"):
+                    content = content[4:].lstrip()
+            try:
+                result = json.loads(content)
+            except json.JSONDecodeError as exc:
+                raise ProviderTransportError("semantic_qa_invalid_json") from exc
+            if not isinstance(result, dict):
+                raise ProviderTransportError("semantic_qa_invalid_result")
+            status = str(result.get("status") or "").strip().lower()
+            raw_issues = result.get("issues")
+            summary = " ".join(str(result.get("summary") or "").split()).strip()
+            if (
+                status not in {"pass", "needs_review"}
+                or not isinstance(raw_issues, list)
+            ):
+                raise ProviderTransportError("semantic_qa_invalid_result")
+            issues = [
+                " ".join(str(item or "").split()).strip()[:180]
+                for item in raw_issues[:5]
+                if " ".join(str(item or "").split()).strip()
+            ]
+            if status == "pass":
+                issues = []
+            if len(summary) > 500:
+                summary = summary[:500].rsplit(" ", 1)[0].rstrip(" ,;:.")
+            return {
+                "status": status,
+                "issues": issues,
+                "summary": summary,
+            }
+        finally:
+            try:
+                _request(
+                    "POST",
+                    self.config.base_url.rstrip("/")
+                    + f"/files/{urllib.parse.quote(file_id, safe='')}/delete",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Accept": "application/json",
+                    },
+                    timeout=self.config.timeout_seconds,
+                    max_bytes=self.config.max_json_bytes,
+                    ca_bundle_file=self.config.ca_bundle_file,
+                )
+            except ProviderTransportError:
+                pass
+
     def poll(self, job: CreativeJob) -> CreativeJob:
         return job
 
@@ -1218,6 +1430,42 @@ def _normalized_gateway_job(data: dict[str, Any], kind: str, *, provider: str, f
         media_url=str(data.get("media_url") or data.get("url") or ""),
         error_code=str(data.get("error_code") or "") if status == "failed" else "",
     )
+
+
+def _multipart_file(
+    *,
+    fields: dict[str, str],
+    file_field: str,
+    filename: str,
+    content_type: str,
+    data: bytes,
+) -> tuple[bytes, str]:
+    boundary = "----visualcreative-" + uuid.uuid4().hex
+    chunks: list[bytes] = []
+    for name, value in fields.items():
+        chunks.extend(
+            [
+                f"--{boundary}\r\n".encode(),
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(),
+                str(value).encode("utf-8"),
+                b"\r\n",
+            ]
+        )
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(filename or "image"))[:120]
+    chunks.extend(
+        [
+            f"--{boundary}\r\n".encode(),
+            (
+                f'Content-Disposition: form-data; name="{file_field}"; '
+                f'filename="{safe_name}"\r\n'
+            ).encode(),
+            f"Content-Type: {content_type}\r\n\r\n".encode(),
+            data,
+            b"\r\n",
+            f"--{boundary}--\r\n".encode(),
+        ]
+    )
+    return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
 
 
 def _multipart(fields: dict[str, str]) -> tuple[bytes, str]:

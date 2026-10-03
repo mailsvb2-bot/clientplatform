@@ -698,6 +698,115 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             await events.create_event_announcement(failed)
         failed.answer.assert_awaited_once_with("Не удалось подготовить анонс", show_alert=True)
 
+    async def test_announcement_image_visual_discloses_generation_and_qa(self) -> None:
+        reply = SimpleNamespace(answer=AsyncMock())
+        actor = MagicMock(unsafe=True)
+        draft = SimpleNamespace(
+            title="Вебинар",
+            text="Анонс",
+            generated_by="ai:test:model",
+            registration_url=lambda *, public_base_url, source: (
+                f"{public_base_url}/e/demo?source={source}"
+            ),
+        )
+        callback = _callback()
+        callback.data = f"cpev:announce:{EVENT_TOKEN}:{TOKEN}"
+        prepared = SimpleNamespace(id="prepared-image")
+
+        def decode(value: str) -> str:
+            return EVENT_ID if value == EVENT_TOKEN else BUSINESS_ID
+
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=decode),
+            patch.object(events.control, "_uuid_token", return_value=TOKEN),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(
+                events,
+                "draft_event_announcement",
+                new=AsyncMock(return_value=draft),
+            ),
+            patch.object(
+                events,
+                "get_event_content_plan",
+                return_value=SimpleNamespace(
+                    event_day=EventContentMode.TEXT_WITH_IMAGE
+                ),
+            ),
+            patch.object(
+                events,
+                "prepare_event_stage_visual",
+                return_value=prepared,
+            ) as prepare_visual,
+            patch.object(
+                events,
+                "_public_base_url",
+                return_value="https://clientplatform.example.test",
+            ),
+            patch.object(events.control, "_callback_message", return_value=reply),
+        ):
+            await events.create_event_announcement(callback)
+
+        prepare_visual.assert_called_once()
+        text = reply.answer.await_args.args[0]
+        self.assertIn("Платные AI-вызовы", text)
+        self.assertIn("один QA-вызов для проверки смысла", text)
+        self.assertIn("не создаёт новую картинку", text)
+        self.assertIn("не повторяется автоматически", text)
+
+
+    async def test_announcement_visual_none_keeps_text_without_visual_note(self) -> None:
+        reply = SimpleNamespace(answer=AsyncMock())
+        actor = MagicMock(unsafe=True)
+        draft = SimpleNamespace(
+            title="Вебинар",
+            text="Анонс",
+            generated_by="ai:test:model",
+            registration_url=lambda *, public_base_url, source: (
+                f"{public_base_url}/e/demo?source={source}"
+            ),
+        )
+        callback = _callback()
+        callback.data = f"cpev:announce:{EVENT_TOKEN}:{TOKEN}"
+
+        def decode(value: str) -> str:
+            return EVENT_ID if value == EVENT_TOKEN else BUSINESS_ID
+
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=decode),
+            patch.object(events.control, "_uuid_token", return_value=TOKEN),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(
+                events,
+                "draft_event_announcement",
+                new=AsyncMock(return_value=draft),
+            ),
+            patch.object(
+                events,
+                "get_event_content_plan",
+                return_value=SimpleNamespace(
+                    event_day=EventContentMode.TEXT_WITH_IMAGE
+                ),
+            ),
+            patch.object(
+                events,
+                "prepare_event_stage_visual",
+                return_value=None,
+            ) as prepare_visual,
+            patch.object(
+                events,
+                "_public_base_url",
+                return_value="https://clientplatform.example.test",
+            ),
+            patch.object(events.control, "_callback_message", return_value=reply),
+        ):
+            await events.create_event_announcement(callback)
+
+        prepare_visual.assert_called_once()
+        text = reply.answer.await_args.args[0]
+        self.assertNotIn("Платные AI-вызовы", text)
+        self.assertNotIn("QA-вызов", text)
+
+
     async def test_join_target_start_covers_success_stale_and_permission_denial(self) -> None:
         state = AsyncMock()
         reply = SimpleNamespace(answer=AsyncMock())

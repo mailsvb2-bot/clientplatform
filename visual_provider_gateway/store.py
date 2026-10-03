@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
@@ -216,6 +217,160 @@ class JobStore:
         if row is None:
             raise KeyError(token)
         return StoredJob(**dict(row))
+
+    @staticmethod
+    def _semantic_qa_state_json(value: dict[str, object]) -> str:
+        encoded = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        if len(encoded.encode("utf-8")) > 8192:
+            raise ValueError("visual_provider_state_too_large")
+        return encoded
+
+    @staticmethod
+    def _decode_provider_state(value: object) -> dict[str, object]:
+        raw = str(value or "").strip()
+        if not raw:
+            return {}
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError("invalid_visual_provider_state") from exc
+        if not isinstance(decoded, dict):
+            raise ValueError("invalid_visual_provider_state")
+        return decoded
+
+    def claim_semantic_qa(
+        self,
+        gateway_id: str,
+        *,
+        client_id: str,
+        scope_id: str,
+        contract_digest: str,
+    ) -> tuple[dict[str, object], bool]:
+        """Claim one advisory image-review call before any external QA I/O.
+
+        A crash after this claim intentionally leaves the slot in running state.
+        Recovery then reports QA unavailable instead of repeating a potentially
+        billable vision request.
+        """
+
+        token = _job_id(gateway_id)
+        client = _client(client_id)
+        scope = _scope(scope_id)
+        digest = str(contract_digest or "").strip().lower()
+        if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise ValueError("invalid_visual_semantic_qa_digest")
+        now = int(time.time())
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT status,kind,provider_state_json FROM visual_jobs "
+                "WHERE id=? AND client_id=? AND scope_id=?",
+                (token, client, scope),
+            ).fetchone()
+            if row is None:
+                conn.rollback()
+                raise KeyError(token)
+            if str(row["status"] or "") != "succeeded" or str(row["kind"] or "") != "image":
+                conn.rollback()
+                raise ValueError("visual_semantic_qa_job_not_reviewable")
+            state = self._decode_provider_state(row["provider_state_json"])
+            existing = state.get("semantic_qa")
+            if existing is not None:
+                if not isinstance(existing, dict):
+                    conn.rollback()
+                    raise ValueError("invalid_visual_provider_state")
+                if str(existing.get("contract_digest") or "") != digest:
+                    conn.rollback()
+                    raise ValueError("visual_semantic_qa_contract_conflict")
+                conn.commit()
+                return dict(existing), False
+            claimed: dict[str, object] = {
+                "contract_digest": digest,
+                "status": "running",
+                "issues": [],
+                "summary": "",
+            }
+            state["semantic_qa"] = claimed
+            encoded = self._semantic_qa_state_json(state)
+            conn.execute(
+                "UPDATE visual_jobs SET provider_state_json=?, updated_at=? "
+                "WHERE id=? AND client_id=? AND scope_id=?",
+                (encoded, now, token, client, scope),
+            )
+            conn.commit()
+            return claimed, True
+
+    def complete_semantic_qa(
+        self,
+        gateway_id: str,
+        *,
+        client_id: str,
+        scope_id: str,
+        contract_digest: str,
+        result: dict[str, object],
+    ) -> dict[str, object]:
+        token = _job_id(gateway_id)
+        client = _client(client_id)
+        scope = _scope(scope_id)
+        digest = str(contract_digest or "").strip().lower()
+        status = str(result.get("status") or "").strip().lower()
+        issues = result.get("issues")
+        summary = str(result.get("summary") or "").strip()
+        if (
+            re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            or status not in {"pass", "needs_review", "unavailable"}
+            or not isinstance(issues, list)
+            or len(issues) > 5
+            or any(not isinstance(item, str) or len(item) > 180 for item in issues)
+            or len(summary) > 500
+        ):
+            raise ValueError("invalid_visual_semantic_qa_result")
+        completed: dict[str, object] = {
+            "contract_digest": digest,
+            "status": status,
+            "issues": list(issues),
+            "summary": summary,
+        }
+        now = int(time.time())
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT provider_state_json FROM visual_jobs "
+                "WHERE id=? AND client_id=? AND scope_id=?",
+                (token, client, scope),
+            ).fetchone()
+            if row is None:
+                conn.rollback()
+                raise KeyError(token)
+            state = self._decode_provider_state(row["provider_state_json"])
+            current = state.get("semantic_qa")
+            if (
+                not isinstance(current, dict)
+                or str(current.get("contract_digest") or "") != digest
+            ):
+                conn.rollback()
+                raise ValueError("visual_semantic_qa_contract_conflict")
+            current_status = str(current.get("status") or "")
+            if current_status in {"pass", "needs_review", "unavailable"}:
+                conn.commit()
+                return dict(current)
+            if current_status != "running":
+                conn.rollback()
+                raise ValueError("invalid_visual_provider_state")
+            state["semantic_qa"] = completed
+            encoded = self._semantic_qa_state_json(state)
+            conn.execute(
+                "UPDATE visual_jobs SET provider_state_json=?, updated_at=? "
+                "WHERE id=? AND client_id=? AND scope_id=?",
+                (encoded, now, token, client, scope),
+            )
+            conn.commit()
+            return completed
 
     def count_since(self, *, client_id: str, since_epoch: int, kind: str = "") -> int:
         client = _client(client_id)

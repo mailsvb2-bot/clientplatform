@@ -144,6 +144,92 @@ class CompiledVisualPrompt:
     style_intent: VisualStyleIntent
 
 
+_SEMANTIC_QA_CONTRACT_VERSION = 1
+_SEMANTIC_QA_FLAGS = frozenset(
+    {
+        "transformation",
+        "object_replacement",
+        "sequence",
+        "listening",
+        "watching",
+        "reading",
+        "using",
+        "holding",
+        "eating_or_drinking",
+        "generic_action",
+        "comparison",
+        "explicit_text",
+        "portrait",
+        "visible_state",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class VisualSemanticQAContract:
+    """Immutable meaning contract for advisory post-generation image review."""
+
+    version: int
+    kind: str
+    country_code: str
+    owner_request: str
+    semantic_flags: tuple[str, ...]
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "version": self.version,
+            "kind": self.kind,
+            "country_code": self.country_code,
+            "owner_request": self.owner_request,
+            "semantic_flags": list(self.semantic_flags),
+        }
+
+    @classmethod
+    def from_mapping(cls, value: object) -> "VisualSemanticQAContract":
+        if not isinstance(value, dict) or set(value) != {
+            "version",
+            "kind",
+            "country_code",
+            "owner_request",
+            "semantic_flags",
+        }:
+            raise ValueError("visual semantic QA contract is invalid")
+        version = value.get("version")
+        kind = str(value.get("kind") or "").strip().lower()
+        country_code = str(value.get("country_code") or "").strip().upper()
+        if (
+            len(country_code) > 16
+            or any(not (char.isalnum() or char in {"-", "_"}) for char in country_code)
+        ):
+            raise ValueError("visual semantic QA contract is invalid")
+        owner_request = _clean(
+            str(value.get("owner_request") or ""),
+            field="request",
+            limit=_MAX_REQUEST_CHARS,
+        )
+        raw_flags = value.get("semantic_flags")
+        if (
+            version != _SEMANTIC_QA_CONTRACT_VERSION
+            or kind != "image"
+            or not isinstance(raw_flags, list)
+            or len(raw_flags) > len(_SEMANTIC_QA_FLAGS)
+        ):
+            raise ValueError("visual semantic QA contract is invalid")
+        flags = tuple(str(item or "").strip() for item in raw_flags)
+        if (
+            len(set(flags)) != len(flags)
+            or any(not item or item not in _SEMANTIC_QA_FLAGS for item in flags)
+        ):
+            raise ValueError("visual semantic QA contract is invalid")
+        return cls(
+            version=_SEMANTIC_QA_CONTRACT_VERSION,
+            kind="image",
+            country_code=country_code,
+            owner_request=owner_request,
+            semantic_flags=flags,
+        )
+
+
 def _clean(value: str, *, field: str, limit: int) -> str:
     text = " ".join(str(value or "").replace("\x00", " ").split()).strip()
     if not text:
@@ -193,6 +279,38 @@ def _semantic_flags(request: str) -> tuple[str, ...]:
     if "transformation" in flags and _VISIBLE_STATE_RE.search(request):
         flags.append("visible_state")
     return tuple(flags)
+
+
+def build_visual_semantic_qa_contract(
+    *,
+    request: str,
+    kind: str,
+    country_code: str = "",
+) -> VisualSemanticQAContract | None:
+    """Freeze the same semantic flags used by the prompt compiler for image QA.
+
+    Video review is intentionally out of scope for this first slice. Returning
+    None keeps video generation compatible and avoids silently adding another
+    paid provider call to an existing video consent flow.
+    """
+
+    visual_kind = str(kind or "").strip().lower()
+    if visual_kind not in {"image", "video"}:
+        raise ValueError("visual kind must be image or video")
+    if visual_kind != "image":
+        return None
+    owner_request = _clean(
+        request,
+        field="request",
+        limit=_MAX_REQUEST_CHARS,
+    )
+    return VisualSemanticQAContract(
+        version=_SEMANTIC_QA_CONTRACT_VERSION,
+        kind="image",
+        country_code=str(country_code or "").strip().upper(),
+        owner_request=owner_request,
+        semantic_flags=_semantic_flags(owner_request),
+    )
 
 
 def _interaction_directives(flags: tuple[str, ...]) -> list[str]:
@@ -645,4 +763,9 @@ def compile_visual_prompt(
     )
 
 
-__all__ = ["CompiledVisualPrompt", "compile_visual_prompt"]
+__all__ = [
+    "CompiledVisualPrompt",
+    "VisualSemanticQAContract",
+    "build_visual_semantic_qa_contract",
+    "compile_visual_prompt",
+]
