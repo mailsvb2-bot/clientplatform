@@ -183,7 +183,7 @@ def test_yandex_stage_prompt_keeps_final_state_and_artistic_style_with_brand_con
     assert "тёплый дружелюбный" in adapted.prompt
     assert "премиальный" in adapted.prompt
     assert "художественный" in adapted.prompt
-    assert "Названия бренда/услуг только по явному запросу" in adapted.prompt
+    assert "Названия бренда/услуг не печатать без явного запроса" in adapted.prompt
 
 
 def test_transformation_final_state_does_not_absorb_another_subject_state() -> None:
@@ -622,7 +622,7 @@ def test_gigachat_adapter_reserves_safety_for_near_limit_owner_request() -> None
     assert "Без выдуманных логотипов" in adapted.prompt
     assert "полностью в кадре" in adapted.prompt
     assert "Без читаемого текста" in adapted.prompt
-    assert "Названия бренда, услуг и методов не печатать в кадре." in adapted.prompt
+    assert "Не печатай названия бренда/услуг/методов" in adapted.prompt
     assert "Не выдумывай награды" in adapted.prompt
     assert "Brand name:" not in adapted.prompt
 
@@ -759,7 +759,7 @@ def test_engine_respects_explicit_text_from_compiled_contract(monkeypatch) -> No
     assert "Один герой, три стадии без подписей" not in prompt
     assert "Без читаемого текста" not in prompt
     assert "leave clean negative space" not in prompt
-    assert "Названия бренда/услуг только по явному запросу" in prompt
+    assert "Названия бренда/услуг не печатать без явного запроса" in prompt
     assert len(prompt) <= 500
 
 
