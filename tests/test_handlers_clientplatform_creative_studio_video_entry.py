@@ -427,6 +427,115 @@ def test_owner_delivery_survives_secondary_event_asset_failure(monkeypatch, tmp_
     ]
 
 
+def test_image_delivery_reports_semantic_qa_warning_without_regeneration(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    asset = tmp_path / "creative.jpg"
+    asset.write_bytes(b"jpeg")
+    target = SimpleNamespace(
+        answer=AsyncMock(),
+        answer_photo=AsyncMock(),
+        answer_video=AsyncMock(),
+        answer_document=AsyncMock(),
+    )
+    callback = SimpleNamespace(from_user=SimpleNamespace(id=101))
+    actor = SimpleNamespace(business_id="business-id")
+    receipt = SimpleNamespace(
+        id="receipt-id",
+        request_text=(
+            "ёж слушает ресурсное аудио и становится добрым и пушистым"
+        ),
+        provider_payload_json="frozen-v3",
+        source_job_id="job-123",
+        delivery_claimed_at=None,
+    )
+    job = SimpleNamespace(
+        id="job-123",
+        status="succeeded",
+        asset_ready=True,
+        kind="image",
+        provider="yandexart",
+        mime_type="image/jpeg",
+    )
+
+    async def immediate_to_thread(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    review = Mock(
+        return_value=SimpleNamespace(
+            status="needs_review",
+            issues=(
+                "не видно перехода от исходного состояния к результату",
+                "в кадре появилась лишняя надпись",
+            ),
+        )
+    )
+    monkeypatch.setattr(studio.asyncio, "to_thread", immediate_to_thread)
+    monkeypatch.setattr(
+        studio.control,
+        "_callback_message",
+        lambda _callback: target,
+    )
+    monkeypatch.setattr(
+        studio.control,
+        "_uuid_token",
+        lambda _value: "business-token",
+    )
+    monkeypatch.setattr(
+        studio,
+        "materialize_ad_visual",
+        lambda *_args, **_kwargs: asset,
+    )
+    monkeypatch.setattr(
+        studio,
+        "claim_creative_generation_delivery",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        studio,
+        "mark_creative_generation_delivered",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        studio,
+        "frozen_business_visual_binding",
+        lambda _payload: None,
+    )
+    monkeypatch.setattr(
+        studio,
+        "review_business_image_semantics_from_frozen_payload",
+        review,
+    )
+
+    result = asyncio.run(
+        studio._finish_visual(
+            callback,
+            actor=actor,
+            receipt=receipt,
+            job=job,
+        )
+    )
+
+    assert result is True
+    target.answer_photo.assert_awaited_once()
+    review.assert_called_once()
+    messages = [call.args[0] for call in target.answer.await_args_list]
+    warning = next(message for message in messages if "Автопроверка смысла" in message)
+    assert "не видно перехода" in warning
+    assert "лишняя надпись" in warning
+    assert "Новую генерацию я не запускала" in warning
+
+
+def test_semantic_qa_warning_is_silent_for_pass_and_unavailable() -> None:
+    assert studio._semantic_qa_warning(
+        SimpleNamespace(status="pass", issues=())
+    ) == ""
+    assert studio._semantic_qa_warning(
+        SimpleNamespace(status="unavailable", issues=())
+    ) == ""
+
+
 def test_video_delivery_enables_streaming(monkeypatch, tmp_path) -> None:
     asset = tmp_path / "creative.mp4"
     asset.write_bytes(b"video")
