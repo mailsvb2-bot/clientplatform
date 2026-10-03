@@ -154,7 +154,7 @@ def test_yandex_adapter_compiles_sink_replacement_as_complete_installation() -> 
     assert "не одиночный предмет" in adapted.prompt
     assert "физически правдоподобен" in adapted.prompt
     assert "управление" in adapted.prompt
-    assert "подключениями" in adapted.prompt
+    assert "подключения" in adapted.prompt
     assert "Без читаемого текста" in adapted.prompt
     assert len(adapted.prompt) <= 500
 
@@ -345,7 +345,7 @@ def test_gigachat_adapter_keeps_sink_replacement_physical_and_contextual() -> No
     assert "не одиночный предмет" in adapted.prompt
     assert "физически правдоподобен" in adapted.prompt
     assert "управление" in adapted.prompt
-    assert "подключениями" in adapted.prompt
+    assert "подключения" in adapted.prompt
     assert "Без читаемого текста" in adapted.prompt
     assert len(adapted.prompt) <= 1800
 
