@@ -377,6 +377,69 @@ def test_gigachat_adapter_does_not_leak_raw_business_context_into_pixels() -> No
     assert len(adapted.prompt) <= 1800
 
 
+def test_gigachat_adapter_preserves_anti_claim_policy_when_text_is_requested() -> None:
+    compiled = compile_visual_prompt(
+        request='афиша с надписью "Открытая встреча" для психологической практики',
+        kind="image",
+        purpose="advertising",
+    )
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="gigachat")
+
+    assert "Не выдумывай награды" in adapted.prompt
+    assert "отзывы" in adapted.prompt
+    assert "статистику" in adapted.prompt
+    assert "гарантии" in adapted.prompt
+    assert "срочность" in adapted.prompt
+    assert "Без читаемого текста" not in adapted.prompt
+    assert "Owner request" not in adapted.prompt
+    assert len(adapted.prompt) <= 1800
+
+
+def test_gigachat_adapter_reserves_safety_for_near_limit_owner_request() -> None:
+    long_tail = " очень подробно описанная спокойная сцена" * 28
+    request = (
+        "ёж слушает ресурсное аудио и становится добрым и пушистым"
+        + long_tail
+    )
+    request = request[:1490]
+    brand_context = "Brand name: Example Wellness. Product: guided audio."
+    compiled = compile_visual_prompt(
+        request=request,
+        kind="image",
+        brand_context=brand_context,
+    )
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+        brand_context=brand_context,
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="gigachat")
+
+    assert len(adapted.prompt) <= 1800
+    assert adapted.prompt.startswith("Один субъект: до → действие/причина → после.")
+    assert "Слушает аудио" in adapted.prompt
+    assert "Три фазы одного субъекта" in adapted.prompt
+    assert "Без водяных знаков" in adapted.prompt
+    assert "Без выдуманных логотипов" in adapted.prompt
+    assert "полностью в кадре" in adapted.prompt
+    assert "Без читаемого текста" in adapted.prompt
+    assert "Названия бренда, услуг и методов не печатать в кадре." in adapted.prompt
+    assert "Не выдумывай награды" in adapted.prompt
+    assert "Brand name:" not in adapted.prompt
+
+
 def test_runway_adapter_preserves_semantics_and_style_inside_hard_prompt_limit() -> None:
     adapted = adapt_visual_brief_for_provider(
         _compiled_brief(kind="video"),
