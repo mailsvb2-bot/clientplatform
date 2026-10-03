@@ -45,8 +45,6 @@ def _truthy(name: str, default: str = "1") -> bool:
 
 def _json_object(raw: str) -> dict[str, Any] | None:
     text = str(raw or "").strip()
-    if text.startswith("'''"):
-        return None
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
         text = re.sub(r"\s*```$", "", text)
@@ -112,18 +110,60 @@ def grounded_scene_contract_from_mapping(
     ):
         return None
 
+    resolved_actions = actions or base.actions
+    resolved_initial = initial or base.initial_state
+    resolved_transition = transition or base.transition
+    resolved_final = final or base.final_state
+    resolved_text = explicit_text or base.explicit_text
+
+    required_evidence = list(base.required_evidence)
+    forbidden = list(base.forbidden)
+    if topology == "action":
+        for action in resolved_actions[:3]:
+            required_evidence.append("requested action visibly readable: " + action)
+    elif topology == "transformation":
+        required_evidence.extend(
+            [
+                "same subject identity across stages",
+                "causal action connected to the visible change",
+                "requested final state visibly different from the opening",
+            ]
+        )
+        forbidden.extend(
+            [
+                "unrelated characters used as transformation stages",
+                "single final-state portrait when change was requested",
+            ]
+        )
+    elif topology == "sequence":
+        required_evidence.append("requested chronology visibly readable")
+    elif topology == "replacement":
+        required_evidence.extend(
+            [
+                "same environment across replacement",
+                "replacement event and resulting object visibly connected",
+            ]
+        )
+    elif topology == "comparison":
+        required_evidence.append("compared subjects or states visibly distinguishable")
+
+    for state in resolved_final[:3]:
+        required_evidence.append("requested final-state evidence visible: " + state)
+    for wording in resolved_text[:3]:
+        required_evidence.append("requested visible text present exactly: " + wording)
+
     return VisualSceneContract(
         version=base.version,
         topology=topology,
         primary_subject=subject or base.primary_subject,
-        initial_state=initial or base.initial_state,
-        actions=actions or base.actions,
+        initial_state=resolved_initial,
+        actions=resolved_actions,
         cause=cause or base.cause,
-        transition=transition or base.transition,
-        final_state=final or base.final_state,
-        explicit_text=explicit_text or base.explicit_text,
-        required_evidence=base.required_evidence,
-        forbidden=base.forbidden,
+        transition=resolved_transition,
+        final_state=resolved_final,
+        explicit_text=resolved_text,
+        required_evidence=tuple(dict.fromkeys(required_evidence))[:8],
+        forbidden=tuple(dict.fromkeys(forbidden))[:8],
     )
 
 
