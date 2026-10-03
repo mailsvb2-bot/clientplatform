@@ -213,9 +213,20 @@ def fallback_scene_contract(
         forbidden = [item for item in forbidden if item != "unrequested readable text"]
         forbidden.append("readable text other than owner-requested wording")
 
-    # Subject extraction is deliberately conservative: keep a short request anchor
-    # rather than guessing a noun. The AI planner can replace it with an exact span.
+    # Conservative subject anchor: when the request is shaped like
+    # "ёж, который ...", keep the exact owner-authored noun phrase before the
+    # relative/action clause instead of letting a provider see only generic "hero".
+    # No new noun is invented; if no safe boundary exists we keep the bounded request.
     subject = owner[:160].rstrip(" ,;:.")
+    subject_match = re.match(
+        r"^(.{1,120}?)(?:,?\\s+(?:котор(?:ый|ая|ое|ые)|who|which|that)\\b)",
+        owner,
+        flags=re.IGNORECASE,
+    )
+    if subject_match:
+        candidate = subject_match.group(1).strip(" ,;:.")
+        if candidate:
+            subject = candidate
     return VisualSceneContract(
         version=SCENE_CONTRACT_VERSION,
         topology=topology,
