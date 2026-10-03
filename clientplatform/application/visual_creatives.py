@@ -114,18 +114,23 @@ def freeze_business_visual_payload(
         request=request,
         selected=style_intent,
     )
+    resolved_country = str(
+        country_code
+        or os.getenv("VISUAL_DEPLOYMENT_COUNTRY", "RU")
+        or "RU"
+    ).strip().upper()
     brief = build_business_visual_brief(
         request=request,
         kind=kind,
         brand_context=brand_context,
-        country_code=country_code,
+        country_code=resolved_country,
         preferred_provider=preferred_provider,
         style_intent=resolved_style,
     )
     semantic_qa = build_visual_semantic_qa_contract(
         request=request,
         kind=kind,
-        country_code=country_code,
+        country_code=resolved_country,
     )
     value: dict[str, object] = {
         "version": _BUSINESS_IMAGE_BRIEF_VERSION,
