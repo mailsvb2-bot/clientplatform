@@ -139,6 +139,27 @@ def _natural_safety_parts(brief: CreativeBrief) -> tuple[str, ...]:
     return tuple(parts)
 
 
+def _yandex_safety_parts(brief: CreativeBrief) -> tuple[str, ...]:
+    """Compact mandatory presentation constraints for Alice's 500-char prompt."""
+
+    natural = _natural_safety_parts(brief)
+    joined = " ".join(natural)
+    clauses: list[str] = []
+    if "Без водяных знаков" in joined:
+        clauses.append("Без водяных знаков")
+    if "Без выдуманных логотипов" in joined:
+        clauses.append("Без выдуманных логотипов")
+    if "полностью в кадре" in joined:
+        clauses.append("Главные объекты полностью в кадре")
+    if "Без читаемого текста" in joined:
+        clauses.append("Без читаемого текста/UI")
+    if "названия бренда/услуг/методов" in joined.casefold():
+        clauses.append("Названия бренда/услуг только по явному запросу")
+    if not clauses:
+        return ()
+    return ("; ".join(clauses) + ".",)
+
+
 def _natural_policy_parts(brief: CreativeBrief) -> tuple[str, ...]:
     """Preserve product-level truthfulness rules in provider-natural language."""
 
@@ -454,17 +475,20 @@ def _detailed_transformation_stage_cue(
     opening = (
         "; ".join(initial_evidence)
         if initial_evidence
-        else "обычное исходное состояние"
+        else "обычный исходный вид"
     )
     if listening:
-        middle = "слушает аудио в заметных наушниках и начинает меняться"
+        middle = (
+            "слушает аудио в заметных наушниках, не символ волны, "
+            "и начинает меняться"
+        )
     else:
         middle = "видна причина/действие и первые признаки изменения"
     final = "; ".join(final_evidence)
     prefix = (
-        "Один герой, три последовательные стадии: "
+        "Один герой, три стадии: "
         if allow_labels
-        else "Один герой, три последовательные стадии без подписей: "
+        else "Один герой, три стадии без подписей: "
     )
     return (
         prefix
@@ -633,10 +657,10 @@ def _bounded_yandex_prompt(
 ) -> str:
     """Preserve owner meaning, explicit style and safety under Alice's hard limit."""
 
-    safety = _natural_safety_parts(brief)
+    safety = _yandex_safety_parts(brief)
     safety_block = _bounded_join(list(safety), limit=_YANDEX_PROMPT_LIMIT)
     stage_priority = any(
-        cue.startswith("Один герой, три последовательные стадии")
+        cue.startswith("Один герой, три стадии")
         or cue.startswith("Три сцены")
         for cue in semantic_cues
     )
