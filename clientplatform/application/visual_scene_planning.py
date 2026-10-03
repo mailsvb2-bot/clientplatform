@@ -48,8 +48,8 @@ def _json_object(raw: str) -> dict[str, Any] | None:
     if text.startswith("'''"):
         return None
     if text.startswith("```"):
-        text = re.sub(r"^\`\`\`(?:json)?\s*", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\s*\`\`\`$", "", text)
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
     try:
         value = json.loads(text)
     except json.JSONDecodeError:
