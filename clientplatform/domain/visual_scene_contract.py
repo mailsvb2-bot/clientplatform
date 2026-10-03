@@ -219,7 +219,7 @@ def fallback_scene_contract(
     # No new noun is invented; if no safe boundary exists we keep the bounded request.
     subject = owner[:160].rstrip(" ,;:.")
     subject_match = re.match(
-        r"^(.{1,120}?)(?:,?\\s+(?:котор(?:ый|ая|ое|ые)|who|which|that)\\b)",
+        r"^(.{1,120}?)(?:,?\s+(?:котор(?:ый|ая|ое|ые)|who|which|that)\b)",
         owner,
         flags=re.IGNORECASE,
     )
