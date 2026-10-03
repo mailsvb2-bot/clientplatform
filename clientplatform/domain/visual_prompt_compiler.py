@@ -240,10 +240,13 @@ def _replacement_directives(kind: str, flags: tuple[str, ...]) -> list[str]:
             "an incomplete showroom prop when the request implies an installed result.",
         ]
     return [
-        "Treat object replacement as a constrained scene-editing intent, not as a "
-        "request for an unrelated new interior. Preserve the surrounding environment "
-        "and replace only the requested object unless the owner explicitly asks for "
-        "broader redesign.",
+        "Treat object replacement as a constrained replacement event, not as a request "
+        "for an unrelated new interior or a catalog shot of the final object. Preserve "
+        "the surrounding environment and replace only the requested object unless the "
+        "owner explicitly asks for broader redesign.",
+        "Make the replacement itself visually legible. If no reference image is "
+        "available downstream, show either the installation action or a clear before/"
+        "after in the same environment; do not show only a finished isolated object.",
         "Show the replacement as complete, installed and physically usable. For "
         "functional fixtures, appliances or furniture, include the necessary visible "
         "controls, supports, mounting and connections and keep geometry, scale, shadows "
