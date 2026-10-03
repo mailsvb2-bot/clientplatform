@@ -125,6 +125,7 @@ def freeze_business_visual_payload(
     semantic_qa = build_visual_semantic_qa_contract(
         request=request,
         kind=kind,
+        country_code=country_code,
     )
     value: dict[str, object] = {
         "version": _BUSINESS_IMAGE_BRIEF_VERSION,
