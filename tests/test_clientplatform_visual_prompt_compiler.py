@@ -4,7 +4,11 @@ import json
 import unittest
 
 from clientplatform.application import visual_creatives
-from clientplatform.domain.visual_prompt_compiler import compile_visual_prompt
+from clientplatform.domain.visual_prompt_compiler import (
+    VisualSemanticQAContract,
+    build_visual_semantic_qa_contract,
+    compile_visual_prompt,
+)
 
 
 class VisualPromptCompilerTests(unittest.TestCase):
@@ -242,6 +246,48 @@ class VisualPromptCompilerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "too long"):
             compile_visual_prompt(request="x" * 1501, kind="image")
 
+    def test_semantic_qa_contract_reuses_compiler_flags_for_owner_examples(self) -> None:
+        hedgehog = build_visual_semantic_qa_contract(
+            request=(
+                "ёж, который слушает ресурсные аудио трансы "
+                "и становится добрым и пушистым"
+            ),
+            kind="image",
+        )
+        self.assertIsNotNone(hedgehog)
+        assert hedgehog is not None
+        self.assertIn("listening", hedgehog.semantic_flags)
+        self.assertIn("transformation", hedgehog.semantic_flags)
+        self.assertIn("visible_state", hedgehog.semantic_flags)
+
+        sink = build_visual_semantic_qa_contract(
+            request="Замена раковины",
+            kind="image",
+        )
+        self.assertIsNotNone(sink)
+        assert sink is not None
+        self.assertIn("object_replacement", sink.semantic_flags)
+        self.assertNotIn("explicit_text", sink.semantic_flags)
+        self.assertIsNone(
+            build_visual_semantic_qa_contract(
+                request="короткое видео",
+                kind="video",
+            )
+        )
+
+    def test_semantic_qa_contract_mapping_is_strict(self) -> None:
+        contract = build_visual_semantic_qa_contract(
+            request="Замена раковины",
+            kind="image",
+        )
+        assert contract is not None
+        restored = VisualSemanticQAContract.from_mapping(contract.to_mapping())
+        self.assertEqual(restored, contract)
+        invalid = contract.to_mapping()
+        invalid["semantic_flags"] = ["object_replacement", "invented_flag"]
+        with self.assertRaisesRegex(ValueError, "semantic QA contract"):
+            VisualSemanticQAContract.from_mapping(invalid)
+
     def test_business_visual_brief_embeds_business_context_into_provider_prompt(
         self,
     ) -> None:
@@ -273,7 +319,12 @@ class VisualPromptCompilerTests(unittest.TestCase):
             country_code="RU",
         )
         payload = json.loads(frozen)
+        self.assertEqual(payload["version"], 3)
         self.assertEqual(payload["intent"]["prompt_compiler_version"], 4)
+        self.assertEqual(payload["semantic_qa"]["version"], 1)
+        self.assertEqual(payload["semantic_qa"]["kind"], "image")
+        self.assertIn("listening", payload["semantic_qa"]["semantic_flags"])
+        self.assertIn("transformation", payload["semantic_qa"]["semantic_flags"])
         provider_prompt = payload["brief"]["prompt"]
         provider_negative = payload["brief"]["negative_prompt"]
 
