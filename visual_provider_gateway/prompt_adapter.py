@@ -351,6 +351,23 @@ _STATE_CONNECTOR_RE = re.compile(
     re.IGNORECASE,
 )
 
+_COMPACT_EXPLICIT_STAGE_EVIDENCE = {
+    "доброжелательный расслабленный взгляд": "доброжелательный взгляд",
+    "заметно более густой пушистый мех": "густой пушистый мех",
+    "напряжённая закрытая поза": "напряжённая поза",
+    "настороженный взгляд": "настороженный взгляд",
+    "расслабленная поза": "расслабленная поза",
+    "иглы или фактура заметно смягчаются": "иглы/фактура смягчаются",
+    "спокойный расслабленный взгляд": "спокойный взгляд",
+    "напряжённый взгляд и жёсткая поза": "сердитый взгляд, жёсткая поза",
+    "тревожный взгляд и заметное напряжение тела": "тревожный взгляд, напряжённая поза",
+    "радостное выражение, открытая поза": "радостный взгляд, открытая поза",
+    "опущенный взгляд и сдержанная закрытая поза": "опущенный взгляд, закрытая поза",
+    "явно колючая жёсткая фактура или иглы": "жёсткие колючие иглы",
+    "фактура визуально мягче": "фактура мягче",
+}
+
+
 _STATE_EVIDENCE_RULES = (
     (
         re.compile(r"(?:\bдобр\w*|\bkind\b|\bgentle\b)", re.IGNORECASE),
@@ -547,7 +564,19 @@ def _detailed_transformation_stage_cue(
         return None
 
     if explicit_stages is not None:
-        initial_evidence, middle_evidence, final_evidence = explicit_stages
+        initial_raw, middle_raw, final_raw = explicit_stages
+        initial_evidence = tuple(
+            _COMPACT_EXPLICIT_STAGE_EVIDENCE.get(item, item)
+            for item in initial_raw
+        )
+        middle_evidence = tuple(
+            _COMPACT_EXPLICIT_STAGE_EVIDENCE.get(item, item)
+            for item in middle_raw
+        )
+        final_evidence = tuple(
+            _COMPACT_EXPLICIT_STAGE_EVIDENCE.get(item, item)
+            for item in final_raw
+        )
     else:
         assert parsed is not None
         initial_evidence, final_evidence = parsed
@@ -750,7 +779,7 @@ def _bounded_yandex_prompt(
         # safety/style bookkeeping truncate the final-state evidence. Keep a compact
         # but useful style budget, reserve the first anti-lettering clauses, and let
         # the owner scene use whatever remains.
-        bounded_semantics = _bounded_join(list(semantic_cues), limit=240)
+        bounded_semantics = _bounded_join(list(semantic_cues), limit=300)
         style_block = _bounded_join(list(style_cues), limit=96)
         safety_floor = _bounded_join(list(safety), limit=80)
         reserved = (
@@ -763,7 +792,7 @@ def _bounded_yandex_prompt(
                 if block
             )
         )
-        scene_limit = max(90, _YANDEX_PROMPT_LIMIT - reserved)
+        scene_limit = max(60, _YANDEX_PROMPT_LIMIT - reserved)
         bounded_scene_head = _bounded_join([normalized_scene_head], limit=scene_limit)
         core = [bounded_scene_head, bounded_semantics, style_block]
         core = [part for part in core if part]
