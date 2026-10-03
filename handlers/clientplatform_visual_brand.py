@@ -18,9 +18,9 @@ from clientplatform.application.visual_brand_discovery import (
     VisualBrandDiscoveryError,
     discover_brand_from_website,
 )
-from clientplatform.domain.editable_advertising import (
-    EDITABLE_AD_FONT_LABELS_RU,
-    normalize_editable_ad_font_preset,
+from clientplatform.domain.visual_typography import (
+    VISUAL_TYPOGRAPHY_LABELS_RU,
+    normalize_visual_typography_preset,
 )
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.domain.visual_brand import TenantBrandDNA
@@ -61,9 +61,9 @@ def _brand_text(brand: TenantBrandDNA) -> str:
     keywords = ", ".join(value.visual_keywords) if value.visual_keywords else "не заданы"
     tone = ", ".join(value.tone) if value.tone else "не задан"
     name = value.display_name or "не задано"
-    font_label = EDITABLE_AD_FONT_LABELS_RU.get(
+    font_label = VISUAL_TYPOGRAPHY_LABELS_RU.get(
         value.font_preset,
-        EDITABLE_AD_FONT_LABELS_RU["auto"],
+        VISUAL_TYPOGRAPHY_LABELS_RU["auto"],
     )
     return (
         f"Название: {name}\n"
@@ -151,7 +151,7 @@ def _manual_brand(current: TenantBrandDNA, text: str) -> TenantBrandDNA:
     font_preset = current.font_preset
     if "font_preset" in values:
         raw_font = " ".join(values["font_preset"].casefold().split())
-        font_preset = normalize_editable_ad_font_preset(
+        font_preset = normalize_visual_typography_preset(
             font_aliases.get(raw_font, raw_font)
         )
     return TenantBrandDNA(
