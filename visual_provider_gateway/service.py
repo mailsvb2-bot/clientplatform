@@ -57,11 +57,29 @@ class VisualGatewayService:
         self.engine = engine or VisualCreativeEngine()
 
     @staticmethod
-    def _provider_state_json(value: object) -> str:
-        if not isinstance(value, dict) or not value:
+    def _provider_state_json(
+        value: object,
+        *,
+        country_code: str = "",
+    ) -> str:
+        provider_state = value if isinstance(value, dict) else {}
+        country = re.sub(
+            r"[^A-Z0-9]",
+            "",
+            str(country_code or "").strip().upper(),
+        )
+        if not provider_state and not country:
             return ""
+        encoded_value: dict[str, object]
+        if country:
+            encoded_value = {
+                "_gateway": {"country_code": country},
+                "provider": dict(provider_state),
+            }
+        else:
+            encoded_value = dict(provider_state)
         encoded = json.dumps(
-            value,
+            encoded_value,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -71,7 +89,7 @@ class VisualGatewayService:
         return encoded
 
     @staticmethod
-    def _provider_state(value: object) -> dict[str, Any]:
+    def _decoded_provider_state(value: object) -> dict[str, Any]:
         raw = str(value or "").strip()
         if not raw:
             return {}
@@ -82,6 +100,27 @@ class VisualGatewayService:
         if not isinstance(decoded, dict):
             raise ValueError("invalid_visual_provider_state")
         return decoded
+
+    @classmethod
+    def _provider_state(cls, value: object) -> dict[str, Any]:
+        decoded = cls._decoded_provider_state(value)
+        provider = decoded.get("provider")
+        gateway = decoded.get("_gateway")
+        if isinstance(gateway, dict) and isinstance(provider, dict):
+            return dict(provider)
+        return decoded
+
+    @classmethod
+    def _provider_policy_country(cls, value: object) -> str:
+        decoded = cls._decoded_provider_state(value)
+        gateway = decoded.get("_gateway")
+        if not isinstance(gateway, dict):
+            return ""
+        return re.sub(
+            r"[^A-Z0-9]",
+            "",
+            str(gateway.get("country_code") or "").strip().upper(),
+        )
 
     @staticmethod
     def _output_root() -> Path:
@@ -435,7 +474,10 @@ class VisualGatewayService:
             mime_type=job.mime_type,
             asset_path=job.asset_path,
             error_code=job.error_code,
-            provider_state_json=self._provider_state_json(job.provider_payload),
+            provider_state_json=self._provider_state_json(
+                job.provider_payload,
+                country_code=effective_country,
+            ),
         )
         return self._response(stored)
 
@@ -486,7 +528,10 @@ class VisualGatewayService:
             asset_path=refreshed.asset_path,
             error_code=refreshed.error_code,
             provider_state_json=self._provider_state_json(
-                refreshed.provider_payload
+                refreshed.provider_payload,
+                country_code=self._provider_policy_country(
+                    stored.provider_state_json
+                ),
             ),
         )
         return self._response(updated)
@@ -558,31 +603,40 @@ class VisualGatewayService:
             return self._semantic_qa_public(completed)
 
         try:
-            allowed = provider_order(
-                "image",
-                country_code=str(normalized.get("country_code") or ""),
+            job_country = self._provider_policy_country(stored.provider_state_json)
+            requested_country = re.sub(
+                r"[^A-Z0-9]",
+                "",
+                str(normalized.get("country_code") or "").strip().upper(),
             )
-            if "gigachat" not in allowed:
+            if not job_country or requested_country != job_country:
                 result = unavailable
             else:
-                provider = build_provider("gigachat")
-                if (
-                    not isinstance(provider, GigaChatImageProvider)
-                    or not provider.configured("image")
-                ):
+                allowed = provider_order(
+                    "image",
+                    country_code=job_country,
+                )
+                if "gigachat" not in allowed:
                     result = unavailable
                 else:
-                    root = self._output_root()
-                    candidate = Path(stored.asset_path).expanduser().resolve()
-                    candidate.relative_to(root)
-                    raw_flags = normalized.get("semantic_flags")
-                    if not isinstance(raw_flags, list):
-                        raise ValueError("visual_semantic_qa_contract_invalid")
-                    result = provider.review_image_semantics(
-                        image_path=candidate,
-                        owner_request=str(normalized["owner_request"]),
-                        semantic_flags=tuple(str(item) for item in raw_flags),
-                    )
+                    provider = build_provider("gigachat")
+                    if (
+                        not isinstance(provider, GigaChatImageProvider)
+                        or not provider.configured("image")
+                    ):
+                        result = unavailable
+                    else:
+                        root = self._output_root()
+                        candidate = Path(stored.asset_path).expanduser().resolve()
+                        candidate.relative_to(root)
+                        raw_flags = normalized.get("semantic_flags")
+                        if not isinstance(raw_flags, list):
+                            raise ValueError("visual_semantic_qa_contract_invalid")
+                        result = provider.review_image_semantics(
+                            image_path=candidate,
+                            owner_request=str(normalized["owner_request"]),
+                            semantic_flags=tuple(str(item) for item in raw_flags),
+                        )
         except (
             ProviderTransportError,
             OSError,
