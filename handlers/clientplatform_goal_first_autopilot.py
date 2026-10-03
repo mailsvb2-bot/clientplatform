@@ -1008,7 +1008,11 @@ async def ask_editable_ad_confirmation(callback: CallbackQuery, state: FSMContex
         await _show_editable_editor(
             target,
             actor=actor,
-            data={**data, "business_token": business_token},
+            data={
+                **data,
+                "business_token": business_token,
+                "editable_font_preset": project.font_preset,
+            },
             project_id=project.id,
             kind=kind,
         )
@@ -1140,7 +1144,7 @@ async def _finish_editable_source_generation(
     await _show_editable_editor(
         control._callback_message(event),
         actor=actor,
-        data=data,
+        data={**data, "editable_font_preset": project.font_preset},
         project_id=project.id,
         kind=kind,
     )
@@ -1328,13 +1332,16 @@ async def toggle_editable_layout(callback: CallbackQuery, state: FSMContext) -> 
     except (LookupError, ValueError, TenantPermissionDenied):
         await callback.answer("Не удалось переместить текстовый блок", show_alert=True)
         return
-    await state.update_data(editable_source_revision=project.revision)
+    await state.update_data(
+        editable_source_revision=project.revision,
+        editable_font_preset=project.font_preset,
+    )
     await state.set_state(GoalFirstAutopilotState.customizing)
     await callback.answer("Положение блока изменено")
     await _show_editable_editor(
         control._callback_message(callback),
         actor=actor,
-        data=data,
+        data={**data, "editable_font_preset": project.font_preset},
         project_id=project.id,
         kind=project.kind,
     )
@@ -1359,10 +1366,11 @@ async def refresh_editable_preview(callback: CallbackQuery, state: FSMContext) -
         await callback.answer("Редактируемый макет уже недоступен", show_alert=True)
         return
     await callback.answer("Обновляю превью…")
+    await state.update_data(editable_font_preset=project.font_preset)
     await _show_editable_editor(
         control._callback_message(callback),
         actor=actor,
-        data=data,
+        data={**data, "editable_font_preset": project.font_preset},
         project_id=project.id,
         kind=project.kind,
     )
