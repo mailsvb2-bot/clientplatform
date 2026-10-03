@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from clientplatform.domain.visual_prompt_compiler import compile_visual_prompt
+from clientplatform.domain.visual_style_intent import VisualStyleIntent
 from visual_provider_gateway import engine
 from visual_provider_gateway.models import CreativeBrief, CreativeJob
 from visual_provider_gateway.prompt_adapter import adapt_visual_brief_for_provider
@@ -82,17 +83,54 @@ def test_yandex_adapter_expands_resource_audio_transformation_into_visual_stages
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert adapted.prompt.startswith(request)
-    assert "Три сцены без подписей" in adapted.prompt
-    assert "нейтральное начало без финальных признаков" in adapted.prompt
-    assert "явно слушает аудио" in adapted.prompt
+    assert "Один герой, три последовательные стадии без подписей" in adapted.prompt
+    assert "обычное исходное состояние" in adapted.prompt
+    assert "слушает аудио" in adapted.prompt
     assert "наушниках" in adapted.prompt
     assert "не абстрактный символ волны" in adapted.prompt
-    assert "мягкий доброжелательный взгляд" in adapted.prompt
-    assert "шерсть/мех заметно гуще и пушистее" in adapted.prompt
+    assert "доброжелательный расслабленный взгляд" in adapted.prompt
+    assert "заметно более густой пушистый мех" in adapted.prompt
     assert "ДО →" not in adapted.prompt
     assert "Owner request" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
     assert len(adapted.prompt) <= 500
+
+def test_yandex_stage_prompt_keeps_final_state_and_artistic_style_with_brand_context() -> None:
+    request = (
+        "ёж, который слушает ресурсные аудио трансы "
+        "и становится добрым и пушистым"
+    )
+    brand_context = "Example Wellness: guided resource audio."
+    compiled = compile_visual_prompt(
+        request=request,
+        kind="image",
+        brand_context=brand_context,
+        style_intent=VisualStyleIntent(
+            quick_styles="warm_friendly,premium,illustrative",
+        ),
+    )
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+        brand_context=brand_context,
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
+
+    assert len(adapted.prompt) <= 500
+    assert adapted.prompt.startswith(request)
+    assert "Один герой, три последовательные стадии без подписей" in adapted.prompt
+    assert "слушает аудио в заметных наушниках" in adapted.prompt
+    assert "доброжелательный расслабленный взгляд" in adapted.prompt
+    assert "заметно более густой пушистый мех" in adapted.prompt
+    assert "тёплый дружелюбный" in adapted.prompt
+    assert "премиальный" in adapted.prompt
+    assert "художественный" in adapted.prompt
+    assert "Не печатай названия бренда/услуг/методов" in adapted.prompt
+
 
 def test_transformation_final_state_does_not_absorb_another_subject_state() -> None:
     request = "злой ёж становится добрым и обнимает грустного друга"
@@ -108,7 +146,7 @@ def test_transformation_final_state_does_not_absorb_another_subject_state() -> N
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert "напряжённый взгляд и жёсткая поза" in adapted.prompt
-    assert "мягкий доброжелательный взгляд" in adapted.prompt
+    assert "доброжелательный расслабленный взгляд" in adapted.prompt
     assert "опущенный взгляд и сдержанная закрытая поза" not in adapted.prompt
     assert len(adapted.prompt) <= 500
 
@@ -127,8 +165,8 @@ def test_from_to_transformation_preserves_explicit_initial_and_final_states() ->
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert "напряжённый взгляд и жёсткая поза" in adapted.prompt
-    assert "мягкий доброжелательный взгляд" in adapted.prompt
-    assert "нейтральное начало без финальных признаков" not in adapted.prompt
+    assert "доброжелательный расслабленный взгляд" in adapted.prompt
+    assert "обычное исходное состояние" not in adapted.prompt
     assert len(adapted.prompt) <= 500
 
 
@@ -146,7 +184,7 @@ def test_transformation_state_scope_stops_before_secondary_subject_without_actio
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert "напряжённый взгляд и жёсткая поза" in adapted.prompt
-    assert "мягкий доброжелательный взгляд" in adapted.prompt
+    assert "доброжелательный расслабленный взгляд" in adapted.prompt
     assert "опущенный взгляд и сдержанная закрытая поза" not in adapted.prompt
     assert len(adapted.prompt) <= 500
 
@@ -165,7 +203,7 @@ def test_unparsed_transformation_does_not_invent_neutral_or_final_state() -> Non
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert "исходное и итоговое состояния бери только из запроса" in adapted.prompt
-    assert "нейтральное начало без финальных признаков" not in adapted.prompt
+    assert "обычное исходное состояние" not in adapted.prompt
     assert len(adapted.prompt) <= 500
 
 
@@ -183,8 +221,8 @@ def test_explicit_before_after_labels_are_not_suppressed_by_provider_cue() -> No
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert adapted.prompt.startswith(request)
-    assert "Три сцены, один и тот же субъект" in adapted.prompt
-    assert "Три сцены без подписей" not in adapted.prompt
+    assert "Один герой, три последовательные стадии" in adapted.prompt
+    assert "Один герой, три последовательные стадии без подписей" not in adapted.prompt
     assert "Без читаемого текста" not in adapted.prompt
     assert len(adapted.prompt) <= 500
 
@@ -407,12 +445,12 @@ def test_gigachat_adapter_preserves_listening_transformation_without_compiler_me
     adapted = adapt_visual_brief_for_provider(brief, provider="gigachat")
 
     assert adapted.prompt.startswith(request)
-    assert "Три сцены без подписей" in adapted.prompt
-    assert "нейтральное начало без финальных признаков" in adapted.prompt
-    assert "явно слушает аудио" in adapted.prompt
+    assert "Один герой, три последовательные стадии без подписей" in adapted.prompt
+    assert "обычное исходное состояние" in adapted.prompt
+    assert "слушает аудио" in adapted.prompt
     assert "не абстрактный символ волны" in adapted.prompt
-    assert "мягкий доброжелательный взгляд" in adapted.prompt
-    assert "шерсть/мех заметно гуще и пушистее" in adapted.prompt
+    assert "доброжелательный расслабленный взгляд" in adapted.prompt
+    assert "заметно более густой пушистый мех" in adapted.prompt
     assert "Owner request" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
     assert len(adapted.prompt) <= 1800
@@ -464,8 +502,8 @@ def test_gigachat_adapter_does_not_leak_raw_business_context_into_pixels() -> No
     assert "Business grounding" not in adapted.prompt
     assert "Brand name:" not in adapted.prompt
     assert brand_name not in adapted.prompt
-    assert "Названия бренда, услуг и методов не печатать в кадре" in adapted.prompt
-    assert "явно попросил показать" in adapted.prompt
+    assert "Не печатай названия бренда/услуг/методов" in adapted.prompt
+    assert "явного запроса на это" in adapted.prompt
     assert "Без читаемого текста" in adapted.prompt
     assert len(adapted.prompt) <= 1800
 
@@ -522,10 +560,10 @@ def test_gigachat_adapter_reserves_safety_for_near_limit_owner_request() -> None
 
     assert len(adapted.prompt) <= 1800
     assert adapted.prompt.startswith("ёж слушает ресурсное аудио")
-    assert "Три сцены без подписей" in adapted.prompt
-    assert "явно слушает аудио" in adapted.prompt
-    assert "мягкий доброжелательный взгляд" in adapted.prompt
-    assert "шерсть/мех заметно гуще и пушистее" in adapted.prompt
+    assert "Один герой, три последовательные стадии без подписей" in adapted.prompt
+    assert "слушает аудио" in adapted.prompt
+    assert "доброжелательный расслабленный взгляд" in adapted.prompt
+    assert "заметно более густой пушистый мех" in adapted.prompt
     assert "Без водяных знаков" in adapted.prompt
     assert "Без выдуманных логотипов" in adapted.prompt
     assert "полностью в кадре" in adapted.prompt
@@ -663,11 +701,11 @@ def test_engine_respects_explicit_text_from_compiled_contract(monkeypatch) -> No
     assert result.status == "succeeded"
     prompt = captured["brief"].prompt
     assert prompt.startswith(request)
-    assert "Три сцены, один и тот же субъект" in prompt
-    assert "Три сцены без подписей" not in prompt
+    assert "Один герой, три последовательные стадии" in prompt
+    assert "Один герой, три последовательные стадии без подписей" not in prompt
     assert "Без читаемого текста" not in prompt
     assert "leave clean negative space" not in prompt
-    assert "Названия бренда, услуг и методов не печатать в кадре" in prompt
+    assert "Не печатай названия бренда/услуг/методов" in prompt
     assert len(prompt) <= 500
 
 
