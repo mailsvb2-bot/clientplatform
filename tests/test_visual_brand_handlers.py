@@ -227,6 +227,58 @@ def test_brand_font_picker_saves_default_without_changing_other_brand_fields(mon
     assert actor is not None
 
 
+def test_brand_font_picker_failure_paths_are_closed(monkeypatch) -> None:
+    business_id = str(uuid4())
+    monkeypatch.setattr(visual_brand, "_business_id", lambda _token: business_id)
+
+    async def denied(_user_id: int, _business_id: str):
+        raise TenantPermissionDenied("denied")
+
+    monkeypatch.setattr(visual_brand.control, "_actor", denied)
+    choose = _Callback("cpb:font:token")
+    _run(visual_brand.choose_brand_font(choose))
+    assert choose.answers == [("Не удалось открыть выбор шрифта", True)]
+
+    malformed = _Callback("cpb:fontset")
+    _run(visual_brand.set_brand_font(malformed))
+    assert malformed.answers == [("Кнопка устарела", True)]
+
+    unknown = _Callback("cpb:fontset:comic:token")
+    _run(visual_brand.set_brand_font(unknown))
+    assert unknown.answers == [("Неизвестный шрифт", True)]
+
+
+def test_brand_font_save_permission_and_validation_fail_closed(monkeypatch) -> None:
+    business_id = str(uuid4())
+    current = _brand(business_id)
+    _install_actor(monkeypatch, business_id)
+    monkeypatch.setattr(visual_brand, "_business_id", lambda _token: business_id)
+    monkeypatch.setattr(
+        visual_brand,
+        "load_goal_visual_brand",
+        lambda *, actor: current,
+    )
+    monkeypatch.setattr(
+        visual_brand,
+        "save_goal_visual_brand",
+        lambda **_kwargs: (_ for _ in ()).throw(TenantPermissionDenied("denied")),
+    )
+    denied = _Callback("cpb:fontset:premium:token")
+    _run(visual_brand.set_brand_font(denied))
+    assert denied.answers == [
+        ("Сохранять фирменный стиль может владелец или администратор", True)
+    ]
+
+    monkeypatch.setattr(
+        visual_brand,
+        "save_goal_visual_brand",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError("invalid")),
+    )
+    invalid = _Callback("cpb:fontset:premium:token")
+    _run(visual_brand.set_brand_font(invalid))
+    assert invalid.answers == [("Не удалось сохранить шрифт", True)]
+
+
 def test_open_visual_brand_fails_closed_for_invalid_business(monkeypatch) -> None:
     monkeypatch.setattr(
         visual_brand,
