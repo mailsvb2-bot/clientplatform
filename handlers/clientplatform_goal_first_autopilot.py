@@ -916,16 +916,7 @@ async def _show_editable_editor(
     project_id: str,
     kind: str,
 ) -> None:
-    font_preset = "auto"
-    try:
-        current = await asyncio.to_thread(
-            get_editable_ad_project,
-            actor=actor,
-            project_id=project_id,
-        )
-        font_preset = current.font_preset
-    except (LookupError, ValueError, TenantPermissionDenied):
-        pass
+    font_preset = str(data.get("editable_font_preset") or "auto")
     try:
         await _preview_editable_project(
             target,
@@ -1000,6 +991,7 @@ async def ask_editable_ad_confirmation(callback: CallbackQuery, state: FSMContex
         editable_ad_kind=kind,
         editable_generation_active=False,
         editable_source_revision=project.revision,
+        editable_font_preset=project.font_preset,
         creative_variant_id="",
         creative_variant_index="",
     )
@@ -1142,6 +1134,7 @@ async def _finish_editable_source_generation(
         creative_generation_kind=kind,
         editable_generation_active=False,
         editable_source_revision=project.revision,
+        editable_font_preset=project.font_preset,
     )
     await state.set_state(GoalFirstAutopilotState.customizing)
     await _show_editable_editor(
@@ -1295,13 +1288,16 @@ async def set_editable_font(callback: CallbackQuery, state: FSMContext) -> None:
     except (LookupError, ValueError, TenantPermissionDenied):
         await callback.answer("Не удалось изменить шрифт", show_alert=True)
         return
-    await state.update_data(editable_source_revision=project.revision)
+    await state.update_data(
+        editable_source_revision=project.revision,
+        editable_font_preset=project.font_preset,
+    )
     await state.set_state(GoalFirstAutopilotState.customizing)
     await callback.answer("Шрифт изменён")
     await _show_editable_editor(
         control._callback_message(callback),
         actor=actor,
-        data=data,
+        data={**data, "editable_font_preset": project.font_preset},
         project_id=project.id,
         kind=project.kind,
     )
