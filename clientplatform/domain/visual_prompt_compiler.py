@@ -37,6 +37,32 @@ _OBJECT_REPLACEMENT_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+_NON_OBJECT_CHANGE_RE = re.compile(
+    r"(?:"
+    r"\bцвет\w*|\bстил\w*|\bнастроен\w*|\bтон\w*|\bфон\w*|"
+    r"\bосвещен\w*|\bосвещён\w*|\bконтраст\w*|\bкомпозиц\w*|"
+    r"\bшрифт\w*|\bтекст\w*|\bракурс\w*|\bформат\w*|\bпалитр\w*|"
+    r"\батмосфер\w*|\bcolor\w*|\bstyle\w*|\bmood\w*|\btone\w*|"
+    r"\bbackground\w*|\blighting\w*|\bcontrast\w*|\bcomposition\w*|"
+    r"\bfont\w*|\btext\w*|\bangle\w*|\bformat\w*|\bpalette\w*"
+    r")",
+    re.IGNORECASE,
+)
+_PHYSICAL_REPLACEMENT_HINT_RE = re.compile(
+    r"(?:"
+    r"\bраковин\w*|\bмойк\w*|\bкран\w*|\bсмесител\w*|\bванн\w*|"
+    r"\bунитаз\w*|\bдуш\w*|\bдвер\w*|\bокн\w*|\bламп\w*|"
+    r"\bсветильник\w*|\bстол\w*|\bстул\w*|\bшкаф\w*|\bдиван\w*|"
+    r"\bкресл\w*|\bкроват\w*|\bмебел\w*|\bтехник\w*|\bприбор\w*|"
+    r"\bаппарат\w*|\bтелефон\w*|\bноутбук\w*|\bкомпьютер\w*|"
+    r"\bдвигател\w*|\bколес\w*|\bшин\w*|\bдетал\w*|\bузел\w*|"
+    r"\bsink\w*|\bfaucet\w*|\btoilet\w*|\bbathtub\w*|\bdoor\w*|"
+    r"\bwindow\w*|\blamp\w*|\btable\w*|\bchair\w*|\bcabinet\w*|"
+    r"\bsofa\w*|\bappliance\w*|\bdevice\w*|\bphone\w*|\blaptop\w*|"
+    r"\bcomputer\w*|\bengine\w*|\bwheel\w*|\btire\w*|\bpart\w*"
+    r")",
+    re.IGNORECASE,
+)
 _SEQUENCE_RE = re.compile(
     r"(?:сначала|затем|потом|после|вначале|в\s+конце|"
     r"first|then|after|finally|at\s+the\s+end)",
@@ -139,7 +165,6 @@ def _clean(value: str, *, field: str, limit: int) -> str:
 def _semantic_flags(request: str) -> tuple[str, ...]:
     checks = (
         ("transformation", _TRANSFORMATION_RE),
-        ("object_replacement", _OBJECT_REPLACEMENT_RE),
         ("sequence", _SEQUENCE_RE),
         ("listening", _LISTENING_RE),
         ("watching", _WATCHING_RE),
@@ -153,6 +178,16 @@ def _semantic_flags(request: str) -> tuple[str, ...]:
         ("portrait", _PORTRAIT_RE),
     )
     flags = [name for name, pattern in checks if pattern.search(request)]
+    replacement = bool(_OBJECT_REPLACEMENT_RE.search(request))
+    abstract_only_change = bool(_NON_OBJECT_CHANGE_RE.search(request)) and not bool(
+        _PHYSICAL_REPLACEMENT_HINT_RE.search(request)
+    )
+    if replacement and not abstract_only_change:
+        # Keep replacement semantics for physical-object scenes, while ordinary
+        # requests such as "change the mood/style/background color" stay in the
+        # style/scene path instead of receiving installation and hardware rules.
+        insert_at = 1 if "transformation" in flags else 0
+        flags.insert(insert_at, "object_replacement")
     # Descriptive words such as "calm" may refer only to visual style in a static
     # request. Treat them as state evidence only when the owner actually asks for
     # a transformation, so autopilot does not invent a character-state narrative.
@@ -247,7 +282,8 @@ def _replacement_directives(kind: str, flags: tuple[str, ...]) -> list[str]:
         "Make the replacement itself visually legible. If no reference image is "
         "available downstream, show either the installation action or a clear before/"
         "after in the same environment; do not show only a finished isolated object.",
-        "Show the replacement as complete, installed and physically usable. For "
+        "Show the replacement as complete and physically coherent. When the request "
+        "implies an installed result, make it visibly installed and usable. For "
         "functional fixtures, appliances or furniture, include the necessary visible "
         "controls, supports, mounting and connections and keep geometry, scale, shadows "
         "and contact with surrounding surfaces believable.",
