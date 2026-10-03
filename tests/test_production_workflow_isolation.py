@@ -53,6 +53,15 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertIn(required, text)
 
+    def test_recovery_time_budget_covers_full_sequential_rollout(self) -> None:
+        recovery = self._text(RECOVERY)
+        diagnostic = self._text(VISUAL_DIAGNOSTIC)
+
+        self.assertIn("timeout-minutes: 30", recovery)
+        self.assertIn("timeout-minutes: 40", diagnostic)
+        self.assertIn("const deadline = Date.now() + 30 * 60 * 1000;", diagnostic)
+
+
     def test_recovery_is_exact_sha_fast_forward_clientplatform_deploy(self) -> None:
         text = self._text(RECOVERY)
         for required in (
@@ -183,7 +192,8 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
             "deploy?.state === 'success'",
             "['failure', 'error'].includes(deploy.state)",
             "Timed out waiting for exact production deploy recovery status before visual probe.",
-            "timeout-minutes: 20",
+            "timeout-minutes: 40",
+            "const deadline = Date.now() + 30 * 60 * 1000;",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, text)

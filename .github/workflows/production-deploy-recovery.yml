@@ -20,7 +20,10 @@ jobs:
   recover:
     if: contains(github.event.head_commit.message, '[recover-production-deploy]')
     runs-on: ubuntu-22.04
-    timeout-minutes: 15
+    # Full recovery can rebuild backup, visual gateway, provider gateway, and app
+    # sequentially on the production host. A 15-minute runner deadline can cancel
+    # an otherwise healthy rollout after the new containers are already running.
+    timeout-minutes: 30
     env:
       SSH_HOST: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_HOST }}
       SSH_USER: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_USER }}
