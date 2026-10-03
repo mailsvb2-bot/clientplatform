@@ -916,6 +916,16 @@ async def _show_editable_editor(
     project_id: str,
     kind: str,
 ) -> None:
+    font_preset = "auto"
+    try:
+        current = await asyncio.to_thread(
+            get_editable_ad_project,
+            actor=actor,
+            project_id=project_id,
+        )
+        font_preset = current.font_preset
+    except (LookupError, ValueError, TenantPermissionDenied):
+        pass
     try:
         await _preview_editable_project(
             target,
@@ -925,7 +935,7 @@ async def _show_editable_editor(
             kind=kind,
         )
         note = (
-            "Это превью. Правки текста, CTA и положения блока не запускают новую "
+            "Это превью. Правки текста, CTA, шрифта и положения блока не запускают новую "
             "AI-генерацию и пока не меняют asset в рекламном provider. "
             "Нажмите «Завершить редактирование», когда макет готов."
         )
@@ -951,7 +961,7 @@ async def _show_editable_editor(
         )
     await target.answer(
         note,
-        reply_markup=_editable_keyboard(str(data["business_token"])),
+        reply_markup=_editable_keyboard(str(data["business_token"]), font_preset),
     )
 
 
@@ -1025,7 +1035,7 @@ async def ask_editable_ad_confirmation(callback: CallbackQuery, state: FSMContex
     await target.answer(
         prefix
         + f"Для редактируемой рекламы сначала нужна AI-основа {noun}. "
-        "Это отдельный платный AI-вызов. После него заголовок, текст, CTA и "
+        "Это отдельный платный AI-вызов. После него заголовок, текст, CTA, шрифт и "
         "положение блока можно менять сколько угодно без новой AI-генерации.\n\n"
         "Сами пользовательские image/video bytes ClientPlatform постоянно не хранит.",
         reply_markup=_editable_source_keyboard(kind, business_token),
@@ -1223,6 +1233,78 @@ async def receive_editable_body(message: Message, state: FSMContext) -> None:
 @router.message(GoalFirstAutopilotState.waiting_editable_cta)
 async def receive_editable_cta(message: Message, state: FSMContext) -> None:
     await _receive_editable_field(message, state, field="cta")
+
+
+@router.callback_query(F.data.startswith("cpo:editfont:"))
+async def choose_editable_font(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    data = await state.get_data()
+    project_id = str(data.get("editable_ad_project_id") or "").strip()
+    if not project_id or not _state_matches(data, business_token):
+        await callback.answer("Редактируемый макет уже недоступен", show_alert=True)
+        return
+    try:
+        actor = await control._actor(
+            int(callback.from_user.id),
+            str(data.get("business_id") or ""),
+        )
+        project = await asyncio.to_thread(
+            get_editable_ad_project,
+            actor=actor,
+            project_id=project_id,
+        )
+    except (LookupError, ValueError, TenantPermissionDenied):
+        await callback.answer("Не удалось открыть выбор шрифта", show_alert=True)
+        return
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "Выберите типографику. «Автоматически» подбирает вариант по объёму "
+        "заголовка и текста. Шрифт накладывает ClientPlatform после AI-генерации, "
+        "поэтому смена шрифта не расходует новую AI-квоту.",
+        reply_markup=_editable_font_keyboard(business_token, project.font_preset),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:editfontset:"))
+async def set_editable_font(callback: CallbackQuery, state: FSMContext) -> None:
+    try:
+        _, _, font_preset, business_token = str(callback.data).split(":", 3)
+    except ValueError:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    data = await state.get_data()
+    project_id = str(data.get("editable_ad_project_id") or "").strip()
+    if (
+        font_preset not in EDITABLE_AD_FONT_PRESETS
+        or not project_id
+        or not _state_matches(data, business_token)
+    ):
+        await callback.answer("Редактируемый макет уже недоступен", show_alert=True)
+        return
+    try:
+        actor = await control._actor(
+            int(callback.from_user.id),
+            str(data.get("business_id") or ""),
+        )
+        project = await asyncio.to_thread(
+            update_editable_ad_composition,
+            actor=actor,
+            project_id=project_id,
+            font_preset=font_preset,
+        )
+    except (LookupError, ValueError, TenantPermissionDenied):
+        await callback.answer("Не удалось изменить шрифт", show_alert=True)
+        return
+    await state.update_data(editable_source_revision=project.revision)
+    await state.set_state(GoalFirstAutopilotState.customizing)
+    await callback.answer("Шрифт изменён")
+    await _show_editable_editor(
+        control._callback_message(callback),
+        actor=actor,
+        data=data,
+        project_id=project.id,
+        kind=project.kind,
+    )
 
 
 @router.callback_query(F.data.startswith("cpo:editlayout:"))
