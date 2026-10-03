@@ -569,13 +569,13 @@ class VisualGatewayService:
                 root = self._output_root()
                 candidate = Path(stored.asset_path).expanduser().resolve()
                 candidate.relative_to(root)
+                raw_flags = normalized.get("semantic_flags")
+                if not isinstance(raw_flags, list):
+                    raise ValueError("visual_semantic_qa_contract_invalid")
                 result = provider.review_image_semantics(
                     image_path=candidate,
                     owner_request=str(normalized["owner_request"]),
-                    semantic_flags=tuple(
-                        str(item)
-                        for item in normalized["semantic_flags"]
-                    ),
+                    semantic_flags=tuple(str(item) for item in raw_flags),
                 )
         except (
             ProviderTransportError,
