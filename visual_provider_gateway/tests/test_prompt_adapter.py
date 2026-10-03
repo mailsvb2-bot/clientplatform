@@ -62,12 +62,10 @@ def test_yandex_adapter_uses_natural_owner_description_without_compiler_meta() -
     assert len(adapted.prompt) <= 500
 
 
-def test_yandex_adapter_preserves_exact_owner_listening_and_transformation() -> None:
-    removed_product_method = "метро" + "терапию"
+def test_yandex_adapter_expands_resource_audio_transformation_into_visual_stages() -> None:
     request = (
-        "ёж, который слушает "
-        + removed_product_method
-        + " и становится добрым и пушистым"
+        "ёж, который слушает ресурсные аудио трансы "
+        "и становится добрым и пушистым"
     )
     compiled = compile_visual_prompt(
         request=request,
@@ -83,22 +81,18 @@ def test_yandex_adapter_preserves_exact_owner_listening_and_transformation() -> 
 
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
-    assert adapted.prompt.startswith(
-        "Сториборд в одном изображении: один и тот же герой повторён как "
-        "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ."
-    )
-    assert request in adapted.prompt
-    assert removed_product_method in adapted.prompt
-    assert "Слушает аудио" in adapted.prompt
-    assert "наушники" in adapted.prompt
-    assert "Сториборд в одном кадре" in adapted.prompt
-    assert "Слушает аудио" in adapted.prompt
-    assert "ПОСЛЕ заметно меняется по всем указанным признакам" in adapted.prompt
-    assert "становится добрым и пушистым" in adapted.prompt
+    assert adapted.prompt.startswith(request)
+    assert "Три сцены без подписей" in adapted.prompt
+    assert "нейтральное начало без финальных признаков" in adapted.prompt
+    assert "явно слушает аудио" in adapted.prompt
+    assert "наушниках" in adapted.prompt
+    assert "не абстрактный символ волны" in adapted.prompt
+    assert "мягкий доброжелательный взгляд" in adapted.prompt
+    assert "шерсть/мех заметно гуще и пушистее" in adapted.prompt
+    assert "ДО →" not in adapted.prompt
     assert "Owner request" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
     assert len(adapted.prompt) <= 500
-
 
 def test_yandex_adapter_does_not_turn_business_name_into_image_text() -> None:
     removed_product_method = "метро" + "терапию"
@@ -317,19 +311,16 @@ def test_gigachat_adapter_preserves_listening_transformation_without_compiler_me
 
     adapted = adapt_visual_brief_for_provider(brief, provider="gigachat")
 
-    assert adapted.prompt.startswith(
-        "Сториборд в одном изображении: один и тот же герой повторён как "
-        "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ."
-    )
-    assert request in adapted.prompt
-    assert "Слушает аудио" in adapted.prompt
-    assert "наушники" in adapted.prompt
-    assert "Сториборд в одном кадре" in adapted.prompt
-    assert "ПОСЛЕ заметно меняется по всем указанным признакам" in adapted.prompt
+    assert adapted.prompt.startswith(request)
+    assert "Три сцены без подписей" in adapted.prompt
+    assert "нейтральное начало без финальных признаков" in adapted.prompt
+    assert "явно слушает аудио" in adapted.prompt
+    assert "не абстрактный символ волны" in adapted.prompt
+    assert "мягкий доброжелательный взгляд" in adapted.prompt
+    assert "шерсть/мех заметно гуще и пушистее" in adapted.prompt
     assert "Owner request" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
     assert len(adapted.prompt) <= 1800
-
 
 def test_gigachat_adapter_keeps_sink_replacement_physical_and_contextual() -> None:
     compiled = compile_visual_prompt(request="Замена раковины", kind="image")
@@ -434,12 +425,11 @@ def test_gigachat_adapter_reserves_safety_for_near_limit_owner_request() -> None
     adapted = adapt_visual_brief_for_provider(brief, provider="gigachat")
 
     assert len(adapted.prompt) <= 1800
-    assert adapted.prompt.startswith(
-        "Сториборд в одном изображении: один и тот же герой повторён как "
-        "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ."
-    )
-    assert "Слушает аудио" in adapted.prompt
-    assert "Сториборд в одном кадре" in adapted.prompt
+    assert adapted.prompt.startswith("ёж слушает ресурсное аудио")
+    assert "Три сцены без подписей" in adapted.prompt
+    assert "явно слушает аудио" in adapted.prompt
+    assert "мягкий доброжелательный взгляд" in adapted.prompt
+    assert "шерсть/мех заметно гуще и пушистее" in adapted.prompt
     assert "Без водяных знаков" in adapted.prompt
     assert "Без выдуманных логотипов" in adapted.prompt
     assert "полностью в кадре" in adapted.prompt
@@ -531,7 +521,7 @@ def test_engine_applies_adapter_only_after_provider_selection(monkeypatch) -> No
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 8
+    assert result.provider_payload["prompt_adapter_version"] == 9
     assert "Owner request" not in captured["brief"].prompt
     assert "hedgehog listens to an audio session" in captured["brief"].prompt
 
@@ -558,7 +548,7 @@ def test_engine_applies_meaning_adapter_to_gigachat_fallback(monkeypatch) -> Non
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 8
+    assert result.provider_payload["prompt_adapter_version"] == 9
     prompt = captured["brief"].prompt
     assert prompt.startswith(
         "Сториборд в одном изображении: один и тот же герой повторён как "
