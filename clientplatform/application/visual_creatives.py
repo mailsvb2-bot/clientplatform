@@ -4,11 +4,14 @@ import json
 from pathlib import Path
 import os
 
+from clientplatform.application.visual_scene_planning import plan_visual_scene_contract
 from clientplatform.domain.visual_prompt_compiler import (
     VisualSemanticQAContract,
     build_visual_semantic_qa_contract,
     compile_visual_prompt,
+    semantic_flags_for_request,
 )
+from clientplatform.domain.visual_scene_contract import VisualSceneContract
 from clientplatform.domain.visual_style_intent import (
     STYLE_SCHEMA_VERSION,
     SUPPORTED_STYLE_SCHEMA_VERSIONS,
@@ -35,12 +38,12 @@ class VisualCreativeError(RuntimeError):
     """Sanitized failure of the shared visual-creative capability."""
 
 
-_BUSINESS_IMAGE_BRIEF_VERSION = 3
-_SUPPORTED_BUSINESS_IMAGE_BRIEF_VERSIONS = frozenset({1, 2, 3})
-_PROMPT_COMPILER_VERSION = 5
-_SUPPORTED_PROMPT_COMPILER_VERSIONS = frozenset({2, 3, 4, 5})
+_BUSINESS_IMAGE_BRIEF_VERSION = 4
+_SUPPORTED_BUSINESS_IMAGE_BRIEF_VERSIONS = frozenset({1, 2, 3, 4})
+_PROMPT_COMPILER_VERSION = 6
+_SUPPORTED_PROMPT_COMPILER_VERSIONS = frozenset({2, 3, 4, 5, 6})
 _BUSINESS_IMAGE_WAIT_SECONDS = 20
-_FROZEN_BRIEF_KEYS = frozenset(
+_FROZEN_BRIEF_KEYS_LEGACY = frozenset(
     {
         "kind",
         "prompt",
@@ -54,6 +57,7 @@ _FROZEN_BRIEF_KEYS = frozenset(
         "seed",
     }
 )
+_FROZEN_BRIEF_KEYS_V4 = frozenset({*_FROZEN_BRIEF_KEYS_LEGACY, "scene_contract"})
 
 
 def _brief_dict(brief: VisualCreativeBrief) -> dict[str, object]:
@@ -68,6 +72,7 @@ def _brief_dict(brief: VisualCreativeBrief) -> dict[str, object]:
         "reference_url": brief.reference_url,
         "brand_context": brief.brand_context,
         "seed": brief.seed,
+        "scene_contract": brief.scene_contract,
     }
 
 
@@ -114,23 +119,31 @@ def freeze_business_visual_payload(
         request=request,
         selected=style_intent,
     )
+    owner_request = normalize_business_image_request(request)
+    semantic_flags = semantic_flags_for_request(owner_request)
+    scene_contract, planner_source = plan_visual_scene_contract(
+        request=owner_request,
+        semantic_flags=semantic_flags,
+    )
     resolved_country = str(
         country_code
         or os.getenv("VISUAL_DEPLOYMENT_COUNTRY", "RU")
         or "RU"
     ).strip().upper()
     brief = build_business_visual_brief(
-        request=request,
+        request=owner_request,
         kind=kind,
         brand_context=brand_context,
         country_code=resolved_country,
         preferred_provider=preferred_provider,
         style_intent=resolved_style,
+        scene_contract=scene_contract,
     )
     semantic_qa = build_visual_semantic_qa_contract(
-        request=request,
+        request=owner_request,
         kind=kind,
         country_code=resolved_country,
+        scene_contract=scene_contract,
     )
     value: dict[str, object] = {
         "version": _BUSINESS_IMAGE_BRIEF_VERSION,
@@ -140,6 +153,8 @@ def freeze_business_visual_payload(
             "prompt_compiler_version": _PROMPT_COMPILER_VERSION,
             "style_schema_version": STYLE_SCHEMA_VERSION,
             "style": resolved_style.to_mapping(),
+            "scene_planner_version": 1,
+            "scene_planner_source": planner_source,
         },
         # Version 3 proves that a newly prepared image receipt used the consent
         # surface that discloses one advisory semantic-QA AI call. Legacy v1/v2
@@ -213,22 +228,30 @@ def _load_frozen_business_visual_payload(value: str) -> tuple[VisualCreativeBrie
     if version not in _SUPPORTED_BUSINESS_IMAGE_BRIEF_VERSIONS:
         raise ValueError("unsupported frozen business image payload version")
     expected = {"version", "brief", "wait_seconds"}
-    if version in {2, 3}:
+    if version in {2, 3, 4}:
         expected.add("intent")
-    if version == 3:
+    if version in {3, 4}:
         expected.add("semantic_qa")
     if "binding" in raw:
         expected.add("binding")
     if set(raw) != expected:
         raise ValueError("frozen business image payload is invalid")
-    if version in {2, 3}:
+    if version in {2, 3, 4}:
         intent = raw.get("intent")
-        if not isinstance(intent, dict) or set(intent) != {
+        expected_intent = {
             "prompt_compiler_version",
             "style_schema_version",
             "style",
-        }:
+        }
+        if version == 4:
+            expected_intent.update({"scene_planner_version", "scene_planner_source"})
+        if not isinstance(intent, dict) or set(intent) != expected_intent:
             raise ValueError("frozen business visual intent is invalid")
+        if version == 4 and (
+            intent.get("scene_planner_version") != 1
+            or intent.get("scene_planner_source") not in {"ai", "deterministic"}
+        ):
+            raise ValueError("frozen business visual scene planner is invalid")
         if (
             intent.get("prompt_compiler_version")
             not in _SUPPORTED_PROMPT_COMPILER_VERSIONS
@@ -241,8 +264,15 @@ def _load_frozen_business_visual_payload(value: str) -> tuple[VisualCreativeBrie
             raise ValueError("frozen business visual style is invalid")
         VisualStyleIntent.from_mapping(style)
     raw_brief = raw.get("brief")
-    if not isinstance(raw_brief, dict) or set(raw_brief) != _FROZEN_BRIEF_KEYS:
+    expected_brief_keys = (
+        _FROZEN_BRIEF_KEYS_V4 if version == 4 else _FROZEN_BRIEF_KEYS_LEGACY
+    )
+    if not isinstance(raw_brief, dict) or set(raw_brief) != expected_brief_keys:
         raise ValueError("frozen business image brief is invalid")
+    scene_contract = None
+    if version == 4:
+        raw_scene_contract = raw_brief.get("scene_contract")
+        scene_contract = VisualSceneContract.from_mapping(raw_scene_contract)
     wait_seconds = raw.get("wait_seconds")
     if not isinstance(wait_seconds, int) or not 0 <= wait_seconds <= 60:
         raise ValueError("frozen business image wait is invalid")
@@ -263,10 +293,13 @@ def _load_frozen_business_visual_payload(value: str) -> tuple[VisualCreativeBrie
         reference_url=str(raw_brief.get("reference_url") or ""),
         brand_context=str(raw_brief.get("brand_context") or ""),
         seed=seed,
+        scene_contract=(
+            None if scene_contract is None else scene_contract.to_mapping()
+        ),
     )
     if brief.kind not in {"image", "video"} or not brief.prompt.strip():
         raise ValueError("frozen business visual brief is invalid")
-    if version == 3:
+    if version in {3, 4}:
         raw_qa = raw.get("semantic_qa")
         if brief.kind == "video":
             if raw_qa is not None:
@@ -362,6 +395,7 @@ def build_business_visual_brief(
     country_code: str = "",
     preferred_provider: str = "",
     style_intent: VisualStyleIntent | None = None,
+    scene_contract: VisualSceneContract | None = None,
 ) -> VisualCreativeBrief:
     owner_request = normalize_business_image_request(request)
     visual_kind = str(kind or "").strip().lower()
@@ -373,6 +407,7 @@ def build_business_visual_brief(
         brand_context=str(brand_context or "").strip()[:1200],
         purpose="owner_visual",
         style_intent=style_intent,
+        scene_contract=scene_contract,
     )
     return VisualCreativeBrief(
         kind=visual_kind,
@@ -383,6 +418,9 @@ def build_business_visual_brief(
         duration_seconds=8,
         negative_prompt=compiled.negative_prompt,
         brand_context=str(brand_context or "").strip()[:1200],
+        scene_contract=(
+            None if scene_contract is None else scene_contract.to_mapping()
+        ),
     )
 
 
