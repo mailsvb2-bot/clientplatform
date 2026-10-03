@@ -140,24 +140,29 @@ def _natural_safety_parts(brief: CreativeBrief) -> tuple[str, ...]:
 
 
 def _yandex_safety_parts(brief: CreativeBrief) -> tuple[str, ...]:
-    """Compact mandatory presentation constraints for Alice's 500-char prompt."""
+    """Compact ordered constraints for Alice's 500-char prompt.
+
+    Meaning and owner-selected style get first claim on the tiny provider budget.
+    The most semantically important anti-lettering rules come first so truncation
+    cannot keep decorative safeguards while dropping accidental-text protection.
+    """
 
     natural = _natural_safety_parts(brief)
     joined = " ".join(natural)
     clauses: list[str] = []
-    if "Без водяных знаков" in joined:
-        clauses.append("Без водяных знаков")
-    if "Без выдуманных логотипов" in joined:
-        clauses.append("Без выдуманных логотипов")
-    if "полностью в кадре" in joined:
-        clauses.append("Главные объекты полностью в кадре")
     if "Без читаемого текста" in joined:
-        clauses.append("Без читаемого текста/UI")
+        clauses.append("Без читаемого текста/UI.")
     if "названия бренда/услуг/методов" in joined.casefold():
-        clauses.append("Названия бренда/услуг только по явному запросу")
-    if not clauses:
-        return ()
-    return ("; ".join(clauses) + ".",)
+        clauses.append("Названия бренда/услуг только по явному запросу.")
+    if "Без водяных знаков" in joined and "Без выдуманных логотипов" in joined:
+        clauses.append("Без водяных знаков и выдуманных логотипов.")
+    elif "Без водяных знаков" in joined:
+        clauses.append("Без водяных знаков.")
+    elif "Без выдуманных логотипов" in joined:
+        clauses.append("Без выдуманных логотипов.")
+    if "полностью в кадре" in joined:
+        clauses.append("Главные объекты полностью в кадре.")
+    return tuple(clauses)
 
 
 def _natural_policy_parts(brief: CreativeBrief) -> tuple[str, ...]:
@@ -473,18 +478,15 @@ def _detailed_transformation_stage_cue(
         return None
     initial_evidence, final_evidence = parsed
     opening = (
-        "; ".join(initial_evidence)
+        ", ".join(initial_evidence)
         if initial_evidence
-        else "обычный исходный вид"
+        else "обычный"
     )
     if listening:
-        middle = (
-            "слушает аудио в заметных наушниках, не символ волны, "
-            "и начинает меняться"
-        )
+        middle = "слушает аудио в заметных наушниках, не символом волны, и меняется"
     else:
         middle = "видна причина/действие и первые признаки изменения"
-    final = "; ".join(final_evidence)
+    final = ", ".join(final_evidence)
     prefix = (
         "Один герой, три стадии: "
         if allow_labels
@@ -492,9 +494,9 @@ def _detailed_transformation_stage_cue(
     )
     return (
         prefix
-        + "сначала — "
+        + "сначала "
         + opening
-        + "; затем — "
+        + "; затем "
         + middle
         + "; финал — "
         + final
@@ -655,18 +657,49 @@ def _bounded_yandex_prompt(
     brief: CreativeBrief,
     extras: tuple[str, ...] = (),
 ) -> str:
-    """Preserve owner meaning, explicit style and safety under Alice's hard limit."""
+    """Preserve owner meaning and style first under Alice's hard 500-char limit."""
 
     safety = _yandex_safety_parts(brief)
-    safety_block = _bounded_join(list(safety), limit=_YANDEX_PROMPT_LIMIT)
     stage_priority = any(
         cue.startswith("Один герой, три стадии")
         or cue.startswith("Три сцены")
         for cue in semantic_cues
     )
-    style_block = _bounded_join(list(style_cues), limit=96 if stage_priority else 120)
-    minimum_scene_head = 90 if stage_priority else 180
     normalized_scene_head = " ".join(str(scene_head or "").split()).strip()
+
+    if stage_priority:
+        # Transformation prompts are the failure-prone case: never let secondary
+        # safety/style bookkeeping truncate the final-state evidence. Keep a compact
+        # but useful style budget, reserve the first anti-lettering clauses, and let
+        # the owner scene use whatever remains.
+        bounded_semantics = _bounded_join(list(semantic_cues), limit=240)
+        style_block = _bounded_join(list(style_cues), limit=96)
+        safety_floor = _bounded_join(list(safety), limit=80)
+        reserved = (
+            len(bounded_semantics)
+            + len(style_block)
+            + len(safety_floor)
+            + sum(
+                1
+                for block in (bounded_semantics, style_block, safety_floor)
+                if block
+            )
+        )
+        scene_limit = max(90, _YANDEX_PROMPT_LIMIT - reserved)
+        bounded_scene_head = _bounded_join([normalized_scene_head], limit=scene_limit)
+        core = [bounded_scene_head, bounded_semantics, style_block]
+        core = [part for part in core if part]
+        used = sum(len(part) for part in core) + max(0, len(core) - 1)
+        remaining = max(0, _YANDEX_PROMPT_LIMIT - used - (1 if safety else 0))
+        safety_block = _bounded_join(list(safety), limit=remaining)
+        return _bounded_join(
+            [*core, safety_block, *extras],
+            limit=_YANDEX_PROMPT_LIMIT,
+        )
+
+    safety_block = _bounded_join(list(safety), limit=_YANDEX_PROMPT_LIMIT)
+    style_block = _bounded_join(list(style_cues), limit=120)
+    minimum_scene_head = 180
     scene_reserve = min(len(normalized_scene_head), minimum_scene_head)
     fixed_reserved = (
         len(safety_block)
@@ -692,12 +725,11 @@ def _bounded_yandex_prompt(
         + (1 if bounded_semantics else 0)
     )
     scene_limit = max(scene_reserve, _YANDEX_PROMPT_LIMIT - reserved)
-    bounded_scene_head = _bounded_join([scene_head], limit=scene_limit)
+    bounded_scene_head = _bounded_join([normalized_scene_head], limit=scene_limit)
     return _bounded_join(
         [bounded_scene_head, *semantic_parts, *style_parts, *safety, *extras],
         limit=_YANDEX_PROMPT_LIMIT,
     )
-
 
 def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
     lines = _compiled_directives(brief.prompt)
