@@ -323,6 +323,8 @@ class VisualPromptCompilerTests(unittest.TestCase):
         self.assertEqual(payload["intent"]["prompt_compiler_version"], 4)
         self.assertEqual(payload["semantic_qa"]["version"], 1)
         self.assertEqual(payload["semantic_qa"]["kind"], "image")
+        self.assertEqual(payload["semantic_qa"]["country_code"], "RU")
+        self.assertEqual(payload["brief"]["country_code"], "RU")
         self.assertIn("listening", payload["semantic_qa"]["semantic_flags"])
         self.assertIn("transformation", payload["semantic_qa"]["semantic_flags"])
         provider_prompt = payload["brief"]["prompt"]
@@ -332,6 +334,15 @@ class VisualPromptCompilerTests(unittest.TestCase):
         self.assertIn("transformation is mandatory visual evidence", provider_prompt)
         self.assertIn("Brand name: Тишина", provider_prompt)
         self.assertIn("audio interaction missing", provider_negative)
+
+    def test_frozen_payload_uses_gateway_default_country_when_omitted(self) -> None:
+        frozen = visual_creatives.freeze_business_image_payload(
+            request="Замена раковины",
+        )
+        payload = json.loads(frozen)
+
+        self.assertEqual(payload["brief"]["country_code"], "RU")
+        self.assertEqual(payload["semantic_qa"]["country_code"], "RU")
 
     def test_legacy_v2_frozen_receipt_never_gains_semantic_qa(self) -> None:
         frozen = visual_creatives.freeze_business_image_payload(
