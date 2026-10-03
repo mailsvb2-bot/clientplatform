@@ -640,7 +640,7 @@ def _bounded_yandex_prompt(
     safety = _natural_safety_parts(brief)
     safety_block = _bounded_join(list(safety), limit=_YANDEX_PROMPT_LIMIT)
     stage_priority = any(
-        cue.startswith("Три сцены без подписей") for cue in semantic_cues
+        cue.startswith("Три сцены") for cue in semantic_cues
     )
     style_block = _bounded_join(list(style_cues), limit=60 if stage_priority else 120)
     minimum_scene_head = 90 if stage_priority else 180
