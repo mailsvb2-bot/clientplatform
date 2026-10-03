@@ -44,6 +44,17 @@ class VisualCreativeJob:
 
 
 @dataclass(frozen=True, slots=True)
+class VisualSemanticQA:
+    status: str
+    issues: tuple[str, ...] = ()
+    summary: str = ""
+
+    @property
+    def needs_review(self) -> bool:
+        return self.status == "needs_review"
+
+
+@dataclass(frozen=True, slots=True)
 class VisualCreativeBrief:
     kind: str
     prompt: str
@@ -424,6 +435,60 @@ def poll_visual(job_id: str, *, scope_id: str) -> VisualCreativeJob:
     query = urllib.parse.urlencode({"scope_id": scope})
     job = _job(_json("GET", f"/v1/creative/generations/{token}?{query}"))
     return _require_scope(job, expected_scope=scope)
+
+
+def review_visual_semantics(
+    job: VisualCreativeJob,
+    *,
+    contract: dict[str, object],
+) -> VisualSemanticQA:
+    if (
+        job.kind != "image"
+        or job.status != "succeeded"
+        or not job.asset_ready
+    ):
+        raise VisualCreativeGatewayError("visual_semantic_qa_job_not_reviewable")
+    if not isinstance(contract, dict):
+        raise ValueError("valid visual semantic QA contract is required")
+    payload = {
+        "scope_id": job.scope_id,
+        "contract": contract,
+    }
+    token = urllib.parse.quote(job.id, safe="")
+    value = _json(
+        "POST",
+        f"/v1/creative/generations/{token}/semantic-qa",
+        payload=payload,
+        timeout_seconds=_env_int(
+            "VISUAL_SEMANTIC_QA_TIMEOUT_SECONDS",
+            45,
+            minimum=5,
+            maximum=120,
+        ),
+    )
+    status = str(value.get("status") or "").strip().lower()
+    raw_issues = value.get("issues")
+    summary = " ".join(str(value.get("summary") or "").split()).strip()
+    if (
+        status not in {"pass", "needs_review", "unavailable"}
+        or not isinstance(raw_issues, list)
+        or len(raw_issues) > 5
+        or any(not isinstance(item, str) or len(item) > 180 for item in raw_issues)
+        or len(summary) > 500
+    ):
+        raise VisualCreativeGatewayError("visual_semantic_qa_invalid_response")
+    issues = tuple(
+        " ".join(item.split()).strip()
+        for item in raw_issues
+        if " ".join(item.split()).strip()
+    )
+    if status != "needs_review":
+        issues = ()
+    return VisualSemanticQA(
+        status=status,
+        issues=issues,
+        summary=summary,
+    )
 
 
 def wait_visual(
