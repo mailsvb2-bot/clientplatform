@@ -266,6 +266,26 @@ class VisualPromptCompilerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "too long"):
             compile_visual_prompt(request="x" * 1501, kind="image")
 
+    def test_long_transformation_preserves_tail_safety_directives(self) -> None:
+        request = (
+            "ёж слушает ресурсное аудио и становится добрым и пушистым "
+            + ("очень подробно описанная спокойная сцена " * 40)
+        )[:1490]
+        compiled = compile_visual_prompt(
+            request=request,
+            kind="image",
+            brand_context=(
+                "Brand name: Example Wellness. Product: guided audio. "
+                + ("Verified business context. " * 30)
+            ),
+        )
+
+        self.assertIn("Transformation stage detail", compiled.prompt)
+        self.assertIn("Do not add fake awards", compiled.prompt)
+        self.assertIn("Do not rely on readable text", compiled.prompt)
+        self.assertIn("Names from business grounding are semantic context only", compiled.prompt)
+        self.assertLessEqual(len(compiled.prompt), 12000)
+
     def test_semantic_qa_contract_reuses_compiler_flags_for_owner_examples(self) -> None:
         hedgehog = build_visual_semantic_qa_contract(
             request=(
