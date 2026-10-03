@@ -32,10 +32,9 @@ from clientplatform.application.event_content_assets import (
     EventContentAssetError,
     store_generated_event_content_asset,
 )
-from clientplatform.application.visual_scene_planning import plan_visual_scene_contract
 from clientplatform.application.visual_scene_variants import (
     VisualSceneVariant,
-    build_visual_scene_variants,
+    build_visual_scene_bundle,
     recommended_scene_variant,
     supplement_scene_variant,
 )
@@ -173,15 +172,10 @@ async def _ensure_scene_variants(
     request = normalize_business_image_request(str(data["creative_pending_prompt"]))
     style = _style_intent_from_state(data)
     flags = semantic_flags_for_request(request)
-    contract, source = await asyncio.to_thread(
-        plan_visual_scene_contract,
+    contract, source, variants = await asyncio.to_thread(
+        build_visual_scene_bundle,
         request=request,
         semantic_flags=flags,
-    )
-    variants = await asyncio.to_thread(
-        build_visual_scene_variants,
-        request=request,
-        scene_contract=contract,
         style_intent=style,
     )
     await state.update_data(
