@@ -119,6 +119,7 @@ def test_short_prompt_enters_optional_style_step_before_any_paid_preparation(
         for button in row
     ]
     assert "cpc:st:go:business-token" in buttons
+    assert "cpc:sv:show:business-token" in buttons
     assert "cpc:st:open:business-token" in buttons
     labels = [
         button.text
@@ -126,6 +127,7 @@ def test_short_prompt_enters_optional_style_step_before_any_paid_preparation(
         for button in row
     ]
     assert "🤖 Сделать всё автоматически" in labels
+    assert "🎬 Показать 5 вариантов" in labels
 
 
 def test_receive_prompt_rejects_corrupt_creative_kind_before_actor_lookup(
@@ -222,7 +224,7 @@ def test_style_dashboard_stays_within_owner_button_budget() -> None:
     assert len(buttons) <= 20
     labels = [label for label, _callback in buttons]
     assert "🤖 Авто — всё решит ClientPlatform" in labels
-    assert "✅ Готово — к созданию" in labels
+    assert "✅ Готово — ClientPlatform выберет лучший" in labels
 
 
 def test_style_rows_show_checkmark_for_current_choice_and_compact_finish_action() -> None:
@@ -230,12 +232,12 @@ def test_style_rows_show_checkmark_for_current_choice_and_compact_finish_action(
     dashboard = studio.style_dashboard_rows("business-token", style)
     dashboard_labels = [label for row in dashboard for label, _callback in row]
     assert "✅ 🤗 Тёпло и дружелюбно" in dashboard_labels
-    assert "✅ Готово — к созданию" in dashboard_labels
+    assert "✅ Готово — ClientPlatform выберет лучший" in dashboard_labels
 
     mood_rows = studio.style_dimension_rows("business-token", "m", style)
     mood_labels = [label for row in mood_rows for label, _callback in row]
     assert "✅ 😊 Доброжелательная" in mood_labels
-    assert "✅ Готово — к созданию" in mood_labels
+    assert "✅ Готово — ClientPlatform выберет лучший" in mood_labels
     assert "⬅️ Все настройки" in mood_labels
 
 
