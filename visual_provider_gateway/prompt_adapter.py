@@ -131,11 +131,11 @@ def _natural_safety_parts(brief: CreativeBrief) -> tuple[str, ...]:
         or "readable advertising text baked into image" in folded_negative
     ):
         parts.append("Без читаемого текста и UI.")
-    if (
-        str(brief.brand_context or "").strip()
-        and "readable text is explicitly part" not in folded_prompt
-    ):
-        parts.append("Названия бренда, услуг и методов не печатать в кадре.")
+    if str(brief.brand_context or "").strip():
+        parts.append(
+            "Названия бренда, услуг и методов не печатать в кадре, кроме точного "
+            "названия, которое пользователь явно попросил показать."
+        )
 
     return tuple(parts)
 
