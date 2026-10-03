@@ -1250,7 +1250,13 @@ async def _show_scene_variant_choices(
         return
     try:
         _contract, _source, variants = await _ensure_scene_variants(state, data)
-    except (KeyError, OSError, TypeError, ValueError):
+    except OSError:
+        await target.answer(
+            "Не удалось подготовить варианты постановки. Можно оставить "
+            "«Автоматически» — исходный смысл всё равно останется обязательным."
+        )
+        return
+    except (KeyError, TypeError, ValueError):
         await target.answer(
             "Не удалось подготовить варианты постановки. Можно оставить "
             "«Автоматически» — исходный смысл всё равно останется обязательным."
@@ -1289,7 +1295,10 @@ async def auto_scene_variant(callback: CallbackQuery, state: FSMContext) -> None
     try:
         _contract, _source, variants = await _ensure_scene_variants(state, data)
         selected = recommended_scene_variant(variants)
-    except (KeyError, OSError, TypeError, ValueError):
+    except OSError:
+        await callback.answer("Не удалось выбрать вариант", show_alert=True)
+        return
+    except (KeyError, TypeError, ValueError):
         await callback.answer("Не удалось выбрать вариант", show_alert=True)
         return
     await callback.answer("Выбран лучший вариант")
