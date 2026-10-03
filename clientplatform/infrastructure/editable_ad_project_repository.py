@@ -9,6 +9,7 @@ from typing import Any
 from clientplatform.domain.editable_advertising import (
     EditableAdProject,
     EditableAdProjectStatus,
+    normalize_editable_ad_font_preset,
 )
 from clientplatform.domain.tenancy import TenantContext, normalize_uuid
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
@@ -36,18 +37,19 @@ def _project(row: Any) -> EditableAdProject:
         body=str(_value(row, "body", 6)),
         cta=str(_value(row, "cta", 7)),
         layout=str(_value(row, "layout", 8)),
-        brand_json=str(_value(row, "brand_json", 9)),
-        source_job_id=str(_value(row, "source_job_id", 10)),
-        status=EditableAdProjectStatus(str(_value(row, "status", 11))),
-        revision=int(_value(row, "revision", 12)),
-        created_at=str(_value(row, "created_at", 13)),
-        updated_at=str(_value(row, "updated_at", 14)),
+        font_preset=str(_value(row, "font_preset", 9)),
+        brand_json=str(_value(row, "brand_json", 10)),
+        source_job_id=str(_value(row, "source_job_id", 11)),
+        status=EditableAdProjectStatus(str(_value(row, "status", 12))),
+        revision=int(_value(row, "revision", 13)),
+        created_at=str(_value(row, "created_at", 14)),
+        updated_at=str(_value(row, "updated_at", 15)),
     )
 
 
 _SELECT = """
 SELECT id,business_id,created_by_member_id,publication_job_id,kind,
-       headline,body,cta,layout,brand_json,source_job_id,
+       headline,body,cta,layout,font_preset,brand_json,source_job_id,
        status,revision,created_at,updated_at
 FROM editable_ad_projects
 """
@@ -156,6 +158,7 @@ class EditableAdProjectRepository:
         cta: str,
         layout: str,
         brand: dict[str, str],
+        font_preset: str = "auto",
         now: str | None = None,
     ) -> EditableAdProject:
         current = self._actor(actor)
@@ -181,6 +184,7 @@ class EditableAdProjectRepository:
         clean_layout = str(layout or "lower_card").strip().lower()
         if clean_layout not in {"lower_card", "top_card"}:
             raise ValueError("editable_ad_layout_invalid")
+        clean_font_preset = normalize_editable_ad_font_preset(font_preset)
         brand_json = _brand_json(brand)
         timestamp = str(now or _iso_now())
         project_id = str(uuid.uuid4())
@@ -188,9 +192,9 @@ class EditableAdProjectRepository:
             """
             INSERT INTO editable_ad_projects(
                 id,business_id,created_by_member_id,publication_job_id,kind,
-                headline,body,cta,layout,brand_json,source_job_id,
+                headline,body,cta,layout,font_preset,brand_json,source_job_id,
                 status,revision,created_at,updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,'','draft',1,?,?)
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,'','draft',1,?,?)
             ON CONFLICT(business_id, created_by_member_id, publication_job_id, kind)
             DO NOTHING
             """,
@@ -204,6 +208,7 @@ class EditableAdProjectRepository:
                 clean_body,
                 clean_cta,
                 clean_layout,
+                clean_font_preset,
                 brand_json,
                 timestamp,
                 timestamp,
@@ -327,6 +332,7 @@ class EditableAdProjectRepository:
         body: str | None = None,
         cta: str | None = None,
         layout: str | None = None,
+        font_preset: str | None = None,
         now: str | None = None,
     ) -> EditableAdProject:
         current = self._actor(actor)
@@ -341,6 +347,11 @@ class EditableAdProjectRepository:
         next_layout = value.layout if layout is None else str(layout).strip().lower()
         if next_layout not in {"lower_card", "top_card"}:
             raise ValueError("editable_ad_layout_invalid")
+        next_font_preset = (
+            value.font_preset
+            if font_preset is None
+            else normalize_editable_ad_font_preset(font_preset)
+        )
         next_status = value.status
         if value.status in {
             EditableAdProjectStatus.SOURCE_READY,
@@ -350,7 +361,7 @@ class EditableAdProjectRepository:
         self._conn.execute(
             """
             UPDATE editable_ad_projects
-            SET headline=?, body=?, cta=?, layout=?, status=?,
+            SET headline=?, body=?, cta=?, layout=?, font_preset=?, status=?,
                 revision=revision+1, updated_at=?
             WHERE id=? AND business_id=?
             """,
@@ -359,6 +370,7 @@ class EditableAdProjectRepository:
                 next_body,
                 next_cta,
                 next_layout,
+                next_font_preset,
                 next_status.value,
                 str(now or _iso_now()),
                 value.id,
