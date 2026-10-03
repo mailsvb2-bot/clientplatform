@@ -330,6 +330,21 @@ _TRANSFORMATION_FROM_TO_PATTERNS = (
         re.IGNORECASE,
     ),
 )
+_EXPLICIT_STAGE_PATTERNS = (
+    re.compile(
+        r"\b(?:сначала|вначале|first)\b\s*[:,—-]?\s*([^;]{1,320})",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:затем|потом|then)\b\s*[:,—-]?\s*([^;]{1,320})",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:в\s+финальн\w*(?:\s+стади\w*)?|в\s+конце|наконец|finally|at\s+the\s+end)"
+        r"\b\s*[:,—-]?\s*([^;.!?]{1,320})",
+        re.IGNORECASE,
+    ),
+)
 _STATE_CONNECTOR_RE = re.compile(
     r"^(?:[\s,/]*(?:(?:и|and|also|очень|более|намного|явно|"
     r"гораздо|ещ[её]|very|more|much|clearly)\b[\s,/]*)*)$",
@@ -340,6 +355,22 @@ _STATE_EVIDENCE_RULES = (
     (
         re.compile(r"(?:\bдобр\w*|\bkind\b|\bgentle\b)", re.IGNORECASE),
         "доброжелательный расслабленный взгляд",
+    ),
+    (
+        re.compile(r"(?:\bнапряж\w*|\btense\b)", re.IGNORECASE),
+        "напряжённая закрытая поза",
+    ),
+    (
+        re.compile(r"(?:\bнасторож\w*|\bwary\b|\bguarded\b)", re.IGNORECASE),
+        "настороженный взгляд",
+    ),
+    (
+        re.compile(r"(?:\bрасслаб\w*|\brelax\w*)", re.IGNORECASE),
+        "расслабленная поза",
+    ),
+    (
+        re.compile(r"(?:\bсмягч\w*|\bsoften\w*)", re.IGNORECASE),
+        "иглы или фактура заметно смягчаются",
     ),
     (
         re.compile(r"(?:\bпушист\w*|\bfluffy\b)", re.IGNORECASE),
@@ -442,6 +473,43 @@ def _trailing_state_evidence(text: str, *, limit: int = 2) -> tuple[str, ...]:
     return tuple(dict.fromkeys(item[2] for item in cluster))
 
 
+def _state_evidence_anywhere(text: str, *, limit: int = 3) -> tuple[str, ...]:
+    """Collect ordered concrete state evidence from an explicitly scoped stage."""
+
+    selected: list[str] = []
+    for _start, _end, evidence in _state_matches(text):
+        if evidence not in selected:
+            selected.append(evidence)
+        if len(selected) >= limit:
+            break
+    return tuple(selected)
+
+
+def _parsed_explicit_stage_evidence(
+    owner_request: str,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]] | None:
+    """Parse owner-authored сначала → затем → финал wording without copying labels.
+
+    The stage markers provide the scope, so state words from later secondary
+    subjects cannot leak into the transformed subject's earlier/final evidence.
+    """
+
+    request = " ".join(str(owner_request or "").split()).strip()
+    matches = tuple(pattern.search(request) for pattern in _EXPLICIT_STAGE_PATTERNS)
+    if any(match is None for match in matches):
+        return None
+    initial_match, middle_match, final_match = matches
+    assert initial_match is not None
+    assert middle_match is not None
+    assert final_match is not None
+    initial = _state_evidence_anywhere(initial_match.group(1), limit=3)
+    middle = _state_evidence_anywhere(middle_match.group(1), limit=3)
+    final = _state_evidence_anywhere(final_match.group(1), limit=3)
+    if not final:
+        return None
+    return initial, middle, final
+
+
 def _parsed_transformation_evidence(
     owner_request: str,
 ) -> tuple[tuple[str, ...], tuple[str, ...]] | None:
@@ -473,19 +541,30 @@ def _detailed_transformation_stage_cue(
     listening: bool,
     allow_labels: bool,
 ) -> str | None:
+    explicit_stages = _parsed_explicit_stage_evidence(owner_request)
     parsed = _parsed_transformation_evidence(owner_request)
-    if parsed is None:
+    if explicit_stages is None and parsed is None:
         return None
-    initial_evidence, final_evidence = parsed
-    opening = (
-        ", ".join(initial_evidence)
-        if initial_evidence
-        else "обычный"
-    )
-    if listening:
-        middle = "слушает аудио в заметных наушниках, не символом волны, и меняется"
+
+    if explicit_stages is not None:
+        initial_evidence, middle_evidence, final_evidence = explicit_stages
     else:
-        middle = "видна причина/действие и первые признаки изменения"
+        assert parsed is not None
+        initial_evidence, final_evidence = parsed
+        middle_evidence = ()
+
+    opening = ", ".join(initial_evidence) if initial_evidence else "обычный"
+    if listening:
+        middle = "слушает аудио в заметных наушниках"
+        if middle_evidence:
+            middle += ", " + ", ".join(middle_evidence)
+        middle += ", и меняется"
+    else:
+        middle = (
+            ", ".join(middle_evidence)
+            if middle_evidence
+            else "видна причина/действие и первые признаки изменения"
+        )
     final = ", ".join(final_evidence)
     prefix = (
         "Один герой, три стадии: "
@@ -502,7 +581,6 @@ def _detailed_transformation_stage_cue(
         + final
         + "."
     )
-
 
 def _compiled_semantic_visual_cues(
     lines: tuple[str, ...],
