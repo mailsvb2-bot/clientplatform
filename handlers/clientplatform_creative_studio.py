@@ -1238,6 +1238,177 @@ async def clear_current_visual_style(callback: CallbackQuery, state: FSMContext)
     await callback.answer("Сохранённый стиль сброшен")
 
 
+async def _show_scene_variant_choices(
+    target: Message,
+    state: FSMContext,
+    *,
+    token: str,
+) -> None:
+    data = await state.get_data()
+    if not _style_session_matches(data, token):
+        await target.answer(
+            "Эта настройка уже устарела. Откройте «Картинки и креативы» ещё раз."
+        )
+        return
+    try:
+        _contract, _source, variants = await _ensure_scene_variants(state, data)
+    except (KeyError, OSError, TypeError, ValueError):
+        await target.answer(
+            "Не удалось подготовить варианты постановки. Можно оставить "
+            "«Автоматически» — исходный смысл всё равно останется обязательным."
+        )
+        return
+    await state.set_state(ClientPlatformCreativeStudioState.choosing_style)
+    await _replace_or_answer(
+        target,
+        _scene_variant_text(variants),
+        reply_markup=control._keyboard(_scene_variant_rows(token, variants)),
+    )
+
+
+@router.callback_query(F.data.startswith("cpc:sv:show:"))
+async def show_scene_variants(callback: CallbackQuery, state: FSMContext) -> None:
+    token = str(callback.data).rsplit(":", 1)[-1]
+    data = await state.get_data()
+    if not _style_session_matches(data, token):
+        await callback.answer("Эта настройка уже устарела", show_alert=True)
+        return
+    await callback.answer("Готовлю варианты постановки…")
+    await _show_scene_variant_choices(
+        control._callback_message(callback),
+        state,
+        token=token,
+    )
+
+
+@router.callback_query(F.data.startswith("cpc:sv:auto:"))
+async def auto_scene_variant(callback: CallbackQuery, state: FSMContext) -> None:
+    token = str(callback.data).rsplit(":", 1)[-1]
+    data = await state.get_data()
+    if not _style_session_matches(data, token):
+        await callback.answer("Эта настройка уже устарела", show_alert=True)
+        return
+    try:
+        _contract, _source, variants = await _ensure_scene_variants(state, data)
+        selected = recommended_scene_variant(variants)
+    except (KeyError, OSError, TypeError, ValueError):
+        await callback.answer("Не удалось выбрать вариант", show_alert=True)
+        return
+    await callback.answer("Выбран лучший вариант")
+    await _prepare_styled_generation(
+        control._callback_message(callback),
+        state,
+        user_id=int(callback.from_user.id),
+        token=token,
+        scene_variant=selected,
+    )
+
+
+@router.callback_query(F.data.startswith("cpc:sv:pick:"))
+async def pick_scene_variant(callback: CallbackQuery, state: FSMContext) -> None:
+    try:
+        _, _, _, variant_id, token = str(callback.data).split(":", 4)
+    except ValueError:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    data = await state.get_data()
+    if not _style_session_matches(data, token):
+        await callback.answer("Эта настройка уже устарела", show_alert=True)
+        return
+    try:
+        selected = _variant_by_id(_scene_variants_from_state(data), variant_id)
+    except (TypeError, ValueError):
+        await callback.answer("Варианты устарели", show_alert=True)
+        return
+    await callback.answer("Вариант выбран")
+    await _prepare_styled_generation(
+        control._callback_message(callback),
+        state,
+        user_id=int(callback.from_user.id),
+        token=token,
+        scene_variant=selected,
+    )
+
+
+@router.callback_query(F.data.startswith("cpc:sv:add:"))
+async def ask_scene_variant_supplement(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    try:
+        _, _, _, variant_id, token = str(callback.data).split(":", 4)
+    except ValueError:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    data = await state.get_data()
+    if not _style_session_matches(data, token):
+        await callback.answer("Эта настройка уже устарела", show_alert=True)
+        return
+    try:
+        variant = _variant_by_id(_scene_variants_from_state(data), variant_id)
+    except (TypeError, ValueError):
+        await callback.answer("Варианты устарели", show_alert=True)
+        return
+    await state.update_data(creative_scene_selected_variant_id=variant.id)
+    await state.set_state(ClientPlatformCreativeStudioState.waiting_scene_supplement)
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "✍️ Дополнить своим\n\n"
+        f"Вы выбрали: {variant.title}.\n"
+        f"{variant.description}\n\n"
+        "Напишите одним сообщением, что хотите добавить к этой постановке — "
+        "например ракурс, освещение, окружение, настроение или важную визуальную "
+        "деталь. Исходный смысл запроса останется обязательным. До 600 символов.",
+        reply_markup=control._keyboard(
+            [[("⬅️ К вариантам", f"cpc:sv:show:{token}")]]
+        ),
+    )
+
+
+@router.message(ClientPlatformCreativeStudioState.waiting_scene_supplement)
+async def receive_scene_variant_supplement(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = str(data.get("creative_business_token") or "").strip()
+    try:
+        variant_id = str(data["creative_scene_selected_variant_id"])
+        variants = list(_scene_variants_from_state(data))
+        base = _variant_by_id(tuple(variants), variant_id)
+        updated = supplement_scene_variant(base, str(message.text or ""))
+    except (KeyError, TypeError, ValueError):
+        await message.answer(
+            "Дополнение не удалось сохранить. Напишите уточнение одним сообщением "
+            "до 600 символов или вернитесь к вариантам.",
+            reply_markup=(
+                control._keyboard([[("⬅️ К вариантам", f"cpc:sv:show:{token}")]])
+                if token
+                else None
+            ),
+        )
+        return
+
+    variants = [updated if item.id == updated.id else item for item in variants]
+    await state.update_data(
+        creative_scene_variants=[item.to_mapping() for item in variants],
+        creative_scene_selected_variant_id=updated.id,
+    )
+    await state.set_state(ClientPlatformCreativeStudioState.choosing_style)
+    await message.answer(
+        "✅ Вариант дополнен\n\n"
+        f"{updated.title}\n{updated.description}\n\n"
+        "Можно использовать его сейчас, дополнить ещё или вернуться к пяти вариантам.",
+        reply_markup=control._keyboard(
+            [
+                [("✅ Использовать этот вариант", f"cpc:sv:pick:{updated.id}:{token}")],
+                [("✍️ Дополнить своим ещё", f"cpc:sv:add:{updated.id}:{token}")],
+                [("🎬 Все 5 вариантов", f"cpc:sv:show:{token}")],
+            ]
+        ),
+    )
+
+
 @router.callback_query(F.data.startswith("cpc:st:go:"))
 async def confirm_visual_style(callback: CallbackQuery, state: FSMContext) -> None:
     token = str(callback.data).rsplit(":", 1)[-1]
@@ -1245,7 +1416,7 @@ async def confirm_visual_style(callback: CallbackQuery, state: FSMContext) -> No
     if not _style_session_matches(data, token):
         await callback.answer("Эта настройка уже устарела", show_alert=True)
         return
-    await callback.answer()
+    await callback.answer("ClientPlatform выбирает лучший вариант…")
     await _prepare_styled_generation(
         control._callback_message(callback),
         state,
