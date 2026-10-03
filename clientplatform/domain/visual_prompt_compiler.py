@@ -644,6 +644,7 @@ def compile_visual_prompt(
     purpose: str = "owner_visual",
     style_intent: VisualStyleIntent | None = None,
     scene_contract: VisualSceneContract | None = None,
+    scene_direction: str = "",
 ) -> CompiledVisualPrompt:
     owner_request = _clean(
         request,
@@ -667,6 +668,15 @@ def compile_visual_prompt(
         raise ValueError("visual purpose is invalid")
 
     flags = _semantic_flags(owner_request)
+    selected_scene_direction = (
+        _clean(
+            scene_direction,
+            field="scene_direction",
+            limit=1400,
+        )
+        if str(scene_direction or "").strip()
+        else ""
+    )
     resolved_style = resolve_visual_style_intent(
         request=owner_request,
         selected=style_intent,
@@ -693,6 +703,15 @@ def compile_visual_prompt(
         purpose_line,
         f'Owner request, preserve its meaning exactly: "{owner_request}"',
         *_scene_contract_directives(scene_contract),
+        *(
+            [
+                "Selected presentation direction (secondary to the canonical semantic "
+                "contract; never remove or contradict required meaning): "
+                + selected_scene_direction
+            ]
+            if selected_scene_direction
+            else []
+        ),
         "Interpret the request as a scene contract, not as a bag of keywords. Every "
         "explicit subject, action, relationship, state and state change is mandatory "
         "unless it is impossible to depict visually.",
