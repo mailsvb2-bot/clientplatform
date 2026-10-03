@@ -279,6 +279,7 @@ def test_explicit_before_after_labels_are_not_suppressed_by_provider_cue() -> No
     assert "Один герой, три стадии" in adapted.prompt
     assert "Один герой, три стадии без подписей" not in adapted.prompt
     assert "Без читаемого текста" not in adapted.prompt
+    assert "Только запрошенный текст; без других надписей" in adapted.prompt
     assert len(adapted.prompt) <= 500
 
 
@@ -759,6 +760,7 @@ def test_engine_respects_explicit_text_from_compiled_contract(monkeypatch) -> No
     assert "Один герой, три стадии" in prompt
     assert "Один герой, три стадии без подписей" not in prompt
     assert "Без читаемого текста" not in prompt
+    assert "Только запрошенный текст; без других надписей" in prompt
     assert "leave clean negative space" not in prompt
     assert "Названия бренда/услуг не печатать без явного запроса" in prompt
     assert len(prompt) <= 500
