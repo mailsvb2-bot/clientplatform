@@ -3,7 +3,7 @@ from __future__ import annotations
 """Goal-first Brand DNA UX with confirmed website discovery and manual edits."""
 
 import asyncio
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -20,6 +20,7 @@ from clientplatform.application.visual_brand_discovery import (
 )
 from clientplatform.domain.visual_typography import (
     VISUAL_TYPOGRAPHY_LABELS_RU,
+    VISUAL_TYPOGRAPHY_PRESETS,
     normalize_visual_typography_preset,
 )
 from clientplatform.domain.tenancy import TenantPermissionDenied
@@ -41,10 +42,34 @@ def _keyboard(business_token: str):
     return control._keyboard(
         [
             [("🌐 Взять стиль с сайта", f"cpb:site:{business_token}")],
+            [("🔤 Шрифт по умолчанию", f"cpb:font:{business_token}")],
             [("✏️ Изменить вручную", f"cpb:manual:{business_token}")],
             [("🏠 На главную", f"cpj:home:{business_token}")],
         ]
     )
+
+
+def _font_keyboard(business_token: str, current: str):
+    rows: list[list[tuple[str, str]]] = []
+    pairs = (
+        ("auto", "modern"),
+        ("strict", "friendly"),
+        ("premium", "editorial"),
+        ("elegant", "bold_ad"),
+    )
+    for left, right in pairs:
+        row: list[tuple[str, str]] = []
+        for preset in (left, right):
+            marker = "✓ " if preset == current else ""
+            row.append(
+                (
+                    marker + VISUAL_TYPOGRAPHY_LABELS_RU[preset],
+                    f"cpb:fontset:{preset}:{business_token}",
+                )
+            )
+        rows.append(row)
+    rows.append([("⬅️ К фирменному стилю", f"cpb:open:{business_token}")])
+    return control._keyboard(rows)
 
 
 def _proposal_keyboard(business_token: str):
@@ -186,6 +211,62 @@ async def open_visual_brand(callback: CallbackQuery, state: FSMContext) -> None:
         f"{_brand_text(brand)}\n\n"
         "Этот профиль используется при подготовке Creative Studio. Можно безопасно "
         "предложить настройки по публичному сайту или изменить основные поля вручную.",
+        reply_markup=_keyboard(token),
+    )
+
+
+@router.callback_query(F.data.startswith("cpb:font:"))
+async def choose_brand_font(callback: CallbackQuery) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    try:
+        business_id = _business_id(token)
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        brand = await asyncio.to_thread(load_goal_visual_brand, actor=actor)
+    except (TypeError, ValueError, TenantPermissionDenied):
+        await callback.answer("Не удалось открыть выбор шрифта", show_alert=True)
+        return
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "Выберите фирменную типографику по умолчанию. Она будет использоваться "
+        "в новых редактируемых визуалах; в конкретном макете шрифт можно поменять "
+        "отдельно без новой AI-генерации.",
+        reply_markup=_font_keyboard(token, brand.font_preset),
+    )
+
+
+@router.callback_query(F.data.startswith("cpb:fontset:"))
+async def set_brand_font(callback: CallbackQuery) -> None:
+    try:
+        _, _, preset, token = str(callback.data).split(":", 3)
+    except ValueError:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    if preset not in VISUAL_TYPOGRAPHY_PRESETS:
+        await callback.answer("Неизвестный шрифт", show_alert=True)
+        return
+    try:
+        business_id = _business_id(token)
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        current = await asyncio.to_thread(load_goal_visual_brand, actor=actor)
+        saved = await asyncio.to_thread(
+            save_goal_visual_brand,
+            actor=actor,
+            brand=replace(current, font_preset=preset).normalized(),
+        )
+    except TenantPermissionDenied:
+        await callback.answer(
+            "Сохранять фирменный стиль может владелец или администратор",
+            show_alert=True,
+        )
+        return
+    except (TypeError, ValueError):
+        await callback.answer("Не удалось сохранить шрифт", show_alert=True)
+        return
+    await callback.answer("Шрифт сохранён")
+    await control._callback_message(callback).answer(
+        "✅ Фирменный шрифт по умолчанию обновлён. "
+        "Новые редактируемые визуалы возьмут его автоматически.\n\n"
+        f"{_brand_text(saved)}",
         reply_markup=_keyboard(token),
     )
 
