@@ -171,6 +171,7 @@ class VisualSemanticQAContract:
 
     version: int
     kind: str
+    country_code: str
     owner_request: str
     semantic_flags: tuple[str, ...]
 
@@ -178,6 +179,7 @@ class VisualSemanticQAContract:
         return {
             "version": self.version,
             "kind": self.kind,
+            "country_code": self.country_code,
             "owner_request": self.owner_request,
             "semantic_flags": list(self.semantic_flags),
         }
@@ -187,12 +189,19 @@ class VisualSemanticQAContract:
         if not isinstance(value, dict) or set(value) != {
             "version",
             "kind",
+            "country_code",
             "owner_request",
             "semantic_flags",
         }:
             raise ValueError("visual semantic QA contract is invalid")
         version = value.get("version")
         kind = str(value.get("kind") or "").strip().lower()
+        country_code = str(value.get("country_code") or "").strip().upper()
+        if (
+            len(country_code) > 16
+            or any(not (char.isalnum() or char in {"-", "_"}) for char in country_code)
+        ):
+            raise ValueError("visual semantic QA contract is invalid")
         owner_request = _clean(
             str(value.get("owner_request") or ""),
             field="request",
@@ -215,6 +224,7 @@ class VisualSemanticQAContract:
         return cls(
             version=_SEMANTIC_QA_CONTRACT_VERSION,
             kind="image",
+            country_code=country_code,
             owner_request=owner_request,
             semantic_flags=flags,
         )
@@ -275,6 +285,7 @@ def build_visual_semantic_qa_contract(
     *,
     request: str,
     kind: str,
+    country_code: str = "",
 ) -> VisualSemanticQAContract | None:
     """Freeze the same semantic flags used by the prompt compiler for image QA.
 
@@ -296,6 +307,7 @@ def build_visual_semantic_qa_contract(
     return VisualSemanticQAContract(
         version=_SEMANTIC_QA_CONTRACT_VERSION,
         kind="image",
+        country_code=str(country_code or "").strip().upper(),
         owner_request=owner_request,
         semantic_flags=_semantic_flags(owner_request),
     )
