@@ -92,7 +92,7 @@ def test_yandex_adapter_preserves_exact_owner_listening_and_transformation() -> 
     assert "Три фазы одного субъекта" in adapted.prompt
     assert "действие/причина" in adapted.prompt
     assert "не один финальный портрет" in adapted.prompt
-    assert "Финальное состояние визуально отличается" in adapted.prompt
+    assert "становится добрым и пушистым" in adapted.prompt
     assert "Owner request" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
     assert len(adapted.prompt) <= 500
@@ -151,7 +151,8 @@ def test_yandex_adapter_compiles_sink_replacement_as_complete_installation() -> 
     assert "монтаж нового объекта" in adapted.prompt or "до/после" in adapted.prompt
     assert "не одиночный предмет" in adapted.prompt
     assert "физически рабочий" in adapted.prompt
-    assert "органами управления" in adapted.prompt
+    assert "управлением" in adapted.prompt
+    assert "подключениями" in adapted.prompt
     assert "Без читаемого текста" in adapted.prompt
     assert len(adapted.prompt) <= 500
 
@@ -412,6 +413,6 @@ def test_yandex_adapter_prioritizes_owner_request_before_style_and_brand_context
     )
     assert "a prickly hedgehog listens to an audio session and becomes gentle" in adapted.prompt
     assert "Example brand context" not in adapted.prompt
-    assert "не печатай" in adapted.prompt
+    assert "не печатать" in adapted.prompt
     assert len(adapted.prompt) <= 500
     assert "Owner request" not in adapted.prompt
