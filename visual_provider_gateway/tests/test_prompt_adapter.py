@@ -91,6 +91,51 @@ def test_yandex_v11_compiles_scene_contract_before_verbose_prompt() -> None:
     assert "ДО →" not in adapted.prompt
 
 
+def test_yandex_keeps_owner_supplement_before_generic_art_direction() -> None:
+    request = "кошка смотрит на дождь за окном"
+    contract = VisualSceneContract(
+        version=1,
+        topology="action",
+        primary_subject="кошка",
+        initial_state=(),
+        actions=("смотрит",),
+        cause="",
+        transition=(),
+        final_state=(),
+        explicit_text=(),
+        required_evidence=("visible gaze connected to viewed source",),
+        forbidden=("unrelated subject",),
+    )
+    compiled = compile_visual_prompt(
+        request=request,
+        kind="image",
+        scene_contract=contract,
+        scene_direction=(
+            "Stage the immutable meaning cinematically. Owner refinement: "
+            "ночной мягкий свет, камера немного ниже уровня глаз. "
+            "Apply this only where compatible with the canonical semantic contract; "
+            "the contract remains mandatory."
+        ),
+    )
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+        scene_contract=contract.to_mapping(),
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
+
+    assert len(adapted.prompt) <= 500
+    assert "Уточнение пользователя: ночной мягкий свет" in adapted.prompt
+    assert "кинематографичная постановка" in adapted.prompt
+    assert adapted.prompt.index("Уточнение пользователя") < adapted.prompt.index(
+        "кинематографичная постановка"
+    )
+
+
 def test_yandex_scene_contract_is_generic_for_object_replacement() -> None:
     request = "замени старую раковину на новую в той же ванной"
     contract = VisualSceneContract(
