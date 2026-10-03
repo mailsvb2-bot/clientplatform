@@ -197,8 +197,12 @@ class VisualPromptCompilerTests(unittest.TestCase):
         for request in (
             "поменять раковину на новую",
             "сменить кран в ванной",
+            "поменять цветок в вазе",
+            "заменить фонарь на новый",
+            "заменить трубу и сделать фон светлее",
             "replace the sink with a new one",
             "swap the faucet",
+            "replace the car and make the background blue",
         ):
             with self.subTest(request=request):
                 compiled = compile_visual_prompt(request=request, kind="image")
