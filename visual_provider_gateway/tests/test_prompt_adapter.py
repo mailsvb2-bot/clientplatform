@@ -130,6 +130,7 @@ def test_yandex_preserves_owner_authored_three_stage_transformation_in_auto_and_
         adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
         assert len(adapted.prompt) <= 500
+        assert adapted.prompt.startswith("ёж во время прослушивания ресурсного")
         assert "Один герой, три стадии без подписей" in adapted.prompt
         assert "напряжённая поза" in adapted.prompt
         assert "настороженный взгляд" in adapted.prompt
