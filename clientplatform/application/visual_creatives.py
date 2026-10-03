@@ -4,7 +4,11 @@ import json
 from pathlib import Path
 import os
 
-from clientplatform.domain.visual_prompt_compiler import compile_visual_prompt
+from clientplatform.domain.visual_prompt_compiler import (
+    VisualSemanticQAContract,
+    build_visual_semantic_qa_contract,
+    compile_visual_prompt,
+)
 from clientplatform.domain.visual_style_intent import (
     STYLE_SCHEMA_VERSION,
     SUPPORTED_STYLE_SCHEMA_VERSIONS,
@@ -29,8 +33,8 @@ class VisualCreativeError(RuntimeError):
     """Sanitized failure of the shared visual-creative capability."""
 
 
-_BUSINESS_IMAGE_BRIEF_VERSION = 2
-_SUPPORTED_BUSINESS_IMAGE_BRIEF_VERSIONS = frozenset({1, 2})
+_BUSINESS_IMAGE_BRIEF_VERSION = 3
+_SUPPORTED_BUSINESS_IMAGE_BRIEF_VERSIONS = frozenset({1, 2, 3})
 _PROMPT_COMPILER_VERSION = 4
 _SUPPORTED_PROMPT_COMPILER_VERSIONS = frozenset({2, 3, 4})
 _BUSINESS_IMAGE_WAIT_SECONDS = 20
@@ -116,6 +120,10 @@ def freeze_business_visual_payload(
         preferred_provider=preferred_provider,
         style_intent=resolved_style,
     )
+    semantic_qa = build_visual_semantic_qa_contract(
+        request=request,
+        kind=kind,
+    )
     value: dict[str, object] = {
         "version": _BUSINESS_IMAGE_BRIEF_VERSION,
         "brief": _brief_dict(brief),
@@ -125,6 +133,12 @@ def freeze_business_visual_payload(
             "style_schema_version": STYLE_SCHEMA_VERSION,
             "style": resolved_style.to_mapping(),
         },
+        # Version 3 proves that a newly prepared image receipt used the consent
+        # surface that discloses one advisory semantic-QA AI call. Legacy v1/v2
+        # receipts intentionally have no QA contract and remain generation-only.
+        "semantic_qa": (
+            None if semantic_qa is None else semantic_qa.to_mapping()
+        ),
     }
     if binding is not None:
         normalized_binding = {str(key): str(item) for key, item in binding.items()}
@@ -191,13 +205,15 @@ def _load_frozen_business_visual_payload(value: str) -> tuple[VisualCreativeBrie
     if version not in _SUPPORTED_BUSINESS_IMAGE_BRIEF_VERSIONS:
         raise ValueError("unsupported frozen business image payload version")
     expected = {"version", "brief", "wait_seconds"}
-    if version == 2:
+    if version in {2, 3}:
         expected.add("intent")
+    if version == 3:
+        expected.add("semantic_qa")
     if "binding" in raw:
         expected.add("binding")
     if set(raw) != expected:
         raise ValueError("frozen business image payload is invalid")
-    if version == 2:
+    if version in {2, 3}:
         intent = raw.get("intent")
         if not isinstance(intent, dict) or set(intent) != {
             "prompt_compiler_version",
@@ -242,6 +258,15 @@ def _load_frozen_business_visual_payload(value: str) -> tuple[VisualCreativeBrie
     )
     if brief.kind not in {"image", "video"} or not brief.prompt.strip():
         raise ValueError("frozen business visual brief is invalid")
+    if version == 3:
+        raw_qa = raw.get("semantic_qa")
+        if brief.kind == "video":
+            if raw_qa is not None:
+                raise ValueError("frozen business visual semantic QA is invalid")
+        else:
+            contract = VisualSemanticQAContract.from_mapping(raw_qa)
+            if contract.kind != brief.kind:
+                raise ValueError("frozen business visual semantic QA kind mismatch")
     return brief, wait_seconds
 
 
@@ -271,6 +296,21 @@ def frozen_business_visual_style(value: str) -> VisualStyleIntent | None:
     if not isinstance(style, dict):
         raise ValueError("frozen business visual style is invalid")
     return VisualStyleIntent.from_mapping(style)
+
+
+def frozen_business_visual_semantic_qa(
+    value: str,
+) -> VisualSemanticQAContract | None:
+    """Return immutable QA consent/meaning contract for new image receipts only."""
+
+    _load_frozen_business_visual_payload(value)
+    raw = json.loads(str(value or ""))
+    if int(raw.get("version") or 0) < 3:
+        return None
+    semantic_qa = raw.get("semantic_qa")
+    if semantic_qa is None:
+        return None
+    return VisualSemanticQAContract.from_mapping(semantic_qa)
 
 
 def frozen_business_visual_binding(value: str) -> dict[str, str] | None:
