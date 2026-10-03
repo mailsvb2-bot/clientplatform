@@ -129,6 +129,16 @@ def test_editable_project_reentry_and_expiry_preserve_copy_without_paid_reset() 
             headline="Новый заголовок",
         )
         assert edited.revision == 2
+        typed = repo.update_composition(
+            actor=actor,
+            project_id=project.id,
+            font_preset="premium",
+        )
+        assert typed.font_preset == "premium"
+        assert typed.source_job_id == "visual-job-1"
+        assert typed.status == EditableAdProjectStatus.SOURCE_READY
+        assert typed.revision == 3
+
         finished = repo.finish(actor=actor, project_id=project.id)
         assert finished.status == EditableAdProjectStatus.FINISHED
 
