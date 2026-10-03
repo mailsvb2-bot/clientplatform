@@ -74,6 +74,7 @@ def _brand(business_id: str, *, display_name: str = "North Star") -> TenantBrand
         primary_color="#112233",
         accent_color="#DDAA44",
         text_color="#FFFFFF",
+        font_preset="modern",
     ).normalized()
 
 
@@ -104,6 +105,7 @@ def test_brand_helpers_preserve_safety_and_parse_manual_changes() -> None:
     assert "human, trustworthy" in text
     assert "editorial, calm" in text
     assert "#112233" in text
+    assert "Современный" in text
 
     changed = visual_brand._manual_brand(
         current,
@@ -113,6 +115,7 @@ def test_brand_helpers_preserve_safety_and_parse_manual_changes() -> None:
         "Акцентный цвет: #AABBCC\n"
         "Цвет текста: #F1F2F3\n"
         "Визуальный стиль: modern; warm, human\n"
+        "Шрифт: премиальный\n"
         "Неизвестно: ничего",
     )
     assert changed.display_name == "New Practice"
@@ -120,6 +123,7 @@ def test_brand_helpers_preserve_safety_and_parse_manual_changes() -> None:
     assert changed.accent_color == "#AABBCC"
     assert changed.text_color == "#F1F2F3"
     assert changed.visual_keywords == ("modern", "warm", "human")
+    assert changed.font_preset == "premium"
     assert changed.tone == current.tone
     assert changed.forbidden_visuals == current.forbidden_visuals
 
@@ -144,6 +148,7 @@ def test_brand_from_state_requires_proposal_and_normalizes_it() -> None:
                 "primary_color": source.primary_color,
                 "accent_color": source.accent_color,
                 "text_color": source.text_color,
+                "font_preset": source.font_preset,
             }
         },
         business_id,
