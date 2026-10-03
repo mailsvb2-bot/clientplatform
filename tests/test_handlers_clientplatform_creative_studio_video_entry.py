@@ -622,6 +622,136 @@ def test_image_delivery_reports_semantic_qa_warning_without_regeneration(
     assert "Новую генерацию я не запускала" in warning
 
 
+def test_image_delivery_keeps_success_when_semantic_warning_send_fails(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    asset = tmp_path / "creative.jpg"
+    asset.write_bytes(b"jpeg")
+
+    class FakeTelegramAPIError(Exception):
+        pass
+
+    async def answer_side_effect(message, *args, **kwargs):
+        del args, kwargs
+        if "Автопроверка смысла" in str(message):
+            raise FakeTelegramAPIError("warning delivery failed")
+        return None
+
+    target = SimpleNamespace(
+        answer=AsyncMock(side_effect=answer_side_effect),
+        answer_photo=AsyncMock(),
+        answer_video=AsyncMock(),
+        answer_document=AsyncMock(),
+    )
+    callback = SimpleNamespace(from_user=SimpleNamespace(id=101))
+    actor = SimpleNamespace(business_id="business-id")
+    receipt = SimpleNamespace(
+        id="receipt-id",
+        request_text="ёж слушает аудио и становится добрым",
+        provider_payload_json="frozen-v3",
+        source_job_id="job-123",
+        delivery_claimed_at=None,
+    )
+    job = SimpleNamespace(
+        id="job-123",
+        status="succeeded",
+        asset_ready=True,
+        kind="image",
+        provider="yandexart",
+        mime_type="image/jpeg",
+    )
+
+    async def immediate_to_thread(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(studio.asyncio, "to_thread", immediate_to_thread)
+    monkeypatch.setattr(studio.control, "_callback_message", lambda _callback: target)
+    monkeypatch.setattr(studio.control, "_uuid_token", lambda _value: "business-token")
+    monkeypatch.setattr(studio, "TelegramAPIError", FakeTelegramAPIError)
+    monkeypatch.setattr(studio, "materialize_ad_visual", lambda *_args, **_kwargs: asset)
+    monkeypatch.setattr(studio, "claim_creative_generation_delivery", lambda **_kwargs: True)
+    monkeypatch.setattr(studio, "mark_creative_generation_delivered", lambda **_kwargs: None)
+    monkeypatch.setattr(studio, "frozen_business_visual_binding", lambda _payload: None)
+    monkeypatch.setattr(
+        studio,
+        "review_business_image_semantics_from_frozen_payload",
+        lambda **_kwargs: SimpleNamespace(
+            status="needs_review",
+            issues=("не видно трансформации",),
+        ),
+    )
+
+    result = asyncio.run(
+        studio._finish_visual(
+            callback,
+            actor=actor,
+            receipt=receipt,
+            job=job,
+        )
+    )
+
+    assert result is True
+    target.answer_photo.assert_awaited_once()
+    assert any(
+        "Можно сохранить результат" in str(call.args[0])
+        for call in target.answer.await_args_list
+    )
+
+
+def test_image_delivery_recovers_from_local_materialization_oserror(
+    monkeypatch,
+) -> None:
+    target = SimpleNamespace(
+        answer=AsyncMock(),
+        answer_photo=AsyncMock(),
+        answer_video=AsyncMock(),
+        answer_document=AsyncMock(),
+    )
+    callback = SimpleNamespace(from_user=SimpleNamespace(id=101))
+    actor = SimpleNamespace(business_id="business-id")
+    receipt = SimpleNamespace(
+        id="receipt-id",
+        request_text="Замена раковины",
+        provider_payload_json="frozen-v3",
+        source_job_id="job-123",
+        delivery_claimed_at=None,
+    )
+    job = SimpleNamespace(
+        id="job-123",
+        status="succeeded",
+        asset_ready=True,
+        kind="image",
+        provider="yandexart",
+        mime_type="image/jpeg",
+    )
+
+    async def immediate_to_thread(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(studio.asyncio, "to_thread", immediate_to_thread)
+    monkeypatch.setattr(studio.control, "_callback_message", lambda _callback: target)
+    monkeypatch.setattr(studio.control, "_uuid_token", lambda _value: "business-token")
+    monkeypatch.setattr(
+        studio,
+        "materialize_ad_visual",
+        Mock(side_effect=OSError("transient file unavailable")),
+    )
+
+    result = asyncio.run(
+        studio._finish_visual(
+            callback,
+            actor=actor,
+            receipt=receipt,
+            job=job,
+        )
+    )
+
+    assert result is True
+    target.answer_photo.assert_not_awaited()
+    assert "файл сейчас не удалось получить" in target.answer.await_args.args[0]
+
+
 def test_semantic_qa_warning_is_silent_for_pass_and_unavailable() -> None:
     assert studio._semantic_qa_warning(
         SimpleNamespace(status="pass", issues=())
