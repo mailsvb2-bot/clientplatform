@@ -47,7 +47,7 @@ def _json_object(raw: str) -> dict[str, Any] | None:
     text = str(raw or "").strip()
     if text.startswith("'''"):
         return None
-    if text.startswith("\`\`\`"):
+    if text.startswith("```"):
         text = re.sub(r"^\`\`\`(?:json)?\s*", "", text, flags=re.IGNORECASE)
         text = re.sub(r"\s*\`\`\`$", "", text)
     try:
