@@ -95,6 +95,59 @@ def test_yandex_adapter_expands_resource_audio_transformation_into_visual_stages
     assert "mandatory" not in adapted.prompt.casefold()
     assert len(adapted.prompt) <= 500
 
+def test_yandex_preserves_owner_authored_three_stage_transformation_in_auto_and_artistic_modes() -> None:
+    request = (
+        "ёж во время прослушивания ресурсного аудио постепенно меняется: "
+        "сначала он напряжённый, настороженный и очень колючий; "
+        "затем, продолжая слушать в заметных наушниках, его выражение становится "
+        "спокойнее, поза расслабляется, иголки постепенно смягчаются; "
+        "в финальной стадии это тот же узнаваемый ёж, но уже доброжелательный, "
+        "расслабленный и заметно пушистый. Трансформация должна визуально читаться "
+        "слева направо как непрерывное изменение одного персонажа, а не три разных ежа."
+    )
+    styles = (
+        None,
+        VisualStyleIntent(
+            quick_styles="warm_friendly,premium,illustrative",
+        ),
+    )
+
+    for style in styles:
+        compiled = compile_visual_prompt(
+            request=request,
+            kind="image",
+            style_intent=style,
+        )
+        brief = CreativeBrief(
+            kind="image",
+            prompt=compiled.prompt,
+            country_code="RU",
+            aspect_ratio="4:5",
+            negative_prompt=compiled.negative_prompt,
+        )
+
+        adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
+
+        assert len(adapted.prompt) <= 500
+        assert "Один герой, три стадии без подписей" in adapted.prompt
+        assert "напряжённая поза" in adapted.prompt
+        assert "настороженный взгляд" in adapted.prompt
+        assert "жёсткие колючие иглы" in adapted.prompt
+        assert "слушает аудио в заметных наушниках" in adapted.prompt
+        assert "спокойный взгляд" in adapted.prompt
+        assert "иглы/фактура смягчаются" in adapted.prompt
+        assert "доброжелательный взгляд" in adapted.prompt
+        assert "густой пушистый мех" in adapted.prompt
+        assert "ДО →" not in adapted.prompt
+        assert "ДЕЙСТВИЕ" not in adapted.prompt
+        assert "ПРИЧИНА" not in adapted.prompt
+
+        if style is not None:
+            assert "тёплый дружелюбный" in adapted.prompt
+            assert "премиальный" in adapted.prompt
+            assert "художественный" in adapted.prompt
+
+
 def test_yandex_stage_prompt_keeps_final_state_and_artistic_style_with_brand_context() -> None:
     request = (
         "ёж, который слушает ресурсные аудио трансы "
