@@ -6,6 +6,7 @@ from clientplatform.application.visual_scene_planning import (
     plan_visual_scene_contract,
 )
 from clientplatform.application.visual_scene_variants import (
+    build_visual_scene_bundle,
     build_visual_scene_variants,
     recommended_scene_variant,
     supplement_scene_variant,
@@ -110,6 +111,78 @@ def test_hallucinated_planner_output_falls_back_to_deterministic_contract() -> N
     assert source == "deterministic"
     assert contract.topology == "action"
     assert "золотой робот" not in contract.primary_subject
+
+
+def test_one_call_bundle_returns_grounded_contract_and_five_variants() -> None:
+    request = "ёж, который слушает ресурсное аудио и становится добрым и пушистым"
+    flags = semantic_flags_for_request(request)
+    client = FakeAI(
+        {
+            "scene_contract": {
+                "topology": "transformation",
+                "primary_subject": "ёж",
+                "initial_state": [],
+                "actions": ["слушает ресурсное аудио"],
+                "cause": "слушает ресурсное аудио",
+                "transition": ["становится"],
+                "final_state": ["добрым", "пушистым"],
+                "explicit_text": [],
+            },
+            "variants": [
+                {
+                    "title": "Прямой сюжет",
+                    "description": "Смысл читается сразу.",
+                    "direction": "Prioritize immediate semantic readability in one glance.",
+                    "composition": "clear_story",
+                },
+                {
+                    "title": "Кино",
+                    "description": "Атмосферный сюжетный кадр.",
+                    "direction": "Stage the immutable meaning cinematically.",
+                    "composition": "cinematic",
+                },
+                {
+                    "title": "Редакционно",
+                    "description": "Чистая визуальная иерархия.",
+                    "direction": "Use a polished editorial composition.",
+                    "composition": "editorial",
+                },
+                {
+                    "title": "Фокус",
+                    "description": "Минимум лишнего вокруг главного.",
+                    "direction": "Keep the scene focused and uncluttered.",
+                    "composition": "focused",
+                },
+                {
+                    "title": "История по этапам",
+                    "description": "Переход читается слева направо.",
+                    "direction": "Use a clean left-to-right narrative progression.",
+                    "composition": "sequential",
+                },
+            ],
+        }
+    )
+
+    contract, source, variants = build_visual_scene_bundle(
+        request=request,
+        semantic_flags=flags,
+        style_intent=VisualStyleIntent(),
+        client=client,
+    )
+
+    assert client.calls == 1
+    assert source == "ai"
+    assert contract.primary_subject == "ёж"
+    assert contract.actions == ("слушает ресурсное аудио",)
+    assert contract.final_state == ("добрым", "пушистым")
+    assert len(variants) == 5
+    assert {item.composition for item in variants} == {
+        "clear_story",
+        "cinematic",
+        "editorial",
+        "focused",
+        "sequential",
+    }
 
 
 def test_hybrid_director_returns_five_distinct_options_in_one_ai_call() -> None:
