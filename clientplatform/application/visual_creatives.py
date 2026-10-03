@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 import os
 
-from clientplatform.application.visual_scene_planning import plan_visual_scene_contract
 from clientplatform.application.visual_scene_variants import VisualSceneVariant
 from clientplatform.domain.visual_prompt_compiler import (
     VisualSemanticQAContract,
@@ -12,7 +11,10 @@ from clientplatform.domain.visual_prompt_compiler import (
     compile_visual_prompt,
     semantic_flags_for_request,
 )
-from clientplatform.domain.visual_scene_contract import VisualSceneContract
+from clientplatform.domain.visual_scene_contract import (
+    VisualSceneContract,
+    fallback_scene_contract,
+)
 from clientplatform.domain.visual_style_intent import (
     STYLE_SCHEMA_VERSION,
     SUPPORTED_STYLE_SCHEMA_VERSIONS,
@@ -126,10 +128,11 @@ def freeze_business_visual_payload(
     owner_request = normalize_business_image_request(request)
     semantic_flags = semantic_flags_for_request(owner_request)
     if scene_contract is None:
-        scene_contract, planner_source = plan_visual_scene_contract(
+        scene_contract = fallback_scene_contract(
             request=owner_request,
             semantic_flags=semantic_flags,
         )
+        planner_source = "deterministic"
     else:
         planner_source = str(scene_planner_source or "deterministic").strip().lower()
         if planner_source not in {"ai", "deterministic"}:
