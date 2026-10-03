@@ -16,7 +16,7 @@ VISUAL_TYPOGRAPHY_PRESETS = (
 VISUAL_TYPOGRAPHY_LABELS_RU = {
     "auto": "Автоматически",
     "modern": "Современный · Lato",
-    "strict": "Стогий · Liberation Sans",
+    "strict": "Строгий · Liberation Sans",
     "friendly": "Дружелюбный · DejaVu Sans",
     "premium": "Премиальный · Noto Serif + Sans",
     "editorial": "Редакционный · Noto Serif",
