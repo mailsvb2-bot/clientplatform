@@ -12,7 +12,13 @@ import json
 import os
 from typing import Any
 
-from clientplatform.domain.visual_scene_contract import VisualSceneContract
+from clientplatform.application.visual_scene_planning import (
+    grounded_scene_contract_from_mapping,
+)
+from clientplatform.domain.visual_scene_contract import (
+    VisualSceneContract,
+    fallback_scene_contract,
+)
 from clientplatform.domain.visual_style_intent import VisualStyleIntent
 from services.ai.client import OpenAIClient
 
@@ -211,19 +217,12 @@ def _fallback_variants(
     return tuple(variants)
 
 
-def _parse_ai_variants(
-    raw: str,
+def _parse_variant_items(
+    items: object,
     *,
     contract: VisualSceneContract,
     style: VisualStyleIntent,
 ) -> tuple[VisualSceneVariant, ...] | None:
-    try:
-        value: Any = json.loads(str(raw or "").strip())
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(value, dict) or set(value) != {"variants"}:
-        return None
-    items = value.get("variants")
     if not isinstance(items, list) or len(items) != _VARIANT_COUNT:
         return None
 
@@ -267,6 +266,118 @@ def _parse_ai_variants(
             )
         )
     return tuple(variants)
+
+
+def _parse_ai_variants(
+    raw: str,
+    *,
+    contract: VisualSceneContract,
+    style: VisualStyleIntent,
+) -> tuple[VisualSceneVariant, ...] | None:
+    try:
+        value: Any = json.loads(str(raw or "").strip())
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(value, dict) or set(value) != {"variants"}:
+        return None
+    return _parse_variant_items(
+        value.get("variants"),
+        contract=contract,
+        style=style,
+    )
+
+
+def build_visual_scene_bundle(
+    *,
+    request: str,
+    semantic_flags: tuple[str, ...],
+    style_intent: VisualStyleIntent,
+    client: OpenAIClient | None = None,
+) -> tuple[VisualSceneContract, str, tuple[VisualSceneVariant, ...]]:
+    """Build grounded semantics plus five directions with at most one AI call."""
+
+    owner_request = " ".join(str(request or "").replace("\x00", " ").split()).strip()
+    fallback_contract = fallback_scene_contract(
+        request=owner_request,
+        semantic_flags=semantic_flags,
+    )
+    fallback_variants = _fallback_variants(
+        contract=fallback_contract,
+        style=style_intent,
+    )
+    enabled = (
+        str(os.getenv("VISUAL_SCENE_PLANNER_ENABLED", "1")).strip().lower()
+        in {"1", "true", "yes", "on"}
+        and str(os.getenv("VISUAL_SCENE_VARIANTS_ENABLED", "1")).strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+    if not enabled:
+        return fallback_contract, "deterministic", fallback_variants
+
+    selected = client or OpenAIClient.from_settings()
+    if selected is None:
+        return fallback_contract, "deterministic", fallback_variants
+
+    system = (
+        "You are ClientPlatform's visual scene director. Return one JSON object with "
+        "exactly two keys: scene_contract and variants. scene_contract has keys "
+        "topology, primary_subject, initial_state, actions, cause, transition, "
+        "final_state, explicit_text. Every textual value inside scene_contract except "
+        "topology MUST be copied verbatim as an exact contiguous span from the owner "
+        "request; use empty string/list when absent. Never add synonyms or facts. "
+        "topology is one of static, action, transformation, sequence, comparison, "
+        "replacement. variants is exactly five presentation directions for that SAME "
+        "meaning. Each variant has title, description, direction, composition. "
+        "composition must use each value exactly once: clear_story, cinematic, "
+        "editorial, focused, sequential. Variants may change only composition, camera, "
+        "lighting, staging, atmosphere and rhythm; they must not remove, replace or "
+        "contradict any semantic element. title/description are concise Russian text "
+        "for the owner; direction is concise English art direction. Do not request "
+        "visible internal labels such as BEFORE, AFTER or ACTION."
+    )
+    raw = selected.chat(
+        [
+            {"role": "system", "content": system},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "owner_request": owner_request[:1500],
+                        "semantic_flags": list(semantic_flags),
+                        "style": style_intent.to_mapping(),
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            },
+        ],
+        temperature=0.35,
+        max_tokens=2200,
+    )
+    try:
+        value: Any = json.loads(str(raw or "").strip())
+    except json.JSONDecodeError:
+        return fallback_contract, "deterministic", fallback_variants
+    if not isinstance(value, dict) or set(value) != {"scene_contract", "variants"}:
+        return fallback_contract, "deterministic", fallback_variants
+    raw_contract = value.get("scene_contract")
+    if not isinstance(raw_contract, dict):
+        return fallback_contract, "deterministic", fallback_variants
+    contract = grounded_scene_contract_from_mapping(
+        owner_request=owner_request,
+        semantic_flags=semantic_flags,
+        value=raw_contract,
+    )
+    if contract is None:
+        return fallback_contract, "deterministic", fallback_variants
+    variants = _parse_variant_items(
+        value.get("variants"),
+        contract=contract,
+        style=style_intent,
+    )
+    if variants is None:
+        return fallback_contract, "deterministic", fallback_variants
+    return contract, "ai", variants
 
 
 def build_visual_scene_variants(
@@ -364,6 +475,7 @@ def supplement_scene_variant(
 
 __all__ = [
     "VisualSceneVariant",
+    "build_visual_scene_bundle",
     "build_visual_scene_variants",
     "recommended_scene_variant",
     "supplement_scene_variant",
