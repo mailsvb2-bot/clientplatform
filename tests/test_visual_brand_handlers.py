@@ -173,7 +173,57 @@ def test_open_visual_brand_shows_current_profile(monkeypatch) -> None:
     assert "North Star" in target.answers[0][0]
     markup = target.answers[0][1]["reply_markup"]
     callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
-    assert callbacks == ["cpb:site:token", "cpb:manual:token", "cpj:home:token"]
+    assert callbacks == [
+        "cpb:site:token",
+        "cpb:font:token",
+        "cpb:manual:token",
+        "cpj:home:token",
+    ]
+    assert actor is not None
+
+
+def test_brand_font_picker_saves_default_without_changing_other_brand_fields(monkeypatch) -> None:
+    business_id = str(uuid4())
+    actor = _install_actor(monkeypatch, business_id)
+    target = _install_callback_message(monkeypatch)
+    current = _brand(business_id)
+    saved_calls: list[TenantBrandDNA] = []
+
+    monkeypatch.setattr(visual_brand, "_business_id", lambda _token: business_id)
+    monkeypatch.setattr(
+        visual_brand,
+        "load_goal_visual_brand",
+        lambda *, actor: current,
+    )
+
+    choose = _Callback("cpb:font:token")
+    _run(visual_brand.choose_brand_font(choose))
+
+    markup = target.answers[-1][1]["reply_markup"]
+    labels = [
+        button.text
+        for row in markup.inline_keyboard
+        for button in row
+    ]
+    assert any("Современный" in label and label.startswith("✓ ") for label in labels)
+    assert any("Премиальный" in label for label in labels)
+
+    def save(*, actor, brand):
+        saved_calls.append(brand)
+        return brand
+
+    monkeypatch.setattr(visual_brand, "save_goal_visual_brand", save)
+    selected = _Callback("cpb:fontset:premium:token")
+    _run(visual_brand.set_brand_font(selected))
+
+    assert selected.answers == [("Шрифт сохранён", False)]
+    assert len(saved_calls) == 1
+    saved = saved_calls[0]
+    assert saved.font_preset == "premium"
+    assert saved.display_name == current.display_name
+    assert saved.tone == current.tone
+    assert saved.visual_keywords == current.visual_keywords
+    assert saved.forbidden_visuals == current.forbidden_visuals
     assert actor is not None
 
 
