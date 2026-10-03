@@ -385,8 +385,9 @@ def _transformation_directives(kind: str, flags: tuple[str, ...]) -> list[str]:
         "concrete cause/action plus the first visible signs of change. The final stage "
         "shows every requested changed quality through concrete expression, posture, "
         "texture, material condition or grooming. Stage names are prompt structure "
-        "only: never render BEFORE/AFTER words, panel labels, arrows, numbers or "
-        "captions inside the image.",
+        "only. Do not render BEFORE/AFTER words, panel labels, arrows, numbers or "
+        "captions unless the owner explicitly requested those exact elements as "
+        "visible text.",
     ]
 
 
@@ -746,9 +747,10 @@ def compile_visual_prompt(
                 "before and after shown as unrelated characters",
                 "unchanged final state",
                 "state change conveyed only by text or a generic symbol",
-                "storyboard stage labels, arrows, numbers or captions",
             ]
         )
+        if not explicit_text:
+            negatives.append("storyboard stage labels, arrows, numbers or captions")
     if "visible_state" in flags:
         negatives.extend(
             [
