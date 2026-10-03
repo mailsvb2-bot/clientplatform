@@ -11,6 +11,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from PIL import Image
 
+from clientplatform.domain.visual_typography import VISUAL_TYPOGRAPHY_PRESETS
 from visual_gateway.server import (
     FONT_PRESETS,
     FORMATS,
@@ -421,6 +422,10 @@ async def test_render_pack_exact_assets_digest_scope_and_idempotency(gateway, up
         f"/v1/creative/render-packs/{pack_id}?scope_id=tenant-b", headers=auth()
     )
     assert cross_scope.status == 404
+
+
+def test_visual_gateway_typography_presets_match_clientplatform_contract():
+    assert tuple(FONT_PRESETS) == tuple(VISUAL_TYPOGRAPHY_PRESETS)
 
 
 def test_typography_preset_contract_and_auto_resolution_are_deterministic():
