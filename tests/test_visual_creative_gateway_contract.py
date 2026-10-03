@@ -343,6 +343,7 @@ def test_semantic_qa_client_posts_exact_scope_and_contract(
     contract = {
         "version": 1,
         "kind": "image",
+        "country_code": "RU",
         "owner_request": "Замена раковины",
         "semantic_flags": ["object_replacement"],
     }
