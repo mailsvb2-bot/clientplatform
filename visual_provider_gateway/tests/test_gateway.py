@@ -225,6 +225,60 @@ def test_semantic_qa_is_claimed_once_and_reused_across_retries(
         )
 
 
+def test_semantic_qa_obeys_operator_provider_policy_before_any_egress(
+    tmp_path,
+    monkeypatch,
+):
+    output = tmp_path / "out"
+    output.mkdir()
+    asset = output / "image-ready.png"
+    asset.write_bytes(b"\x89PNG\r\n\x1a\nsemantic")
+    monkeypatch.setenv("VISUAL_CREATIVE_OUTPUT_DIR", str(output))
+    monkeypatch.setenv("VISUAL_SEMANTIC_QA_ENABLED", "1")
+    monkeypatch.setenv("VISUAL_IMAGE_PROVIDER", "openai")
+
+    store = JobStore(str(tmp_path / "jobs.sqlite3"))
+    reserved, _ = store.reserve(
+        client_id="client-a",
+        scope_id="business-a",
+        idempotency_key="request-semantic-qa-policy-1",
+        request_fingerprint="c" * 64,
+        kind="image",
+    )
+    store.update(
+        reserved.id,
+        client_id="client-a",
+        scope_id="business-a",
+        provider="openai",
+        kind="image",
+        status="succeeded",
+        mime_type="image/png",
+        asset_path=str(asset),
+    )
+    svc = VisualGatewayService(store=store, engine=FakeEngine(asset))
+    contract = {
+        "version": 1,
+        "kind": "image",
+        "country_code": "RU",
+        "owner_request": "Замена раковины",
+        "semantic_flags": ["object_replacement"],
+    }
+
+    monkeypatch.setattr(
+        "visual_provider_gateway.service.build_provider",
+        lambda _name: pytest.fail("provider policy must block QA egress"),
+    )
+
+    result = svc.semantic_qa(
+        reserved.id,
+        client_id="client-a",
+        scope_id="business-a",
+        contract=contract,
+    )
+
+    assert result == {"status": "unavailable", "issues": [], "summary": ""}
+
+
 def test_semantic_qa_running_claim_never_repeats_external_review(
     tmp_path,
     monkeypatch,
