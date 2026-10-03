@@ -159,8 +159,11 @@ class VisualPromptCompilerTests(unittest.TestCase):
         )
 
         self.assertIn("object_replacement", compiled.semantic_flags)
-        self.assertIn("constrained scene-editing intent", compiled.prompt)
+        self.assertIn("constrained replacement event", compiled.prompt)
         self.assertIn("replace only the requested object", compiled.prompt)
+        self.assertIn("installation action", compiled.prompt)
+        self.assertIn("before/after", compiled.prompt)
+        self.assertIn("do not show only a finished isolated object", compiled.prompt)
         self.assertIn("complete, installed and physically usable", compiled.prompt)
         self.assertIn("essential controls", compiled.prompt)
         self.assertIn(
