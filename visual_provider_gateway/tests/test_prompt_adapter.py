@@ -655,7 +655,7 @@ def test_engine_applies_adapter_only_after_provider_selection(monkeypatch) -> No
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 9
+    assert result.provider_payload["prompt_adapter_version"] == 10
     assert "Owner request" not in captured["brief"].prompt
     assert "hedgehog listens to an audio session" in captured["brief"].prompt
 
@@ -775,7 +775,7 @@ def test_engine_applies_meaning_adapter_to_gigachat_fallback(monkeypatch) -> Non
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 9
+    assert result.provider_payload["prompt_adapter_version"] == 10
     prompt = captured["brief"].prompt
     assert prompt.startswith(
         "Сториборд в одном изображении: один и тот же герой повторён как "
