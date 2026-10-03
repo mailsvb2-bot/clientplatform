@@ -464,7 +464,8 @@ def test_gigachat_adapter_does_not_leak_raw_business_context_into_pixels() -> No
     assert "Business grounding" not in adapted.prompt
     assert "Brand name:" not in adapted.prompt
     assert brand_name not in adapted.prompt
-    assert "Названия бренда, услуг и методов не печатать в кадре." in adapted.prompt
+    assert "Названия бренда, услуг и методов не печатать в кадре" in adapted.prompt
+    assert "явно попросил показать" in adapted.prompt
     assert "Без читаемого текста" in adapted.prompt
     assert len(adapted.prompt) <= 1800
 
@@ -619,6 +620,99 @@ def test_engine_applies_adapter_only_after_provider_selection(monkeypatch) -> No
     assert result.provider_payload["prompt_adapter_version"] == 9
     assert "Owner request" not in captured["brief"].prompt
     assert "hedgehog listens to an audio session" in captured["brief"].prompt
+
+
+def test_engine_respects_explicit_text_from_compiled_contract(monkeypatch) -> None:
+    captured = {}
+    request = (
+        'злой ёж становится добрым, коллаж до/после, '
+        'подпись слева «ДО», справа «ПОСЛЕ»'
+    )
+    compiled = compile_visual_prompt(
+        request=request,
+        kind="image",
+        brand_context="Example Wellness: guided resource audio.",
+    )
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+        brand_context="Example Wellness: guided resource audio.",
+    )
+
+    class FakeProvider:
+        def configured(self, kind):
+            return kind == "image"
+
+        def submit(self, provider_brief):
+            captured["brief"] = provider_brief
+            return CreativeJob(
+                provider="yandexart",
+                kind="image",
+                status="succeeded",
+                external_id="job-explicit-text",
+            )
+
+    monkeypatch.setattr(engine, "provider_order", lambda *_args, **_kwargs: ("yandexart",))
+    monkeypatch.setattr(engine, "build_provider", lambda _name: FakeProvider())
+
+    result = engine.VisualCreativeEngine(enabled=True).submit(brief)
+
+    assert result.status == "succeeded"
+    prompt = captured["brief"].prompt
+    assert prompt.startswith(request)
+    assert "Три сцены, один и тот же субъект" in prompt
+    assert "Три сцены без подписей" not in prompt
+    assert "Без читаемого текста" not in prompt
+    assert "leave clean negative space" not in prompt
+    assert "Названия бренда, услуг и методов не печатать в кадре" in prompt
+    assert len(prompt) <= 500
+
+
+def test_engine_does_not_reappend_raw_brand_direction_to_compiled_prompt(monkeypatch) -> None:
+    captured = {}
+    brand_context = "Example Wellness: guided resource audio."
+    compiled = compile_visual_prompt(
+        request="уютная иллюстрация ежа в наушниках",
+        kind="image",
+        brand_context=brand_context,
+    )
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="DE",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+        brand_context=brand_context,
+    )
+
+    class FakeProvider:
+        def configured(self, kind):
+            return kind == "image"
+
+        def submit(self, provider_brief):
+            captured["brief"] = provider_brief
+            return CreativeJob(
+                provider="openai",
+                kind="image",
+                status="succeeded",
+                external_id="job-openai-compiled",
+            )
+
+    monkeypatch.setattr(engine, "provider_order", lambda *_args, **_kwargs: ("openai",))
+    monkeypatch.setattr(engine, "build_provider", lambda _name: FakeProvider())
+
+    result = engine.VisualCreativeEngine(enabled=True).submit(brief)
+
+    assert result.status == "succeeded"
+    prompt = captured["brief"].prompt
+    assert "Brand direction:" not in prompt
+    assert "Names from business grounding are semantic context only" in prompt
+    assert "Production constraints:" in prompt
+    assert "No readable text, letters, captions or UI in the generated pixels." in prompt
+    assert "leave clean negative space" not in prompt
 
 
 def test_engine_applies_meaning_adapter_to_gigachat_fallback(monkeypatch) -> None:
