@@ -13,7 +13,7 @@ import re
 from .models import CreativeBrief
 
 
-PROMPT_ADAPTER_VERSION = 5
+PROMPT_ADAPTER_VERSION = 6
 
 _RUNWAY_PROMPT_LIMIT = 1000
 _YANDEX_PROMPT_LIMIT = 500
@@ -130,6 +130,11 @@ def _natural_safety_parts(brief: CreativeBrief) -> tuple[str, ...]:
         or "readable advertising text baked into image" in folded_negative
     ):
         parts.append("Без читаемого текста и UI.")
+    if (
+        str(brief.brand_context or "").strip()
+        and "readable text is explicitly part" not in folded_prompt
+    ):
+        parts.append("Названия бренда, услуг и методов не печатать в кадре.")
 
     return tuple(parts)
 
@@ -293,6 +298,14 @@ def _compiled_semantic_visual_cues(
         cues.append("Явно видно само действие еды или питья и его источник.")
     if has("if the request contains another action"):
         cues.append("Запрошенное действие явно видно в кадре, это не статичный портрет.")
+    if has("treat object replacement as a constrained") or has(
+        "object replacement is the core event"
+    ):
+        cues.append(
+            "Смысл замены виден: монтаж нового объекта или ясное до/после в том же "
+            "окружении, не одиночный предмет. Результат установлен и физически рабочий "
+            "со всеми нужными креплениями, управлением и подключениями."
+        )
 
     if has("the transformation is mandatory") or has(
         "the transformation is a mandatory"
@@ -304,14 +317,16 @@ def _compiled_semantic_visual_cues(
             )
         else:
             cues.append(
-                "Тот же герой: видны исходное состояние и результат."
+                "Три фазы одного субъекта: исходное состояние, действие/причина, "
+                "ясный результат; не один финальный портрет."
             )
     elif has("respect the requested chronology") or has("the request contains a sequence"):
         cues.append("Причинно-следственная последовательность действий ясно читается.")
 
     if has("visible-state translation"):
         cues.append(
-            "Эмоции и качества видны по выражению, позе и фактуре."
+            "Финальное состояние визуально отличается по выражению, позе, фактуре "
+            "или материальному состоянию; смысл понятен без подписи."
         )
     if has("autonomous composition default: use a narrative story-scene"):
         cues.append("Сюжетная сцена; запрошенное действие — главный фокус.")
@@ -340,7 +355,10 @@ def _yandex_natural_prompt_parts(brief: CreativeBrief) -> list[str]:
     parts.extend(_natural_safety_parts(brief))
     parts.extend(_compiled_style_directives(lines))
     if str(brief.brand_context or "").strip():
-        parts.append("Контекст бренда: " + " ".join(str(brief.brand_context).split()))
+        parts.append(
+            "Неизвестные названия услуг, методов или брендов — только смысловой "
+            "контекст. Не печатай эти названия в кадре и не превращай их в логотип."
+        )
     return parts
 
 
@@ -357,7 +375,7 @@ def _bounded_yandex_prompt(
     safety = _natural_safety_parts(brief)
     safety_block = _bounded_join(list(safety), limit=_YANDEX_PROMPT_LIMIT)
     style_block = _bounded_join(list(style_cues), limit=120)
-    minimum_scene_head = 80
+    minimum_scene_head = 180
     fixed_reserved = (
         len(safety_block)
         + len(style_block)
@@ -397,14 +415,24 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
         return replace(brief, prompt=prompt)
 
     extras: list[str] = []
-    if str(brief.brand_context or "").strip():
-        extras.append(
-            "Контекст бренда: " + " ".join(str(brief.brand_context).split())
-        )
     semantic_cues = _compiled_semantic_visual_cues(lines, kind=brief.kind)
     style_cues = _compiled_style_cues(lines)
+    folded = tuple(line.casefold() for line in lines)
+    if any(line.startswith("the transformation is mandatory") for line in folded):
+        scene_head = (
+            "Один субъект: до → действие/причина → после. " + owner_request
+        )
+    elif any(
+        line.startswith("treat object replacement as a constrained")
+        for line in folded
+    ):
+        scene_head = (
+            "Покажи именно событие замены, сохрани то же окружение. " + owner_request
+        )
+    else:
+        scene_head = owner_request
     prompt = _bounded_yandex_prompt(
-        scene_head=owner_request,
+        scene_head=scene_head,
         semantic_cues=semantic_cues,
         style_cues=style_cues,
         brief=brief,
@@ -424,9 +452,7 @@ def _adapt_yandex_motion(brief: CreativeBrief) -> CreativeBrief:
         semantic_cues = _compiled_semantic_visual_cues(lines, kind="image")
         style_cues = _compiled_style_cues(lines)
         if str(brief.brand_context or "").strip():
-            extras.append(
-                "Контекст бренда: " + " ".join(str(brief.brand_context).split())
-            )
+            extras.append("Названия бренда, услуг и методов не печатать в кадре.")
     else:
         # Provider-direct/legacy requests are already natural scene descriptions.
         scene = (

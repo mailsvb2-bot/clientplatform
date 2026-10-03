@@ -30,6 +30,13 @@ _TRANSFORMATION_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+_OBJECT_REPLACEMENT_RE = re.compile(
+    r"(?:"
+    r"\bзамен\w*|\bпоменя\w*|\bсмен\w*|"
+    r"\breplac(?:e|es|ed|ing|ement)\b|\bswap(?:s|ped|ping)?\b"
+    r")",
+    re.IGNORECASE,
+)
 _SEQUENCE_RE = re.compile(
     r"(?:сначала|затем|потом|после|вначале|в\s+конце|"
     r"first|then|after|finally|at\s+the\s+end)",
@@ -132,6 +139,7 @@ def _clean(value: str, *, field: str, limit: int) -> str:
 def _semantic_flags(request: str) -> tuple[str, ...]:
     checks = (
         ("transformation", _TRANSFORMATION_RE),
+        ("object_replacement", _OBJECT_REPLACEMENT_RE),
         ("sequence", _SEQUENCE_RE),
         ("listening", _LISTENING_RE),
         ("watching", _WATCHING_RE),
@@ -218,6 +226,34 @@ def _transformation_directives(kind: str, flags: tuple[str, ...]) -> list[str]:
     ]
 
 
+def _replacement_directives(kind: str, flags: tuple[str, ...]) -> list[str]:
+    if "object_replacement" not in flags:
+        return []
+    if kind == "video":
+        return [
+            "Object replacement is the core event. Preserve the surrounding scene and "
+            "show a clear, physically plausible replacement of only the requested "
+            "object. End on the completed usable installation; do not redesign unrelated "
+            "parts of the environment.",
+            "For functional fixtures, appliances or furniture, keep every necessary "
+            "visible component, control, support and connection coherent. Do not show "
+            "an incomplete showroom prop when the request implies an installed result.",
+        ]
+    return [
+        "Treat object replacement as a constrained replacement event, not as a request "
+        "for an unrelated new interior or a catalog shot of the final object. Preserve "
+        "the surrounding environment and replace only the requested object unless the "
+        "owner explicitly asks for broader redesign.",
+        "Make the replacement itself visually legible. If no reference image is "
+        "available downstream, show either the installation action or a clear before/"
+        "after in the same environment; do not show only a finished isolated object.",
+        "Show the replacement as complete, installed and physically usable. For "
+        "functional fixtures, appliances or furniture, include the necessary visible "
+        "controls, supports, mounting and connections and keep geometry, scale, shadows "
+        "and contact with surrounding surfaces believable.",
+    ]
+
+
 def _sequence_directives(kind: str, flags: tuple[str, ...]) -> list[str]:
     if "sequence" not in flags or "transformation" in flags:
         return []
@@ -255,13 +291,20 @@ def _autonomous_scene_directives(
         "holding",
         "eating_or_drinking",
         "generic_action",
+        "object_replacement",
         "sequence",
         "transformation",
     }
     has_action = bool(dynamic_flags.intersection(flags))
 
     if style.composition == "auto":
-        if kind == "image" and "transformation" in flags:
+        if kind == "image" and "object_replacement" in flags:
+            directives.append(
+                "Autonomous composition default: show the requested replacement in its "
+                "real surrounding context as a complete installed result. Keep the "
+                "environment stable so the changed object is immediately identifiable."
+            )
+        elif kind == "image" and "transformation" in flags:
             directives.append(
                 "Autonomous composition default: use a clear before/after, paired, "
                 "or continuous transformation composition that keeps the same subject "
@@ -428,6 +471,7 @@ def compile_visual_prompt(
         "noun. Show visual evidence for the requested verbs and relationships.",
         *_interaction_directives(flags),
         *_transformation_directives(visual_kind, flags),
+        *_replacement_directives(visual_kind, flags),
         *_sequence_directives(visual_kind, flags),
         *_autonomous_scene_directives(
             kind=visual_kind,
@@ -456,6 +500,9 @@ def compile_visual_prompt(
             "Use credible natural details, coherent anatomy, realistic lighting and "
             "a clear visual hierarchy. Keep important subjects fully inside the frame "
             "with comfortable margins and use the whole canvas.",
+            "For real-world functional objects, preserve physical completeness and "
+            "ordinary usability: do not omit essential controls, supports, openings, "
+            "mounting or connections merely for a cleaner-looking composition.",
             "Do not add fake awards, fake reviews, invented statistics, medical or "
             "money guarantees, manipulative urgency, or claims not present in the "
             "owner request or business grounding.",
@@ -472,6 +519,12 @@ def compile_visual_prompt(
             "Do not rely on readable text, labels, logos or captions to explain the "
             "scene. Communicate the idea visually; typography is handled separately."
         )
+        if brand:
+            directives.append(
+                "Names from business grounding are semantic context only. Never render "
+                "those names as signs, labels, logos, captions or decorative lettering "
+                "unless the owner explicitly requested that exact visible text."
+            )
 
     prompt = "\n".join(f"{index + 1}. {item}" for index, item in enumerate(directives))
     if len(prompt) > _MAX_COMPILED_PROMPT_CHARS:
@@ -487,6 +540,7 @@ def compile_visual_prompt(
         "holding",
         "eating_or_drinking",
         "generic_action",
+        "object_replacement",
     }
     has_dynamic_action = bool(dynamic_flags.intersection(flags))
     negatives = [
@@ -508,6 +562,15 @@ def compile_visual_prompt(
         )
         if "portrait" not in flags:
             negatives.append("generic isolated portrait")
+    if "object_replacement" in flags:
+        negatives.extend(
+            [
+                "unrelated room redesign instead of requested replacement",
+                "physically incomplete replacement object",
+                "missing essential functional hardware or controls",
+                "floating or disconnected installed fixture",
+            ]
+        )
     if "transformation" not in flags:
         negatives.append("duplicate main subject by accident")
     if "transformation" in flags:

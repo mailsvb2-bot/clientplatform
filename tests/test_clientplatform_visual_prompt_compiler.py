@@ -135,6 +135,61 @@ class VisualPromptCompilerTests(unittest.TestCase):
             compiled.negative_prompt,
         )
 
+    def test_resource_audio_transformation_preserves_cause_and_visible_result(self) -> None:
+        compiled = compile_visual_prompt(
+            request=(
+                "ёж, который слушает ресурсные аудио трансы "
+                "и становится добрым и пушистым"
+            ),
+            kind="image",
+        )
+
+        self.assertIn("listening", compiled.semantic_flags)
+        self.assertIn("transformation", compiled.semantic_flags)
+        self.assertIn("visible_state", compiled.semantic_flags)
+        self.assertIn("visible audio interaction", compiled.prompt)
+        self.assertIn("both the initial and final states", compiled.prompt)
+        self.assertIn("Never rely on captions", compiled.prompt)
+        self.assertIn("audio interaction missing", compiled.negative_prompt)
+
+    def test_object_replacement_is_a_constrained_physical_scene(self) -> None:
+        compiled = compile_visual_prompt(
+            request="Замена раковины",
+            kind="image",
+        )
+
+        self.assertIn("object_replacement", compiled.semantic_flags)
+        self.assertIn("constrained replacement event", compiled.prompt)
+        self.assertIn("replace only the requested object", compiled.prompt)
+        self.assertIn("installation action", compiled.prompt)
+        self.assertIn("before/after", compiled.prompt)
+        self.assertIn("do not show only a finished isolated object", compiled.prompt)
+        self.assertIn("complete, installed and physically usable", compiled.prompt)
+        self.assertIn("essential controls", compiled.prompt)
+        self.assertIn(
+            "missing essential functional hardware or controls",
+            compiled.negative_prompt,
+        )
+        self.assertIn(
+            "unrelated room redesign instead of requested replacement",
+            compiled.negative_prompt,
+        )
+
+    def test_brand_context_is_explicitly_non_renderable_without_text_request(self) -> None:
+        compiled = compile_visual_prompt(
+            request="уютная сцена прослушивания аудио",
+            kind="image",
+            brand_context="Brand name: Example Audio Method.",
+        )
+
+        self.assertNotIn("explicit_text", compiled.semantic_flags)
+        self.assertIn("semantic context only", compiled.prompt)
+        self.assertIn("Never render those names", compiled.prompt)
+        self.assertIn(
+            "readable advertising text baked into image",
+            compiled.negative_prompt,
+        )
+
     def test_compiler_is_deterministic_for_retry_and_restart(self) -> None:
         kwargs = {
             "request": "мужчина боится стоматолога, после приёма улыбается",
@@ -184,6 +239,7 @@ class VisualPromptCompilerTests(unittest.TestCase):
             country_code="RU",
         )
         payload = json.loads(frozen)
+        self.assertEqual(payload["intent"]["prompt_compiler_version"], 4)
         provider_prompt = payload["brief"]["prompt"]
         provider_negative = payload["brief"]["negative_prompt"]
 
