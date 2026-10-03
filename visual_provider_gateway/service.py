@@ -225,15 +225,6 @@ class VisualGatewayService:
         return {"status": status, "issues": issues, "summary": summary}
 
     @staticmethod
-    def _truthy_env(name: str, default: str = "0") -> bool:
-        return str(os.getenv(name, default) or default).strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-
-    @staticmethod
     def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
         try:
             value = int(str(os.getenv(name, default)))
