@@ -13,10 +13,11 @@ import re
 from .models import CreativeBrief
 
 
-PROMPT_ADAPTER_VERSION = 6
+PROMPT_ADAPTER_VERSION = 7
 
 _RUNWAY_PROMPT_LIMIT = 1000
 _YANDEX_PROMPT_LIMIT = 500
+_GIGACHAT_PROMPT_LIMIT = 1800
 
 
 def _lines(prompt: str) -> tuple[str, ...]:
@@ -469,6 +470,50 @@ def _adapt_yandex_motion(brief: CreativeBrief) -> CreativeBrief:
     return replace(brief, prompt=prompt)
 
 
+def _adapt_gigachat(brief: CreativeBrief) -> CreativeBrief:
+    """Send GigaChat a natural scene description instead of compiler meta-language.
+
+    GigaChat is the default RU image fallback. It accepts a substantially larger
+    prompt than Alice AI ART, so keep the owner's wording plus semantic, style and
+    safety cues while still removing internal contract phrases such as "mandatory"
+    and raw business grounding that can become accidental lettering in the image.
+    """
+
+    lines = _compiled_directives(brief.prompt)
+    owner_request = _compiled_owner_request(lines)
+    if not owner_request:
+        return replace(
+            brief,
+            prompt=_bounded_join([brief.prompt], limit=_GIGACHAT_PROMPT_LIMIT),
+        )
+
+    semantic_cues = _compiled_semantic_visual_cues(lines, kind=brief.kind)
+    style_cues = _compiled_style_cues(lines)
+    folded = tuple(line.casefold() for line in lines)
+    if any(line.startswith("the transformation is mandatory") for line in folded):
+        scene_head = "Один субъект: до → действие/причина → после. " + owner_request
+    elif any(
+        line.startswith("treat object replacement as a constrained")
+        for line in folded
+    ):
+        scene_head = (
+            "Покажи именно событие замены, сохрани то же окружение. " + owner_request
+        )
+    else:
+        scene_head = owner_request
+
+    prompt = _bounded_join(
+        [
+            scene_head,
+            *semantic_cues,
+            *style_cues,
+            *_natural_safety_parts(brief),
+        ],
+        limit=_GIGACHAT_PROMPT_LIMIT,
+    )
+    return replace(brief, prompt=prompt)
+
+
 def _adapt_runway(brief: CreativeBrief) -> CreativeBrief:
     # Runway's provider contract in this gateway is capped to 1000 prompt characters.
     # Preserve semantic obligations and style explicitly instead of blindly slicing
@@ -495,11 +540,13 @@ def adapt_visual_brief_for_provider(
         return _adapt_yandex(value)
     if name == "yandexart_motion":
         return _adapt_yandex_motion(value)
+    if name == "gigachat":
+        return _adapt_gigachat(value)
     if name == "runway":
         return _adapt_runway(value)
-    # OpenAI, GigaChat and self-hosted gateways receive the frozen compiled prompt
-    # unchanged. Provider adapters must not rewrite semantics without a concrete
-    # provider constraint that requires it.
+    # OpenAI and self-hosted gateways receive the frozen compiled prompt unchanged.
+    # Provider adapters must not rewrite semantics without a concrete provider
+    # contract that requires it.
     return value
 
 
