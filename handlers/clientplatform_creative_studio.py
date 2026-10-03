@@ -421,11 +421,27 @@ async def send_creative_studio_menu(
             "фирменный стиль бизнеса — выбирать модель вручную не нужно."
         )
     elif active.status == CreativeGenerationReceiptStatus.PREPARED:
+        qa_disclosure = (
+            "\n\nПосле готовой картинки ClientPlatform один раз выполнит отдельную "
+            "AI-проверку смысла. Она не создаёт новую картинку и не повторяется "
+            "при повторной проверке или доставке результата."
+            if _receipt_kind(active) == "image"
+            and _receipt_semantic_qa_enabled(active)
+            else ""
+        )
         body = (
             "🎨 Картинки и видео\n\n"
             "У Вас уже подготовлен запрос:\n"
             f"{active.request_text}\n\n"
-            "Платный AI-вызов ещё не начинался. Можно продолжить или изменить описание."
+            + (
+                "Платные AI-вызовы ещё не начинались. Кнопка «Продолжить создание» "
+                "подтверждает генерацию и один отдельный QA-вызов."
+                if _receipt_kind(active) == "image"
+                and _receipt_semantic_qa_enabled(active)
+                else "Платный AI-вызов ещё не начинался."
+            )
+            + qa_disclosure
+            + "\n\nМожно продолжить или изменить описание."
         )
     elif active.delivery_claimed_at:
         delivery_subject = (
