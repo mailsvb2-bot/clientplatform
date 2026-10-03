@@ -94,6 +94,25 @@ def test_yandex_adapter_expands_resource_audio_transformation_into_visual_stages
     assert "mandatory" not in adapted.prompt.casefold()
     assert len(adapted.prompt) <= 500
 
+def test_transformation_final_state_does_not_absorb_another_subject_state() -> None:
+    request = "злой ёж становится добрым и обнимает грустного друга"
+    compiled = compile_visual_prompt(request=request, kind="image")
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
+
+    assert "напряжённый взгляд и жёсткая поза" in adapted.prompt
+    assert "мягкий доброжелательный взгляд" in adapted.prompt
+    assert "опущенный взгляд и сдержанная закрытая поза" not in adapted.prompt
+    assert len(adapted.prompt) <= 500
+
+
 def test_yandex_adapter_does_not_turn_business_name_into_image_text() -> None:
     removed_product_method = "метро" + "терапию"
     request = (
