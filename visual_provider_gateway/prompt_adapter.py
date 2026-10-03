@@ -584,7 +584,7 @@ def _detailed_transformation_stage_cue(
 
     opening = ", ".join(initial_evidence) if initial_evidence else "обычный"
     if listening:
-        middle = "слушает аудио в заметных наушниках"
+        middle = "слушает аудио в заметных наушниках, не символом волны"
         if middle_evidence:
             middle += ", " + ", ".join(middle_evidence)
         middle += ", и меняется"
