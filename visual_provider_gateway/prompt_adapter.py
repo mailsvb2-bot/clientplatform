@@ -670,24 +670,38 @@ def _compiled_semantic_visual_cues(
                     )
                 cues.append(fallback)
         elif listening:
-            suffix = (
-                "; ПОСЛЕ заметно меняется по всем указанным признакам."
+            prefix = (
+                "Один герой, три стадии: "
+                if explicit_text
+                else "Один герой, три стадии без подписей: "
+            )
+            final = (
+                "финал заметно отличается по всем указанным признакам."
                 if visible_state
-                else "; не один финальный портрет."
+                else "финал ясно отличается от начала."
             )
             cues.append(
-                "Сториборд в одном кадре: тот же герой ДО → Слушает аудио "
-                "(видны наушники, колонка или устройство) → ПОСЛЕ" + suffix
+                prefix
+                + "сначала исходное состояние; затем герой явно слушает аудио "
+                "через наушники/устройство и меняется; "
+                + final
             )
         else:
-            suffix = (
-                "; ПОСЛЕ заметно меняется по всем указанным признакам."
+            prefix = (
+                "Один герой, три стадии: "
+                if explicit_text
+                else "Один герой, три стадии без подписей: "
+            )
+            final = (
+                "финал заметно отличается по всем указанным признакам."
                 if visible_state
-                else "; не один финальный портрет."
+                else "финал ясно отличается от начала."
             )
             cues.append(
-                "Сториборд в одном кадре: тот же герой ДО → видимая причина/действие "
-                "→ ПОСЛЕ" + suffix
+                prefix
+                + "сначала исходное состояние; затем видна причина/действие "
+                "и изменение; "
+                + final
             )
     elif visible_state:
         cues.append(
@@ -852,13 +866,10 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
     style_cues = _compiled_style_cues(lines)
     folded = tuple(line.casefold() for line in lines)
     if any(line.startswith("the transformation is mandatory") for line in folded):
-        if any(line.startswith("transformation stage detail") for line in folded):
-            scene_head = owner_request
-        else:
-            scene_head = (
-                "Сториборд в одном изображении: один и тот же герой повторён как "
-                "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ. " + owner_request
-            )
+        # The semantic cue owns staging. Keep the scene head natural so internal
+        # BEFORE/ACTION/AFTER meta-labels can never leak into generated pixels,
+        # including frozen compiler-v2/v3/v4 receipts.
+        scene_head = owner_request
     elif any(
         line.startswith("treat object replacement as a constrained")
         for line in folded
@@ -957,13 +968,7 @@ def _adapt_gigachat(brief: CreativeBrief) -> CreativeBrief:
     style_cues = _compiled_style_cues(lines)
     folded = tuple(line.casefold() for line in lines)
     if any(line.startswith("the transformation is mandatory") for line in folded):
-        if any(line.startswith("transformation stage detail") for line in folded):
-            scene_head = owner_request
-        else:
-            scene_head = (
-                "Сториборд в одном изображении: один и тот же герой повторён как "
-                "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ. " + owner_request
-            )
+        scene_head = owner_request
     elif any(
         line.startswith("treat object replacement as a constrained")
         for line in folded
