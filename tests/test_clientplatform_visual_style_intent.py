@@ -186,7 +186,7 @@ class VisualStyleIntentTests(unittest.TestCase):
         self.assertEqual(first, second)
         payload = json.loads(first)
         self.assertEqual(payload["version"], 3)
-        self.assertEqual(payload["intent"]["prompt_compiler_version"], 4)
+        self.assertEqual(payload["intent"]["prompt_compiler_version"], 5)
         self.assertEqual(payload["intent"]["style_schema_version"], 2)
         self.assertEqual(payload["intent"]["style"]["color_temperature"], "warm")
         self.assertIn("Use a warm color temperature", payload["brief"]["prompt"])

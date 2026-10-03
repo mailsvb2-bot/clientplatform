@@ -20,7 +20,7 @@ from clientplatform.domain.visual_style_intent import (
 
 _MAX_REQUEST_CHARS = 1500
 _MAX_BRAND_CONTEXT_CHARS = 1200
-_MAX_COMPILED_PROMPT_CHARS = 5200
+_MAX_COMPILED_PROMPT_CHARS = 12000
 _MAX_NEGATIVE_PROMPT_CHARS = 1800
 
 _TRANSFORMATION_RE = re.compile(
@@ -379,6 +379,15 @@ def _transformation_directives(kind: str, flags: tuple[str, ...]) -> list[str]:
         "stages. Make every requested changed quality visibly stronger in the AFTER "
         "state through expression, posture, texture, material condition or grooming, "
         "and keep the causal action spatially connected to the transition.",
+        "Transformation stage detail: make every stage independently readable as a "
+        "visual scene. The opening stage shows the stated initial condition, or a "
+        "neutral ordinary baseline when none was stated. The middle stage shows the "
+        "concrete cause/action plus the first visible signs of change. The final stage "
+        "shows every requested changed quality through concrete expression, posture, "
+        "texture, material condition or grooming. Stage names are prompt structure "
+        "only. Do not render BEFORE/AFTER words, panel labels, arrows, numbers or "
+        "captions unless the owner explicitly requested those exact elements as "
+        "visible text.",
     ]
 
 
@@ -740,6 +749,8 @@ def compile_visual_prompt(
                 "state change conveyed only by text or a generic symbol",
             ]
         )
+        if not explicit_text:
+            negatives.append("storyboard stage labels, arrows, numbers or captions")
     if "visible_state" in flags:
         negatives.extend(
             [

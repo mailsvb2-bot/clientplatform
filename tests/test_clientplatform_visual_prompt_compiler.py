@@ -144,6 +144,21 @@ class VisualPromptCompilerTests(unittest.TestCase):
             compiled.negative_prompt,
         )
 
+    def test_explicit_transformation_labels_are_not_forbidden(self) -> None:
+        compiled = compile_visual_prompt(
+            request='коллаж до/после, подпись слева «ДО», справа «ПОСЛЕ»',
+            kind="image",
+        )
+
+        self.assertIn("transformation", compiled.semantic_flags)
+        self.assertIn("explicit_text", compiled.semantic_flags)
+        self.assertIn("Readable text is explicitly part", compiled.prompt)
+        self.assertIn("unless the owner explicitly requested", compiled.prompt)
+        self.assertNotIn(
+            "storyboard stage labels, arrows, numbers or captions",
+            compiled.negative_prompt,
+        )
+
     def test_resource_audio_transformation_preserves_cause_and_visible_result(self) -> None:
         compiled = compile_visual_prompt(
             request=(
@@ -164,7 +179,17 @@ class VisualPromptCompilerTests(unittest.TestCase):
         self.assertIn("neutral ordinary baseline", compiled.prompt)
         self.assertIn("every requested changed quality visibly stronger", compiled.prompt)
         self.assertIn("same subject may appear", compiled.prompt)
+        self.assertIn("Transformation stage detail", compiled.prompt)
+        self.assertIn("opening stage", compiled.prompt)
+        self.assertIn("middle stage", compiled.prompt)
+        self.assertIn("final stage", compiled.prompt)
+        self.assertIn("Do not render BEFORE/AFTER words", compiled.prompt)
+        self.assertIn("unless the owner explicitly requested", compiled.prompt)
         self.assertIn("Never rely on captions", compiled.prompt)
+        self.assertIn(
+            "storyboard stage labels, arrows, numbers or captions",
+            compiled.negative_prompt,
+        )
         self.assertIn("audio interaction missing", compiled.negative_prompt)
 
     def test_object_replacement_is_a_constrained_physical_scene(self) -> None:
@@ -257,6 +282,26 @@ class VisualPromptCompilerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "too long"):
             compile_visual_prompt(request="x" * 1501, kind="image")
 
+    def test_long_transformation_preserves_tail_safety_directives(self) -> None:
+        request = (
+            "ёж слушает ресурсное аудио и становится добрым и пушистым "
+            + ("очень подробно описанная спокойная сцена " * 40)
+        )[:1490]
+        compiled = compile_visual_prompt(
+            request=request,
+            kind="image",
+            brand_context=(
+                "Brand name: Example Wellness. Product: guided audio. "
+                + ("Verified business context. " * 30)
+            ),
+        )
+
+        self.assertIn("Transformation stage detail", compiled.prompt)
+        self.assertIn("Do not add fake awards", compiled.prompt)
+        self.assertIn("Do not rely on readable text", compiled.prompt)
+        self.assertIn("Names from business grounding are semantic context only", compiled.prompt)
+        self.assertLessEqual(len(compiled.prompt), 12000)
+
     def test_semantic_qa_contract_reuses_compiler_flags_for_owner_examples(self) -> None:
         hedgehog = build_visual_semantic_qa_contract(
             request=(
@@ -331,7 +376,7 @@ class VisualPromptCompilerTests(unittest.TestCase):
         )
         payload = json.loads(frozen)
         self.assertEqual(payload["version"], 3)
-        self.assertEqual(payload["intent"]["prompt_compiler_version"], 4)
+        self.assertEqual(payload["intent"]["prompt_compiler_version"], 5)
         self.assertEqual(payload["semantic_qa"]["version"], 1)
         self.assertEqual(payload["semantic_qa"]["kind"], "image")
         self.assertEqual(payload["semantic_qa"]["country_code"], "RU")
