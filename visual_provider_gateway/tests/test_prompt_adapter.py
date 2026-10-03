@@ -46,10 +46,11 @@ def test_yandex_adapter_uses_natural_owner_description_without_compiler_meta() -
     adapted = adapt_visual_brief_for_provider(_compiled_brief(), provider="yandexart")
 
     assert adapted.prompt.startswith(
-        "Сториборд в одном изображении: один и тот же герой повторён как "
-        "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ."
+        "a prickly hedgehog listens to an audio session and becomes gentle"
     )
-    assert "a prickly hedgehog listens to an audio session and becomes gentle" in adapted.prompt
+    assert "Один герой, три стадии без подписей" in adapted.prompt
+    assert "ДО →" not in adapted.prompt
+    assert "ДЕЙСТВИЕ/ПРИЧИНА" not in adapted.prompt
     assert "Owner request" not in adapted.prompt
     assert "Render the owner's requested scene faithfully" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
@@ -392,8 +393,9 @@ def test_yandex_adapter_preserves_multiple_selected_styles_with_semantics() -> N
 
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
-    assert "Слушает аудио" in adapted.prompt
-    assert "ДО" in adapted.prompt
+    assert "явно слушает аудио" in adapted.prompt
+    assert "Один герой, три стадии без подписей" in adapted.prompt
+    assert "ДО →" not in adapted.prompt
     assert "Стиль:" in adapted.prompt
     assert "тёплый дружелюбный" in adapted.prompt
     assert "премиальный" in adapted.prompt
@@ -451,12 +453,11 @@ def test_yandex_adapter_keeps_all_safety_clauses_for_long_owner_request() -> Non
 
     assert len(adapted.prompt) <= 500
     assert adapted.prompt.startswith(
-        "Сториборд в одном изображении: один и тот же герой повторён как "
-        "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ."
+        "a hedgehog listens to a guided audio wellness session"
     )
-    assert "a hedgehog listens to a guided audio wellness session" in adapted.prompt
-    assert "Слушает аудио" in adapted.prompt
-    assert "ДО" in adapted.prompt
+    assert "Один герой, три стадии без подписей" in adapted.prompt
+    assert "явно слушает аудио" in adapted.prompt
+    assert "ДО →" not in adapted.prompt
     assert "Без водяных знаков" in adapted.prompt
     assert "Без выдуманных логотипов" in adapted.prompt
     assert "полностью в кадре" in adapted.prompt
@@ -831,11 +832,11 @@ def test_engine_applies_meaning_adapter_to_gigachat_fallback(monkeypatch) -> Non
     assert result.provider_payload["prompt_adapter_version"] == 10
     prompt = captured["brief"].prompt
     assert prompt.startswith(
-        "Сториборд в одном изображении: один и тот же герой повторён как "
-        "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ."
+        "a prickly hedgehog listens to an audio session and becomes gentle"
     )
-    assert "hedgehog listens to an audio session" in prompt
-    assert "Сториборд в одном кадре" in prompt
+    assert "Один герой, три стадии без подписей" in prompt
+    assert "ДО →" not in prompt
+    assert "ДЕЙСТВИЕ/ПРИЧИНА" not in prompt
     assert "Owner request" not in prompt
     assert "mandatory" not in prompt.casefold()
 
@@ -868,10 +869,10 @@ def test_yandex_adapter_prioritizes_owner_request_before_style_and_brand_context
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert adapted.prompt.startswith(
-        "Сториборд в одном изображении: один и тот же герой повторён как "
-        "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ."
+        "a prickly hedgehog listens to an audio session and becomes gentle"
     )
-    assert "a prickly hedgehog listens to an audio session and becomes gentle" in adapted.prompt
+    assert "Один герой, три стадии без подписей" in adapted.prompt
+    assert "ДО →" not in adapted.prompt
     assert "Example brand context" not in adapted.prompt
     assert "не печатать" in adapted.prompt
     assert len(adapted.prompt) <= 500
