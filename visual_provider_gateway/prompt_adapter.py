@@ -153,9 +153,9 @@ def _yandex_safety_parts(brief: CreativeBrief) -> tuple[str, ...]:
     if "Без читаемого текста" in joined:
         clauses.append("Без читаемого текста/UI.")
     if "названия бренда/услуг/методов" in joined.casefold():
-        clauses.append("Названия бренда/услуг только по явному запросу.")
+        clauses.append("Названия бренда/услуг не печатать без явного запроса.")
     if "Без водяных знаков" in joined and "Без выдуманных логотипов" in joined:
-        clauses.append("Без водяных знаков и выдуманных логотипов.")
+        clauses.append("Без водяных знаков. Без выдуманных логотипов.")
     elif "Без водяных знаков" in joined:
         clauses.append("Без водяных знаков.")
     elif "Без выдуманных логотипов" in joined:
@@ -797,18 +797,20 @@ def _bounded_yandex_prompt(
         # the owner scene use whatever remains.
         bounded_semantics = _bounded_join(list(semantic_cues), limit=300)
         style_block = _bounded_join(list(style_cues), limit=96)
-        safety_floor = _bounded_join(list(safety), limit=80)
+        # Reserve the whole compact safety block when it fits. Only in an
+        # impossible all-at-once 500-char case may the ordered tail be trimmed.
+        safety_reserve = _bounded_join(list(safety), limit=180)
         reserved = (
             len(bounded_semantics)
             + len(style_block)
-            + len(safety_floor)
+            + len(safety_reserve)
             + sum(
                 1
-                for block in (bounded_semantics, style_block, safety_floor)
+                for block in (bounded_semantics, style_block, safety_reserve)
                 if block
             )
         )
-        scene_limit = max(60, _YANDEX_PROMPT_LIMIT - reserved)
+        scene_limit = max(40, _YANDEX_PROMPT_LIMIT - reserved)
         bounded_scene_head = _bounded_join([normalized_scene_head], limit=scene_limit)
         core = [bounded_scene_head, bounded_semantics, style_block]
         core = [part for part in core if part]
