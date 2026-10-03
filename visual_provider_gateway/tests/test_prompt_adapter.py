@@ -83,11 +83,11 @@ def test_yandex_adapter_expands_resource_audio_transformation_into_visual_stages
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert adapted.prompt.startswith(request)
-    assert "Один герой, три последовательные стадии без подписей" in adapted.prompt
-    assert "обычное исходное состояние" in adapted.prompt
+    assert "Один герой, три стадии без подписей" in adapted.prompt
+    assert "обычный исходный вид" in adapted.prompt
     assert "слушает аудио" in adapted.prompt
     assert "наушниках" in adapted.prompt
-    assert "не абстрактный символ волны" in adapted.prompt
+    assert "не символ волны" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
     assert "заметно более густой пушистый мех" in adapted.prompt
     assert "ДО →" not in adapted.prompt
@@ -122,14 +122,14 @@ def test_yandex_stage_prompt_keeps_final_state_and_artistic_style_with_brand_con
 
     assert len(adapted.prompt) <= 500
     assert adapted.prompt.startswith(request)
-    assert "Один герой, три последовательные стадии без подписей" in adapted.prompt
+    assert "Один герой, три стадии без подписей" in adapted.prompt
     assert "слушает аудио в заметных наушниках" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
     assert "заметно более густой пушистый мех" in adapted.prompt
     assert "тёплый дружелюбный" in adapted.prompt
     assert "премиальный" in adapted.prompt
     assert "художественный" in adapted.prompt
-    assert "Не печатай названия бренда/услуг/методов" in adapted.prompt
+    assert "Названия бренда/услуг только по явному запросу" in adapted.prompt
 
 
 def test_transformation_final_state_does_not_absorb_another_subject_state() -> None:
@@ -166,7 +166,7 @@ def test_from_to_transformation_preserves_explicit_initial_and_final_states() ->
 
     assert "напряжённый взгляд и жёсткая поза" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
-    assert "обычное исходное состояние" not in adapted.prompt
+    assert "обычный исходный вид" not in adapted.prompt
     assert len(adapted.prompt) <= 500
 
 
@@ -203,7 +203,7 @@ def test_unparsed_transformation_does_not_invent_neutral_or_final_state() -> Non
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert "исходное и итоговое состояния бери только из запроса" in adapted.prompt
-    assert "обычное исходное состояние" not in adapted.prompt
+    assert "обычный исходный вид" not in adapted.prompt
     assert len(adapted.prompt) <= 500
 
 
@@ -221,8 +221,8 @@ def test_explicit_before_after_labels_are_not_suppressed_by_provider_cue() -> No
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert adapted.prompt.startswith(request)
-    assert "Один герой, три последовательные стадии" in adapted.prompt
-    assert "Один герой, три последовательные стадии без подписей" not in adapted.prompt
+    assert "Один герой, три стадии" in adapted.prompt
+    assert "Один герой, три стадии без подписей" not in adapted.prompt
     assert "Без читаемого текста" not in adapted.prompt
     assert len(adapted.prompt) <= 500
 
@@ -445,10 +445,10 @@ def test_gigachat_adapter_preserves_listening_transformation_without_compiler_me
     adapted = adapt_visual_brief_for_provider(brief, provider="gigachat")
 
     assert adapted.prompt.startswith(request)
-    assert "Один герой, три последовательные стадии без подписей" in adapted.prompt
-    assert "обычное исходное состояние" in adapted.prompt
+    assert "Один герой, три стадии без подписей" in adapted.prompt
+    assert "обычный исходный вид" in adapted.prompt
     assert "слушает аудио" in adapted.prompt
-    assert "не абстрактный символ волны" in adapted.prompt
+    assert "не символ волны" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
     assert "заметно более густой пушистый мех" in adapted.prompt
     assert "Owner request" not in adapted.prompt
@@ -560,7 +560,7 @@ def test_gigachat_adapter_reserves_safety_for_near_limit_owner_request() -> None
 
     assert len(adapted.prompt) <= 1800
     assert adapted.prompt.startswith("ёж слушает ресурсное аудио")
-    assert "Один герой, три последовательные стадии без подписей" in adapted.prompt
+    assert "Один герой, три стадии без подписей" in adapted.prompt
     assert "слушает аудио" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
     assert "заметно более густой пушистый мех" in adapted.prompt
@@ -701,11 +701,11 @@ def test_engine_respects_explicit_text_from_compiled_contract(monkeypatch) -> No
     assert result.status == "succeeded"
     prompt = captured["brief"].prompt
     assert prompt.startswith(request)
-    assert "Один герой, три последовательные стадии" in prompt
-    assert "Один герой, три последовательные стадии без подписей" not in prompt
+    assert "Один герой, три стадии" in prompt
+    assert "Один герой, три стадии без подписей" not in prompt
     assert "Без читаемого текста" not in prompt
     assert "leave clean negative space" not in prompt
-    assert "Не печатай названия бренда/услуг/методов" in prompt
+    assert "Названия бренда/услуг только по явному запросу" in prompt
     assert len(prompt) <= 500
 
 
