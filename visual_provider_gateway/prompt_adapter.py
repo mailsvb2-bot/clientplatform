@@ -13,7 +13,7 @@ import re
 from .models import CreativeBrief
 
 
-PROMPT_ADAPTER_VERSION = 5
+PROMPT_ADAPTER_VERSION = 6
 
 _RUNWAY_PROMPT_LIMIT = 1000
 _YANDEX_PROMPT_LIMIT = 500
@@ -293,6 +293,14 @@ def _compiled_semantic_visual_cues(
         cues.append("Явно видно само действие еды или питья и его источник.")
     if has("if the request contains another action"):
         cues.append("Запрошенное действие явно видно в кадре, это не статичный портрет.")
+    if has("treat object replacement as a constrained") or has(
+        "object replacement is the core event"
+    ):
+        cues.append(
+            "Замени только указанный объект и сохрани окружение. Результат полностью "
+            "установлен, физически рабочий, со всеми нужными креплениями, органами "
+            "управления и подключениями."
+        )
 
     if has("the transformation is mandatory") or has(
         "the transformation is a mandatory"
@@ -304,14 +312,17 @@ def _compiled_semantic_visual_cues(
             )
         else:
             cues.append(
-                "Тот же герой: видны исходное состояние и результат."
+                "Один и тот же главный субъект показан в трёх читаемых фазах: "
+                "исходное состояние, само действие или причина изменения, затем "
+                "ясный результат. Нельзя сводить сцену к одному финальному портрету."
             )
     elif has("respect the requested chronology") or has("the request contains a sequence"):
         cues.append("Причинно-следственная последовательность действий ясно читается.")
 
     if has("visible-state translation"):
         cues.append(
-            "Эмоции и качества видны по выражению, позе и фактуре."
+            "Финальное состояние визуально отличается по выражению, позе, фактуре "
+            "или материальному состоянию; смысл понятен без подписи."
         )
     if has("autonomous composition default: use a narrative story-scene"):
         cues.append("Сюжетная сцена; запрошенное действие — главный фокус.")
@@ -340,7 +351,10 @@ def _yandex_natural_prompt_parts(brief: CreativeBrief) -> list[str]:
     parts.extend(_natural_safety_parts(brief))
     parts.extend(_compiled_style_directives(lines))
     if str(brief.brand_context or "").strip():
-        parts.append("Контекст бренда: " + " ".join(str(brief.brand_context).split()))
+        parts.append(
+            "Неизвестные названия услуг, методов или брендов — только смысловой "
+            "контекст. Не печатай эти названия в кадре и не превращай их в логотип."
+        )
     return parts
 
 
@@ -399,12 +413,29 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
     extras: list[str] = []
     if str(brief.brand_context or "").strip():
         extras.append(
-            "Контекст бренда: " + " ".join(str(brief.brand_context).split())
+            "Неизвестное название услуги, метода или бренда в запросе — только "
+            "смысловой контекст. Не печатай его в кадре и не превращай в логотип."
         )
     semantic_cues = _compiled_semantic_visual_cues(lines, kind=brief.kind)
     style_cues = _compiled_style_cues(lines)
+    folded = tuple(line.casefold() for line in lines)
+    if any(line.startswith("the transformation is mandatory") for line in folded):
+        scene_head = (
+            "Причинно-следственная трансформация одного и того же главного субъекта. "
+            "Покажи до, действие/причину и после. Сюжет: " + owner_request
+        )
+    elif any(
+        line.startswith("treat object replacement as a constrained")
+        for line in folded
+    ):
+        scene_head = (
+            "Реалистичная завершённая замена только указанного объекта; окружение "
+            "сохранено. Сюжет: " + owner_request
+        )
+    else:
+        scene_head = owner_request
     prompt = _bounded_yandex_prompt(
-        scene_head=owner_request,
+        scene_head=scene_head,
         semantic_cues=semantic_cues,
         style_cues=style_cues,
         brief=brief,
@@ -425,7 +456,8 @@ def _adapt_yandex_motion(brief: CreativeBrief) -> CreativeBrief:
         style_cues = _compiled_style_cues(lines)
         if str(brief.brand_context or "").strip():
             extras.append(
-                "Контекст бренда: " + " ".join(str(brief.brand_context).split())
+                "Название услуги, метода или бренда — только смысловой контекст; "
+                "не печатай его в кадре и не превращай в логотип."
             )
     else:
         # Provider-direct/legacy requests are already natural scene descriptions.
