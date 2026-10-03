@@ -287,11 +287,11 @@ def _compiled_semantic_visual_cues(
     *,
     kind: str,
 ) -> tuple[str, ...]:
-    """Translate compiler semantics into short, natural provider-visible scene cues.
+    """Translate compiler semantics into compact provider-visible scene cues.
 
-    Alice AI ART has a hard prompt limit. Meaning-changing semantics therefore come
-    first: a transformation or replacement must survive prompt compaction before
-    lower-priority interaction/style cues.
+    Alice AI ART has a hard prompt limit. Related semantic obligations are packed
+    together so a transformation cannot crowd out its causal interaction (or vice
+    versa) during compaction.
     """
 
     folded = tuple(line.casefold() for line in lines)
@@ -300,25 +300,44 @@ def _compiled_semantic_visual_cues(
     def has(prefix: str) -> bool:
         return any(line.startswith(prefix) for line in folded)
 
-    # Highest priority: preserve the requested state change under hard prompt limits.
-    if has("the transformation is mandatory") or has(
+    transformation = has("the transformation is mandatory") or has(
         "the transformation is a mandatory"
-    ):
+    )
+    visible_state = has("visible-state translation")
+    listening = has("if the subject is listening")
+
+    # Highest priority: one compact cue carries the state change and, when present,
+    # its listening cause. This survives Alice's 500-character ceiling as a unit.
+    if transformation:
         if str(kind or "").strip().lower() == "video":
             cues.append(
                 "Тот же герой проходит видимое изменение: исходное состояние → "
                 "причина/действие → ясный финал."
             )
-        else:
-            cues.append(
-                "Сториборд в одном кадре: тот же герой намеренно показан как "
-                "ДО → видимая причина/действие → ПОСЛЕ; не один финальный портрет."
+        elif listening:
+            suffix = (
+                "; ПОСЛЕ заметно меняется по всем указанным признакам."
+                if visible_state
+                else "; не один финальный портрет."
             )
-
-    if has("visible-state translation"):
+            cues.append(
+                "Сториборд в одном кадре: тот же герой ДО → Слушает аудио "
+                "(видны наушники, колонка или устройство) → ПОСЛЕ" + suffix
+            )
+        else:
+            suffix = (
+                "; ПОСЛЕ заметно меняется по всем указанным признакам."
+                if visible_state
+                else "; не один финальный портрет."
+            )
+            cues.append(
+                "Сториборд в одном кадре: тот же герой ДО → видимая причина/действие "
+                "→ ПОСЛЕ" + suffix
+            )
+    elif visible_state:
         cues.append(
-            "ПОСЛЕ заметно отличается по каждому изменяемому признаку из запроса: "
-            "выражение, поза, фактура/шерсть или материальное состояние."
+            "Запрошенное состояние явно читается по выражению, позе, фактуре/шерсти "
+            "или материальному состоянию."
         )
 
     if has("treat object replacement as a constrained") or has(
@@ -330,9 +349,8 @@ def _compiled_semantic_visual_cues(
             "управление и подключения."
         )
 
-    # Interaction cues come after state-changing semantics so they cannot crowd the
-    # transformation out of Alice's 500-character prompt.
-    if has("if the subject is listening"):
+    # Do not duplicate listening when it is already packed into a transformation.
+    if listening and not transformation:
         cues.append("Слушает аудио: видны наушники, колонка или устройство.")
     if has("if the subject is watching"):
         cues.append("Явно видна связь взгляда персонажа с экраном или источником.")
@@ -347,11 +365,7 @@ def _compiled_semantic_visual_cues(
     if has("if the request contains another action"):
         cues.append("Запрошенное действие явно видно в кадре, это не статичный портрет.")
 
-    if not any(
-        line.startswith("the transformation is mandatory")
-        or line.startswith("the transformation is a mandatory")
-        for line in folded
-    ) and (
+    if not transformation and (
         has("respect the requested chronology") or has("the request contains a sequence")
     ):
         cues.append("Причинно-следственная последовательность действий ясно читается.")
