@@ -154,6 +154,10 @@ def test_semantic_qa_is_claimed_once_and_reused_across_retries(
         model="art://model",
         mime_type="image/png",
         asset_path=str(asset),
+        provider_state_json=VisualGatewayService._provider_state_json(
+            {},
+            country_code="RU",
+        ),
     )
 
     class Reviewer:
@@ -254,6 +258,10 @@ def test_semantic_qa_obeys_operator_provider_policy_before_any_egress(
         status="succeeded",
         mime_type="image/png",
         asset_path=str(asset),
+        provider_state_json=VisualGatewayService._provider_state_json(
+            {},
+            country_code="RU",
+        ),
     )
     svc = VisualGatewayService(store=store, engine=FakeEngine(asset))
     contract = {
@@ -306,6 +314,10 @@ def test_semantic_qa_running_claim_never_repeats_external_review(
         status="succeeded",
         mime_type="image/png",
         asset_path=str(asset),
+        provider_state_json=VisualGatewayService._provider_state_json(
+            {},
+            country_code="RU",
+        ),
     )
     contract = {
         "version": 1,
