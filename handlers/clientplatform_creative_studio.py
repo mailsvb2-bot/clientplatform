@@ -45,10 +45,12 @@ from clientplatform.application.visual_creatives import (
     freeze_business_video_payload,
     frozen_business_visual_binding,
     frozen_business_visual_kind,
+    frozen_business_visual_semantic_qa,
     frozen_business_visual_style,
     materialize_ad_visual,
     normalize_business_image_request,
     poll_ad_visual,
+    review_business_image_semantics_from_frozen_payload,
     visual_generation_ready,
     visual_video_generation_mode,
     wait_ad_visual,
@@ -109,6 +111,27 @@ def _receipt_kind(receipt: CreativeGenerationReceipt | None) -> str:
 
 def _receipt_noun(receipt: CreativeGenerationReceipt | None) -> str:
     return "видео" if _receipt_kind(receipt) == "video" else "картинка"
+
+
+def _semantic_qa_warning(qa) -> str:
+    if qa is None or str(getattr(qa, "status", "") or "") != "needs_review":
+        return ""
+    issues = tuple(
+        " ".join(str(item or "").split()).strip()
+        for item in getattr(qa, "issues", ())
+        if " ".join(str(item or "").split()).strip()
+    )[:3]
+    if not issues:
+        return (
+            "⚠️ Автопроверка смысла нашла сомнение в соответствии запросу. "
+            "Новую генерацию я не запускала."
+        )
+    details = "\n".join(f"• {item}" for item in issues)
+    return (
+        "⚠️ Автопроверка смысла: картинка может передавать запрос не полностью.\n"
+        + details
+        + "\n\nНовую генерацию я не запускала."
+    )
 
 
 def _studio_navigation_rows(token: str) -> list[list[tuple[str, str]]]:
@@ -697,6 +720,18 @@ async def _show_paid_generation_confirmation(
         "Повторный запуск этого же задания использует тот же frozen brief и "
         "idempotency key."
         + (
+            "\n\nПосле готовой картинки ClientPlatform может один раз выполнить "
+            "отдельную AI-проверку смысла: видно ли действие/изменение, нет ли "
+            "лишнего текста и явных физических ошибок. Это дополнительный AI-вызов, "
+            "но он не создаёт новую картинку и не повторяется при проверке или "
+            "повторной отправке результата."
+            if _receipt_kind(receipt) == "image"
+            and frozen_business_visual_semantic_qa(
+                receipt.provider_payload_json
+            ) is not None
+            else ""
+        )
+        + (
             "\n\nДля видео ClientPlatform сначала использует полноценный генератор "
             "движущейся сцены. Если такой провайдер недоступен до принятия задания, "
             "может быть использован явно обозначенный motion fallback из AI-кадра."
@@ -1201,6 +1236,18 @@ async def _finish_visual(
         actor=actor,
         receipt_id=receipt.id,
     )
+    if str(getattr(job, "kind", "") or "") == "image":
+        try:
+            qa = await asyncio.to_thread(
+                review_business_image_semantics_from_frozen_payload,
+                provider_payload_json=receipt.provider_payload_json,
+                job=job,
+            )
+        except (VisualCreativeError, TypeError, ValueError):
+            qa = None
+        warning = _semantic_qa_warning(qa)
+        if warning:
+            await target.answer(warning)
     await target.answer(
         "Можно сохранить результат из чата, создать ещё один или перейти к рекламе.",
         reply_markup=_result_rows(token, receipt),
