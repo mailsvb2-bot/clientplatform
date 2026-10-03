@@ -45,7 +45,7 @@ def test_yandex_adapter_uses_natural_owner_description_without_compiler_meta() -
     adapted = adapt_visual_brief_for_provider(_compiled_brief(), provider="yandexart")
 
     assert adapted.prompt.startswith(
-        "Причинно-следственная трансформация одного и того же главного субъекта."
+        "Один субъект: до → действие/причина → после."
     )
     assert "a prickly hedgehog listens to an audio session and becomes gentle" in adapted.prompt
     assert "Owner request" not in adapted.prompt
@@ -83,15 +83,15 @@ def test_yandex_adapter_preserves_exact_owner_listening_and_transformation() -> 
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert adapted.prompt.startswith(
-        "Причинно-следственная трансформация одного и того же главного субъекта."
+        "Один субъект: до → действие/причина → после."
     )
     assert request in adapted.prompt
     assert removed_product_method in adapted.prompt
     assert "Слушает аудио" in adapted.prompt
     assert "наушники" in adapted.prompt
-    assert "трёх читаемых фазах" in adapted.prompt
-    assert "действие или причина изменения" in adapted.prompt
-    assert "одному финальному портрету" in adapted.prompt
+    assert "Три фазы одного субъекта" in adapted.prompt
+    assert "действие/причина" in adapted.prompt
+    assert "не один финальный портрет" in adapted.prompt
     assert "Финальное состояние визуально отличается" in adapted.prompt
     assert "Owner request" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
@@ -123,7 +123,7 @@ def test_yandex_adapter_does_not_turn_business_name_into_image_text() -> None:
 
     assert "Контекст бренда:" not in adapted.prompt
     assert "Brand name:" not in adapted.prompt
-    assert "не печатай" in adapted.prompt
+    assert "не печатать" in adapted.prompt
     assert "логотип" in adapted.prompt
     assert "Без читаемого текста" in adapted.prompt
     assert len(adapted.prompt) <= 500
@@ -145,7 +145,7 @@ def test_yandex_adapter_compiles_sink_replacement_as_complete_installation() -> 
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert adapted.prompt.startswith(
-        "Реалистичная завершённая замена только указанного объекта"
+        "Сохрани окружение; замени только указанный объект"
     )
     assert "Замена раковины" in adapted.prompt
     assert "сохрани окружение" in adapted.prompt
@@ -265,7 +265,7 @@ def test_yandex_adapter_keeps_all_safety_clauses_for_long_owner_request() -> Non
 
     assert len(adapted.prompt) <= 500
     assert adapted.prompt.startswith(
-        "Причинно-следственная трансформация одного и того же главного субъекта."
+        "Один субъект: до → действие/причина → после."
     )
     assert "a hedgehog listens to a guided audio wellness session" in adapted.prompt
     assert "Слушает аудио" in adapted.prompt
@@ -407,7 +407,7 @@ def test_yandex_adapter_prioritizes_owner_request_before_style_and_brand_context
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert adapted.prompt.startswith(
-        "Причинно-следственная трансформация одного и того же главного субъекта."
+        "Один субъект: до → действие/причина → после."
     )
     assert "a prickly hedgehog listens to an audio session and becomes gentle" in adapted.prompt
     assert "Example brand context" not in adapted.prompt
