@@ -296,6 +296,150 @@ def test_yandex_motion_adapter_keeps_all_safety_clauses_for_long_owner_request()
     assert "Owner request" not in adapted.prompt
 
 
+def test_gigachat_adapter_preserves_listening_transformation_without_compiler_meta() -> None:
+    removed_product_method = "метро" + "терапию"
+    request = (
+        "ёж, который слушает "
+        + removed_product_method
+        + " и становится добрым и пушистым"
+    )
+    compiled = compile_visual_prompt(request=request, kind="image")
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="gigachat")
+
+    assert adapted.prompt.startswith("Один субъект: до → действие/причина → после.")
+    assert request in adapted.prompt
+    assert "Слушает аудио" in adapted.prompt
+    assert "наушники" in adapted.prompt
+    assert "Три фазы одного субъекта" in adapted.prompt
+    assert "не один финальный портрет" in adapted.prompt
+    assert "Owner request" not in adapted.prompt
+    assert "mandatory" not in adapted.prompt.casefold()
+    assert len(adapted.prompt) <= 1800
+
+
+def test_gigachat_adapter_keeps_sink_replacement_physical_and_contextual() -> None:
+    compiled = compile_visual_prompt(request="Замена раковины", kind="image")
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="gigachat")
+
+    assert adapted.prompt.startswith(
+        "Покажи именно событие замены, сохрани то же окружение."
+    )
+    assert "Замена раковины" in adapted.prompt
+    assert "монтаж нового объекта" in adapted.prompt or "до/после" in adapted.prompt
+    assert "не одиночный предмет" in adapted.prompt
+    assert "физически рабочий" in adapted.prompt
+    assert "управлением" in adapted.prompt
+    assert "подключениями" in adapted.prompt
+    assert "Без читаемого текста" in adapted.prompt
+    assert len(adapted.prompt) <= 1800
+
+
+def test_gigachat_adapter_does_not_leak_raw_business_context_into_pixels() -> None:
+    brand_name = "Metro" + "therapy"
+    brand_context = f"Brand name: {brand_name}. Product: guided audio."
+    compiled = compile_visual_prompt(
+        request="ёж слушает ресурсное аудио и становится добрым и пушистым",
+        kind="image",
+        brand_context=brand_context,
+    )
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+        brand_context=brand_context,
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="gigachat")
+
+    assert "Business grounding" not in adapted.prompt
+    assert "Brand name:" not in adapted.prompt
+    assert brand_name not in adapted.prompt
+    assert "Названия бренда, услуг и методов не печатать в кадре." in adapted.prompt
+    assert "Без читаемого текста" in adapted.prompt
+    assert len(adapted.prompt) <= 1800
+
+
+def test_gigachat_adapter_preserves_anti_claim_policy_when_text_is_requested() -> None:
+    compiled = compile_visual_prompt(
+        request='афиша с надписью "Открытая встреча" для психологической практики',
+        kind="image",
+        purpose="advertising",
+    )
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="gigachat")
+
+    assert "Не выдумывай награды" in adapted.prompt
+    assert "отзывы" in adapted.prompt
+    assert "статистику" in adapted.prompt
+    assert "гарантии" in adapted.prompt
+    assert "срочность" in adapted.prompt
+    assert "Без читаемого текста" not in adapted.prompt
+    assert "Owner request" not in adapted.prompt
+    assert len(adapted.prompt) <= 1800
+
+
+def test_gigachat_adapter_reserves_safety_for_near_limit_owner_request() -> None:
+    long_tail = " очень подробно описанная спокойная сцена" * 28
+    request = (
+        "ёж слушает ресурсное аудио и становится добрым и пушистым"
+        + long_tail
+    )
+    request = request[:1490]
+    brand_context = "Brand name: Example Wellness. Product: guided audio."
+    compiled = compile_visual_prompt(
+        request=request,
+        kind="image",
+        brand_context=brand_context,
+    )
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+        brand_context=brand_context,
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="gigachat")
+
+    assert len(adapted.prompt) <= 1800
+    assert adapted.prompt.startswith("Один субъект: до → действие/причина → после.")
+    assert "Слушает аудио" in adapted.prompt
+    assert "Три фазы одного субъекта" in adapted.prompt
+    assert "Без водяных знаков" in adapted.prompt
+    assert "Без выдуманных логотипов" in adapted.prompt
+    assert "полностью в кадре" in adapted.prompt
+    assert "Без читаемого текста" in adapted.prompt
+    assert "Названия бренда, услуг и методов не печатать в кадре." in adapted.prompt
+    assert "Не выдумывай награды" in adapted.prompt
+    assert "Brand name:" not in adapted.prompt
+
+
 def test_runway_adapter_preserves_semantics_and_style_inside_hard_prompt_limit() -> None:
     adapted = adapt_visual_brief_for_provider(
         _compiled_brief(kind="video"),
@@ -378,9 +522,39 @@ def test_engine_applies_adapter_only_after_provider_selection(monkeypatch) -> No
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 6
+    assert result.provider_payload["prompt_adapter_version"] == 7
     assert "Owner request" not in captured["brief"].prompt
     assert "hedgehog listens to an audio session" in captured["brief"].prompt
+
+
+def test_engine_applies_meaning_adapter_to_gigachat_fallback(monkeypatch) -> None:
+    captured = {}
+
+    class FakeProvider:
+        def configured(self, kind):
+            return kind == "image"
+
+        def submit(self, brief):
+            captured["brief"] = brief
+            return CreativeJob(
+                provider="gigachat",
+                kind="image",
+                status="succeeded",
+                external_id="job-giga-1",
+            )
+
+    monkeypatch.setattr(engine, "provider_order", lambda *_args, **_kwargs: ("gigachat",))
+    monkeypatch.setattr(engine, "build_provider", lambda _name: FakeProvider())
+
+    result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
+
+    assert result.status == "succeeded"
+    assert result.provider_payload["prompt_adapter_version"] == 7
+    prompt = captured["brief"].prompt
+    assert prompt.startswith("Один субъект: до → действие/причина → после.")
+    assert "hedgehog listens to an audio session" in prompt
+    assert "Owner request" not in prompt
+    assert "mandatory" not in prompt.casefold()
 
 
 def test_yandex_adapter_keeps_legacy_direct_prompt_natural() -> None:
