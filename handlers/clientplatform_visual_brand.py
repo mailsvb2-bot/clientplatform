@@ -18,6 +18,10 @@ from clientplatform.application.visual_brand_discovery import (
     VisualBrandDiscoveryError,
     discover_brand_from_website,
 )
+from clientplatform.domain.editable_advertising import (
+    EDITABLE_AD_FONT_LABELS_RU,
+    normalize_editable_ad_font_preset,
+)
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.domain.visual_brand import TenantBrandDNA
 
@@ -57,11 +61,16 @@ def _brand_text(brand: TenantBrandDNA) -> str:
     keywords = ", ".join(value.visual_keywords) if value.visual_keywords else "не заданы"
     tone = ", ".join(value.tone) if value.tone else "не задан"
     name = value.display_name or "не задано"
+    font_label = EDITABLE_AD_FONT_LABELS_RU.get(
+        value.font_preset,
+        EDITABLE_AD_FONT_LABELS_RU["auto"],
+    )
     return (
         f"Название: {name}\n"
         f"Тон: {tone}\n"
         f"Визуальный стиль: {keywords}\n"
-        f"Цвета: {value.primary_color} · {value.accent_color} · {value.text_color}"
+        f"Цвета: {value.primary_color} · {value.accent_color} · {value.text_color}\n"
+        f"Шрифт по умолчанию: {font_label}"
     )
 
 
@@ -82,6 +91,7 @@ def _brand_from_state(data: dict, business_id: str) -> TenantBrandDNA:
         primary_color=str(raw.get("primary_color") or ""),
         accent_color=str(raw.get("accent_color") or ""),
         text_color=str(raw.get("text_color") or ""),
+        font_preset=str(raw.get("font_preset") or "auto"),
     ).normalized()
 
 
@@ -99,6 +109,8 @@ def _manual_brand(current: TenantBrandDNA, text: str) -> TenantBrandDNA:
         "цвет текста": "text_color",
         "стиль": "visual_keywords",
         "визуальный стиль": "visual_keywords",
+        "шрифт": "font_preset",
+        "шрифт по умолчанию": "font_preset",
     }
     for line in str(text or "").splitlines():
         if ":" not in line:
@@ -116,6 +128,32 @@ def _manual_brand(current: TenantBrandDNA, text: str) -> TenantBrandDNA:
             for item in values["visual_keywords"].replace(";", ",").split(",")
             if item.strip()
         )
+    font_aliases = {
+        "авто": "auto",
+        "автоматически": "auto",
+        "auto": "auto",
+        "современный": "modern",
+        "modern": "modern",
+        "строгий": "strict",
+        "strict": "strict",
+        "дружелюбный": "friendly",
+        "friendly": "friendly",
+        "премиальный": "premium",
+        "premium": "premium",
+        "редакционный": "editorial",
+        "editorial": "editorial",
+        "элегантный": "elegant",
+        "elegant": "elegant",
+        "жирный рекламный": "bold_ad",
+        "bold ad": "bold_ad",
+        "bold_ad": "bold_ad",
+    }
+    font_preset = current.font_preset
+    if "font_preset" in values:
+        raw_font = " ".join(values["font_preset"].casefold().split())
+        font_preset = normalize_editable_ad_font_preset(
+            font_aliases.get(raw_font, raw_font)
+        )
     return TenantBrandDNA(
         business_id=current.business_id,
         display_name=values.get("display_name", current.display_name),
@@ -127,6 +165,7 @@ def _manual_brand(current: TenantBrandDNA, text: str) -> TenantBrandDNA:
         primary_color=values.get("primary_color", current.primary_color),
         accent_color=values.get("accent_color", current.accent_color),
         text_color=values.get("text_color", current.text_color),
+        font_preset=font_preset,
     ).normalized()
 
 
@@ -240,6 +279,7 @@ async def ask_manual_brand(callback: CallbackQuery, state: FSMContext) -> None:
         "Основной цвет: #172033\n"
         "Акцент: #E9C46A\n"
         "Цвет текста: #FFFFFF\n"
+        "Шрифт: премиальный\n"
         "Стиль: calm, editorial, human\n\n"
         "Сначала покажу результат; сохранение будет отдельной кнопкой."
     )
