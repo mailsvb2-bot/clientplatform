@@ -1242,6 +1242,59 @@ def test_editable_font_preset_is_validated_and_reaches_render_composition() -> N
 
 
 @pytest.mark.asyncio
+async def test_editable_font_controls_fail_closed_for_stale_and_invalid_state(monkeypatch) -> None:
+    stale_state = _State(_goal_data())
+    stale = _goal_callback("cpo:editfont:business-token")
+    await goal.choose_editable_font(stale, stale_state)
+    assert stale.answer.await_args.args[0] == "Редактируемый макет уже недоступен"
+    assert stale.answer.await_args.kwargs["show_alert"] is True
+
+    malformed = _goal_callback("cpo:editfontset")
+    await goal.set_editable_font(malformed, _State(_goal_data()))
+    assert malformed.answer.await_args.args[0] == "Кнопка устарела"
+    assert malformed.answer.await_args.kwargs["show_alert"] is True
+
+    invalid = _goal_callback("cpo:editfontset:comic:business-token")
+    await goal.set_editable_font(invalid, _State(_goal_data()))
+    assert invalid.answer.await_args.args[0] == "Редактируемый макет уже недоступен"
+    assert invalid.answer.await_args.kwargs["show_alert"] is True
+
+
+@pytest.mark.asyncio
+async def test_editable_font_controls_surface_load_and_update_failures(monkeypatch) -> None:
+    project = _project()
+    data = {
+        **_goal_data(),
+        "editable_ad_project_id": project.id,
+        "editable_font_preset": project.font_preset,
+    }
+    state = _State(data)
+    actor = SimpleNamespace(business_id=project.business_id)
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(goal.control, "_actor", AsyncMock(return_value=actor))
+
+    monkeypatch.setattr(
+        goal,
+        "get_editable_ad_project",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError("missing")),
+    )
+    choose = _goal_callback("cpo:editfont:business-token")
+    await goal.choose_editable_font(choose, state)
+    assert choose.answer.await_args.args[0] == "Не удалось открыть выбор шрифта"
+    assert choose.answer.await_args.kwargs["show_alert"] is True
+
+    monkeypatch.setattr(
+        goal,
+        "update_editable_ad_composition",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError("invalid")),
+    )
+    selected = _goal_callback("cpo:editfontset:premium:business-token")
+    await goal.set_editable_font(selected, state)
+    assert selected.answer.await_args.args[0] == "Не удалось изменить шрифт"
+    assert selected.answer.await_args.kwargs["show_alert"] is True
+
+
+@pytest.mark.asyncio
 async def test_editable_layout_toggle_and_failure_paths(monkeypatch) -> None:
     project = _project()
     actor = SimpleNamespace(business_id=project.business_id)
