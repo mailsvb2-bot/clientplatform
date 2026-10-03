@@ -13,7 +13,7 @@ import re
 from .models import CreativeBrief
 
 
-PROMPT_ADAPTER_VERSION = 10
+PROMPT_ADAPTER_VERSION = 11
 
 _RUNWAY_PROMPT_LIMIT = 1000
 _YANDEX_PROMPT_LIMIT = 500
@@ -216,6 +216,90 @@ def _compiled_owner_request(lines: tuple[str, ...]) -> str:
         if value.endswith('"'):
             return value[:-1].strip()
     return ""
+
+
+def _compiled_scene_direction_cue(lines: tuple[str, ...]) -> str:
+    for line in lines:
+        folded = line.casefold()
+        if not folded.startswith("selected presentation direction"):
+            continue
+        value = line.split(":", 1)[-1].strip()
+        lower = value.casefold()
+        if "left-to-right" in lower or "narrative progression" in lower:
+            return "последовательная история слева направо"
+        if "cinematic" in lower:
+            return "кинематографичная постановка"
+        if "editorial" in lower:
+            return "чистая редакционная композиция"
+        if "focused" in lower or "uncluttered" in lower:
+            return "минимум лишнего, сильный фокус на главном"
+        if "semantic readability" in lower or "one glance" in lower:
+            return "максимально ясная сюжетная композиция"
+        return " ".join(value.split())[:120].rstrip(" ,;:.")
+    return ""
+
+
+def _scene_contract_yandex_parts(
+    brief: CreativeBrief,
+) -> tuple[str, tuple[str, ...]]:
+    value = brief.scene_contract
+    if not isinstance(value, dict) or value.get("version") != 1:
+        return "", ()
+
+    topology = str(value.get("topology") or "").strip().lower()
+    subject = " ".join(str(value.get("primary_subject") or "").split()).strip()[:120]
+
+    def items(name: str, *, limit: int = 3) -> tuple[str, ...]:
+        raw = value.get(name)
+        if not isinstance(raw, list):
+            return ()
+        out: list[str] = []
+        for item in raw:
+            token = " ".join(str(item or "").split()).strip()
+            if token and token not in out:
+                out.append(token[:120])
+            if len(out) >= limit:
+                break
+        return tuple(out)
+
+    opening = items("initial_state")
+    actions = items("actions")
+    transition = items("transition")
+    final = items("final_state")
+    evidence = items("required_evidence", limit=2)
+    cause = " ".join(str(value.get("cause") or "").split()).strip()[:120]
+    cues: list[str] = []
+
+    if topology == "transformation":
+        start = ", ".join(opening) or "исходное состояние"
+        middle_parts = [*actions]
+        if cause and cause not in middle_parts:
+            middle_parts.append(cause)
+        middle_parts.extend(item for item in transition if item not in middle_parts)
+        middle = ", ".join(middle_parts) or "видимая причина и постепенное изменение"
+        end = ", ".join(final) or "запрошенное финальное состояние"
+        cues.append(
+            "Один и тот же главный объект, три стадии без подписей: "
+            f"сначала {start}; затем {middle}; финал {end}."
+        )
+    elif topology == "replacement":
+        cues.append(
+            "Покажи замену в том же окружении: исходный объект, само событие замены "
+            "и физически правдоподобный результат."
+        )
+    elif topology == "sequence":
+        detail = ", ".join(actions) or "запрошенные действия"
+        cues.append("Последовательность ясно читается по порядку: " + detail + ".")
+    elif topology == "comparison":
+        cues.append("Сравнение двух запрошенных состояний/объектов читается сразу.")
+    elif topology == "action":
+        detail = ", ".join(actions)
+        if detail:
+            cues.append("Главное действие явно видно: " + detail + ".")
+
+    if evidence:
+        cues.append("Обязательно видно: " + ", ".join(evidence) + ".")
+    return subject, tuple(cues)
 
 
 def _compiled_style_directives(lines: tuple[str, ...]) -> tuple[str, ...]:
@@ -794,6 +878,7 @@ def _bounded_yandex_prompt(
     stage_priority = any(
         cue.startswith("Один герой, три стадии")
         or cue.startswith("Три сцены")
+        or cue.startswith("Один и тот же главный объект, три стадии")
         for cue in semantic_cues
     )
     normalized_scene_head = " ".join(str(scene_head or "").split()).strip()
@@ -884,13 +969,28 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
         return replace(brief, prompt=prompt)
 
     extras: list[str] = []
-    semantic_cues = _compiled_semantic_visual_cues(lines, kind=brief.kind)
-    style_cues = _compiled_style_cues(lines)
+    contract_head, contract_cues = _scene_contract_yandex_parts(brief)
+    semantic_cues = tuple(
+        dict.fromkeys(
+            (*contract_cues, *_compiled_semantic_visual_cues(lines, kind=brief.kind))
+        )
+    )
+    direction_cue = _compiled_scene_direction_cue(lines)
+    style_cues = tuple(
+        dict.fromkeys(
+            ((direction_cue,) if direction_cue else ())
+            + _compiled_style_cues(lines)
+        )
+    )
     folded = tuple(line.casefold() for line in lines)
-    if any(line.startswith("the transformation is mandatory") for line in folded):
-        # The semantic cue owns staging. Keep the scene head natural so internal
-        # BEFORE/ACTION/AFTER meta-labels can never leak into generated pixels,
-        # including frozen compiler-v2/v3/v4 receipts.
+    if contract_head:
+        # Compiler v6+: the bounded scene contract is the provider-facing source of
+        # truth. It protects the actual subject from being clipped by Alice's
+        # 500-character ceiling while the full owner request remains frozen for QA.
+        scene_head = contract_head
+    elif any(line.startswith("the transformation is mandatory") for line in folded):
+        # Legacy compiler receipts keep the natural owner request and never expose
+        # internal BEFORE/ACTION/AFTER labels to generated pixels.
         scene_head = owner_request
     elif any(
         line.startswith("treat object replacement as a constrained")
