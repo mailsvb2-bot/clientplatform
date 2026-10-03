@@ -282,28 +282,34 @@ def _compiled_style_cues(lines: tuple[str, ...]) -> tuple[str, ...]:
     return ("Стиль: " + "; ".join(dict.fromkeys(selected)) + ".",)
 
 
-_TRANSFORMATION_TARGET_RE = re.compile(
+_TRANSFORMATION_BECOMES_RE = re.compile(
     r"(?:\bстанов\w*|\bпревращ\w*\s+в\b|\bbecomes?\b|"
     r"\bturns?\s+into\b|\btransforms?\s+into\b)\s+"
     r"([^.!?;]{1,180})",
     re.IGNORECASE,
 )
-
-_TRANSFORMATION_FOLLOWUP_ACTION_RE = re.compile(
-    r"\s+(?:и|а|затем|потом|then|and)\s+(?="
-    r"(?:обнима\w*|слуша\w*|смотр\w*|чит\w*|использу\w*|пользу\w*|"
-    r"держ\w*|нес[её]\w*|куша\w*|пь[её]\w*|беж\w*|ид[её]т\b|"
-    r"танцу\w*|улыба\w*|плач\w*|говор\w*|пиш\w*|рису\w*|"
-    r"работа(?:ет|ют)\w*|игра(?:ет|ют)\w*|открыва\w*|закрыва\w*|"
-    r"мо[её]т\w*|чинит\w*|ремонтиру\w*|готовит\w*|едет\b|летит\b|"
-    r"hugs?\b|listens?\b|watch(?:es)?\b|reads?\b|uses?\b|holds?\b|"
-    r"eats?\b|drinks?\b|runs?\b|walks?\b|dances?\b|smiles?\b|"
-    r"cries?\b|speaks?\b|writes?\b|draws?\b|works?\b|plays?\b|"
-    r"opens?\b|closes?\b|washes?\b|repairs?\b|cooks?\b|drives?\b|flies?\b)"
-    r")",
+_TRANSFORMATION_FROM_TO_PATTERNS = (
+    re.compile(
+        r"\b(?:меня\w*|изменя\w*)\b[^.!?;]{0,60}?\bиз\s+"
+        r"([^.!?;]{1,100}?)\s+\bв\s+([^.!?;]{1,120})",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:меня\w*|изменя\w*)\b[^.!?;]{0,60}?\bс\s+"
+        r"([^.!?;]{1,100}?)\s+\bна\s+([^.!?;]{1,120})",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bchanges?\s+from\s+([^.!?;]{1,100}?)\s+to\s+"
+        r"([^.!?;]{1,120})",
+        re.IGNORECASE,
+    ),
+)
+_STATE_CONNECTOR_RE = re.compile(
+    r"^(?:[\s,/]*(?:(?:и|and|also|очень|более|намного|явно|"
+    r"гораздо|ещ[её]|very|more|much|clearly)\b[\s,/]*)*)$",
     re.IGNORECASE,
 )
-
 
 _STATE_EVIDENCE_RULES = (
     (
@@ -360,32 +366,92 @@ _STATE_EVIDENCE_RULES = (
     ),
 )
 
-def _state_evidence(text: str, *, limit: int = 3) -> tuple[str, ...]:
-    selected: list[str] = []
+
+def _state_matches(text: str) -> list[tuple[int, int, str]]:
     value = str(text or "")
+    matches: list[tuple[int, int, str]] = []
     for pattern, evidence in _STATE_EVIDENCE_RULES:
-        if pattern.search(value):
-            selected.append(evidence)
+        for match in pattern.finditer(value):
+            matches.append((match.start(), match.end(), evidence))
+    matches.sort(key=lambda item: (item[0], item[1]))
+    return matches
+
+
+def _leading_state_evidence(text: str, *, limit: int = 3) -> tuple[str, ...]:
+    value = str(text or "")
+    matches = _state_matches(value)
+    if not matches:
+        return ()
+
+    selected: list[str] = []
+    cursor = 0
+    for start, end, evidence in matches:
+        gap = value[cursor:start]
+        if not _STATE_CONNECTOR_RE.fullmatch(gap):
+            if selected:
+                break
+            return ()
+        selected.append(evidence)
+        cursor = end
         if len(selected) >= limit:
             break
     return tuple(dict.fromkeys(selected))
+
+
+def _trailing_state_evidence(text: str, *, limit: int = 2) -> tuple[str, ...]:
+    value = str(text or "")
+    matches = _state_matches(value)
+    if not matches:
+        return ()
+
+    cluster: list[tuple[int, int, str]] = [matches[-1]]
+    for item in reversed(matches[:-1]):
+        next_item = cluster[-1]
+        gap = value[item[1] : next_item[0]]
+        if not _STATE_CONNECTOR_RE.fullmatch(gap):
+            break
+        cluster.append(item)
+        if len(cluster) >= limit:
+            break
+    cluster.reverse()
+    return tuple(dict.fromkeys(item[2] for item in cluster))
+
+
+def _parsed_transformation_evidence(
+    owner_request: str,
+) -> tuple[tuple[str, ...], tuple[str, ...]] | None:
+    request = " ".join(str(owner_request or "").split()).strip()
+
+    for pattern in _TRANSFORMATION_FROM_TO_PATTERNS:
+        match = pattern.search(request)
+        if not match:
+            continue
+        initial = _leading_state_evidence(match.group(1), limit=2)
+        final = _leading_state_evidence(match.group(2), limit=3)
+        if final:
+            return initial, final
+        return None
+
+    match = _TRANSFORMATION_BECOMES_RE.search(request)
+    if not match:
+        return None
+    final = _leading_state_evidence(match.group(1), limit=3)
+    if not final:
+        return None
+    initial = _trailing_state_evidence(request[: match.start()], limit=2)
+    return initial, final
 
 
 def _detailed_transformation_stage_cue(
     owner_request: str,
     *,
     listening: bool,
-) -> str:
-    request = " ".join(str(owner_request or "").split()).strip()
-    match = _TRANSFORMATION_TARGET_RE.search(request)
-    initial_text = request[: match.start()] if match else ""
-    target_text = match.group(1).strip() if match else ""
-    followup = _TRANSFORMATION_FOLLOWUP_ACTION_RE.search(target_text)
-    if followup:
-        target_text = target_text[: followup.start()].rstrip(" ,;:-")
-
-    initial_evidence = _state_evidence(initial_text, limit=2)
-    final_evidence = _state_evidence(target_text, limit=3)
+    allow_labels: bool,
+) -> str | None:
+    parsed = _parsed_transformation_evidence(owner_request)
+    if parsed is None:
+        return None
+    initial_evidence, final_evidence = parsed
     opening = (
         "; ".join(initial_evidence)
         if initial_evidence
@@ -398,13 +464,15 @@ def _detailed_transformation_stage_cue(
         )
     else:
         middle = "видима причина/действие и первые признаки изменения"
-    final = (
-        "; ".join(final_evidence)
-        if final_evidence
-        else "запрошенный итог зримо отличается от начала"
+    final = "; ".join(final_evidence)
+    prefix = (
+        "Три сцены, один и тот же субъект: "
+        if allow_labels
+        else "Три сцены без подписей, один и тот же субъект: "
     )
     return (
-        "Три сцены без подписей, один и тот же субъект: сначала — "
+        prefix
+        + "сначала — "
         + opening
         + "; затем — "
         + middle
@@ -438,6 +506,7 @@ def _compiled_semantic_visual_cues(
     detailed_stages = has("transformation stage detail")
     visible_state = has("visible-state translation")
     listening = has("if the subject is listening")
+    explicit_text = has("readable text is explicitly part")
     owner_request = _compiled_owner_request(lines)
 
     # Highest priority: one compact cue carries the state change and, when present,
@@ -450,12 +519,33 @@ def _compiled_semantic_visual_cues(
                 "причина/действие → ясный финал."
             )
         elif detailed_stages and owner_request:
-            cues.append(
-                _detailed_transformation_stage_cue(
-                    owner_request,
-                    listening=listening,
-                )
+            detailed_cue = _detailed_transformation_stage_cue(
+                owner_request,
+                listening=listening,
+                allow_labels=explicit_text,
             )
+            if detailed_cue:
+                cues.append(detailed_cue)
+            elif listening:
+                suffix = (
+                    "; ПОСЛЕ заметно меняется по всем указанным признакам."
+                    if visible_state
+                    else "; не один финальный портрет."
+                )
+                cues.append(
+                    "Сториборд в одном кадре: тот же герой ДО → Слушает аудио "
+                    "(видны наушники, колонка или устройство) → ПОСЛЕ" + suffix
+                )
+            else:
+                suffix = (
+                    "; ПОСЛЕ заметно меняется по всем указанным признакам."
+                    if visible_state
+                    else "; не один финальный портрет."
+                )
+                cues.append(
+                    "Сториборд в одном кадре: тот же герой ДО → видимая причина/действие "
+                    "→ ПОСЛЕ" + suffix
+                )
         elif listening:
             suffix = (
                 "; ПОСЛЕ заметно меняется по всем указанным признакам."
