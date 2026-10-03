@@ -909,6 +909,7 @@ async def _prepare_styled_generation(
     *,
     user_id: int,
     token: str,
+    scene_variant: VisualSceneVariant | None = None,
 ) -> None:
     data = await state.get_data()
     if not _style_session_matches(data, token):
@@ -923,6 +924,15 @@ async def _prepare_styled_generation(
         brand_context = str(data.get("creative_brand_context") or "")
         country_code = str(data.get("creative_country_code") or "")
         style = _style_intent_from_state(data)
+        scene_contract, planner_source, scene_variants = await _ensure_scene_variants(
+            state,
+            data,
+        )
+        selected_scene_variant = (
+            scene_variant
+            if scene_variant is not None
+            else recommended_scene_variant(scene_variants)
+        )
         actor = await control._actor(int(user_id), business_id)
         actor.assert_can_manage_promotions()
         freezer = (
@@ -935,6 +945,9 @@ async def _prepare_styled_generation(
             brand_context=brand_context,
             country_code=country_code,
             style_intent=style,
+            scene_contract=scene_contract,
+            scene_planner_source=planner_source,
+            scene_variant=selected_scene_variant,
         )
         receipt = await asyncio.to_thread(
             prepare_creative_generation,
@@ -1053,6 +1066,7 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
         reply_markup=control._keyboard(
             [
                 [("🤖 Сделать всё автоматически", f"cpc:st:go:{token}")],
+                [("🎬 Показать 5 вариантов", f"cpc:sv:show:{token}")],
                 [("🎨 Уточнить стиль", f"cpc:st:open:{token}")],
                 [
                     (
