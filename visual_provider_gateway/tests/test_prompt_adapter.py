@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from clientplatform.domain.visual_prompt_compiler import compile_visual_prompt
+from clientplatform.domain.visual_scene_contract import VisualSceneContract
 from clientplatform.domain.visual_style_intent import VisualStyleIntent
 from visual_provider_gateway import engine
 from visual_provider_gateway.models import CreativeBrief, CreativeJob
@@ -40,6 +41,91 @@ def _compiled_brief(*, kind: str = "image") -> CreativeBrief:
             "cropped important subject; readable advertising text baked into image"
         ),
     )
+
+
+def test_yandex_v11_compiles_scene_contract_before_verbose_prompt() -> None:
+    request = "ёж, который слушает ресурсное аудио и становится добрым и пушистым"
+    contract = VisualSceneContract(
+        version=1,
+        topology="transformation",
+        primary_subject="ёж",
+        initial_state=("колючий",),
+        actions=("слушает ресурсное аудио",),
+        cause="слушает ресурсное аудио",
+        transition=("становится",),
+        final_state=("добрым", "пушистым"),
+        explicit_text=(),
+        required_evidence=(
+            "same subject identity across stages",
+            "visible audio interaction",
+        ),
+        forbidden=("stage labels or arrows unless explicitly requested",),
+    )
+    compiled = compile_visual_prompt(
+        request=request,
+        kind="image",
+        scene_contract=contract,
+        scene_direction="Stage the immutable meaning cinematically.",
+        style_intent=VisualStyleIntent(realism="illustrative"),
+    )
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+        scene_contract=contract.to_mapping(),
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
+
+    assert len(adapted.prompt) <= 500
+    assert adapted.prompt.startswith("ёж")
+    assert "Один и тот же главный объект, три стадии без подписей" in adapted.prompt
+    assert "слушает ресурсное аудио" in adapted.prompt
+    assert "добрым" in adapted.prompt
+    assert "пушистым" in adapted.prompt
+    assert "кинематографичная постановка" in adapted.prompt
+    assert "BEFORE" not in adapted.prompt
+    assert "AFTER" not in adapted.prompt
+    assert "ДО →" not in adapted.prompt
+
+
+def test_yandex_scene_contract_is_generic_for_object_replacement() -> None:
+    request = "замени старую раковину на новую в той же ванной"
+    contract = VisualSceneContract(
+        version=1,
+        topology="replacement",
+        primary_subject="раковину",
+        initial_state=("старую раковину",),
+        actions=("замени",),
+        cause="",
+        transition=(),
+        final_state=("новую",),
+        explicit_text=(),
+        required_evidence=("same environment across replacement",),
+        forbidden=("unrelated room redesign",),
+    )
+    compiled = compile_visual_prompt(
+        request=request,
+        kind="image",
+        scene_contract=contract,
+    )
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+        scene_contract=contract.to_mapping(),
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
+
+    assert len(adapted.prompt) <= 500
+    assert adapted.prompt.startswith("раковину")
+    assert "Покажи замену в том же окружении" in adapted.prompt
+    assert "физически правдоподобный результат" in adapted.prompt
 
 
 def test_yandex_adapter_uses_natural_owner_description_without_compiler_meta() -> None:
@@ -711,7 +797,7 @@ def test_engine_applies_adapter_only_after_provider_selection(monkeypatch) -> No
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 10
+    assert result.provider_payload["prompt_adapter_version"] == 11
     assert "Owner request" not in captured["brief"].prompt
     assert "hedgehog listens to an audio session" in captured["brief"].prompt
 
@@ -832,7 +918,7 @@ def test_engine_applies_meaning_adapter_to_gigachat_fallback(monkeypatch) -> Non
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 10
+    assert result.provider_payload["prompt_adapter_version"] == 11
     prompt = captured["brief"].prompt
     assert prompt.startswith(
         "a prickly hedgehog listens to an audio session and becomes gentle"
