@@ -128,6 +128,7 @@ def test_short_prompt_enters_optional_style_step_before_any_paid_preparation(
     ]
     assert "🤖 Сделать всё автоматически" in labels
     assert "🎬 Показать 5 вариантов" in labels
+    assert "один текстовый AI-вызов" in text
 
 
 def test_receive_prompt_rejects_corrupt_creative_kind_before_actor_lookup(
@@ -413,7 +414,7 @@ def test_continue_freezes_selected_style_before_paid_confirmation(monkeypatch) -
     assert captured["style_intent"] == style
     prepare.assert_called_once()
     assert state.cleared is True
-    assert "Платный вызов начнётся только после кнопки ниже" in target.answer.await_args.args[0]
+    assert "Платная генерация картинки/видео начнётся только после кнопки ниже" in target.answer.await_args.args[0]
 
 
 def test_style_callbacks_are_state_local_in_creative_studio_safety(monkeypatch) -> None:
