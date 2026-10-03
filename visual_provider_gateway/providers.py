@@ -1220,6 +1220,42 @@ def _normalized_gateway_job(data: dict[str, Any], kind: str, *, provider: str, f
     )
 
 
+def _multipart_file(
+    *,
+    fields: dict[str, str],
+    file_field: str,
+    filename: str,
+    content_type: str,
+    data: bytes,
+) -> tuple[bytes, str]:
+    boundary = "----visualcreative-" + uuid.uuid4().hex
+    chunks: list[bytes] = []
+    for name, value in fields.items():
+        chunks.extend(
+            [
+                f"--{boundary}\r\n".encode(),
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(),
+                str(value).encode("utf-8"),
+                b"\r\n",
+            ]
+        )
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(filename or "image"))[:120]
+    chunks.extend(
+        [
+            f"--{boundary}\r\n".encode(),
+            (
+                f'Content-Disposition: form-data; name="{file_field}"; '
+                f'filename="{safe_name}"\r\n'
+            ).encode(),
+            f"Content-Type: {content_type}\r\n\r\n".encode(),
+            data,
+            b"\r\n",
+            f"--{boundary}--\r\n".encode(),
+        ]
+    )
+    return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
+
+
 def _multipart(fields: dict[str, str]) -> tuple[bytes, str]:
     boundary = "----visualcreative-" + uuid.uuid4().hex
     chunks: list[bytes] = []
