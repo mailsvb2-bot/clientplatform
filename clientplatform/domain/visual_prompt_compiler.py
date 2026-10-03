@@ -37,29 +37,24 @@ _OBJECT_REPLACEMENT_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
-_NON_OBJECT_CHANGE_RE = re.compile(
-    r"(?:"
-    r"\bцвет\w*|\bстил\w*|\bнастроен\w*|\bтон\w*|\bфон\w*|"
-    r"\bосвещен\w*|\bосвещён\w*|\bконтраст\w*|\bкомпозиц\w*|"
-    r"\bшрифт\w*|\bтекст\w*|\bракурс\w*|\bформат\w*|\bпалитр\w*|"
-    r"\батмосфер\w*|\bcolor\w*|\bstyle\w*|\bmood\w*|\btone\w*|"
-    r"\bbackground\w*|\blighting\w*|\bcontrast\w*|\bcomposition\w*|"
-    r"\bfont\w*|\btext\w*|\bangle\w*|\bformat\w*|\bpalette\w*"
-    r")",
-    re.IGNORECASE,
-)
-_PHYSICAL_REPLACEMENT_HINT_RE = re.compile(
-    r"(?:"
-    r"\bраковин\w*|\bмойк\w*|\bкран\w*|\bсмесител\w*|\bванн\w*|"
-    r"\bунитаз\w*|\bдуш\w*|\bдвер\w*|\bокн\w*|\bламп\w*|"
-    r"\bсветильник\w*|\bстол\w*|\bстул\w*|\bшкаф\w*|\bдиван\w*|"
-    r"\bкресл\w*|\bкроват\w*|\bмебел\w*|\bтехник\w*|\bприбор\w*|"
-    r"\bаппарат\w*|\bтелефон\w*|\bноутбук\w*|\bкомпьютер\w*|"
-    r"\bдвигател\w*|\bколес\w*|\bшин\w*|\bдетал\w*|\bузел\w*|"
-    r"\bsink\w*|\bfaucet\w*|\btoilet\w*|\bbathtub\w*|\bdoor\w*|"
-    r"\bwindow\w*|\blamp\w*|\btable\w*|\bchair\w*|\bcabinet\w*|"
-    r"\bsofa\w*|\bappliance\w*|\bdevice\w*|\bphone\w*|\blaptop\w*|"
-    r"\bcomputer\w*|\bengine\w*|\bwheel\w*|\btire\w*|\bpart\w*"
+_ABSTRACT_REPLACEMENT_TARGET_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:цвет|цвета|цвету|цветом|цвете)(?:\s+(?:фона|фон))?|"
+    r"(?:стиль|стиля|стилю|стилем|стиле)|"
+    r"(?:настроение|настроения|настроению|настроением|настроении)|"
+    r"(?:тон|тона|тону|тоном|тоне)|"
+    r"(?:фон|фона|фону|фоном|фоне)|"
+    r"(?:освещение|освещения|освещению|освещением|освещении)|"
+    r"(?:контраст|контраста|контрасту|контрастом|контрасте)|"
+    r"(?:композиция|композиции|композицию|композицией)|"
+    r"(?:шрифт|шрифта|шрифту|шрифтом|шрифте)|"
+    r"(?:текст|текста|тексту|текстом|тексте)|"
+    r"(?:ракурс|ракурса|ракурсу|ракурсом|ракурсе)|"
+    r"(?:формат|формата|формату|форматом|формате)|"
+    r"(?:палитра|палитры|палитру|палитрой)|"
+    r"(?:атмосфера|атмосферы|атмосферу|атмосферой)|"
+    r"(?:the\s+)?(?:visual\s+)?(?:color|style|mood|tone|background|lighting|"
+    r"contrast|composition|font|text|angle|format|palette)\b"
     r")",
     re.IGNORECASE,
 )
@@ -178,14 +173,18 @@ def _semantic_flags(request: str) -> tuple[str, ...]:
         ("portrait", _PORTRAIT_RE),
     )
     flags = [name for name, pattern in checks if pattern.search(request)]
-    replacement = bool(_OBJECT_REPLACEMENT_RE.search(request))
-    abstract_only_change = bool(_NON_OBJECT_CHANGE_RE.search(request)) and not bool(
-        _PHYSICAL_REPLACEMENT_HINT_RE.search(request)
+    replacement_matches = tuple(_OBJECT_REPLACEMENT_RE.finditer(request))
+    physical_replacement = any(
+        not _ABSTRACT_REPLACEMENT_TARGET_RE.match(request[match.end() :])
+        for match in replacement_matches
     )
-    if replacement and not abstract_only_change:
-        # Keep replacement semantics for physical-object scenes, while ordinary
-        # requests such as "change the mood/style/background color" stay in the
-        # style/scene path instead of receiving installation and hardware rules.
+    if physical_replacement:
+        # Classify the target governed by each replacement operator instead of using
+        # a finite object allowlist. This keeps arbitrary physical nouns (pipe, car,
+        # flower, street lamp, etc.) in replacement mode while "change the style",
+        # "background color replacement" and similar presentation edits stay out.
+        # In mixed requests, any physical replacement is preserved even if another
+        # clause also changes an abstract presentation property.
         insert_at = 1 if "transformation" in flags else 0
         flags.insert(insert_at, "object_replacement")
     # Descriptive words such as "calm" may refer only to visual style in a static
