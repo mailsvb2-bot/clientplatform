@@ -981,6 +981,7 @@ async def ask_editable_ad_confirmation(callback: CallbackQuery, state: FSMContex
             headline=str(data.get("creative_title") or ""),
             body=str(data.get("creative_body") or ""),
             brand=brand.render_brand(),
+            font_preset=brand.font_preset,
         )
     except (LookupError, ValueError, TenantPermissionDenied):
         await callback.answer("Не удалось открыть редактор рекламы", show_alert=True)
