@@ -145,10 +145,11 @@ def test_yandex_adapter_compiles_sink_replacement_as_complete_installation() -> 
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert adapted.prompt.startswith(
-        "Сохрани окружение; замени только указанный объект"
+        "Покажи именно событие замены, сохрани то же окружение."
     )
     assert "Замена раковины" in adapted.prompt
-    assert "сохрани окружение" in adapted.prompt
+    assert "монтаж нового объекта" in adapted.prompt or "до/после" in adapted.prompt
+    assert "не одиночный предмет" in adapted.prompt
     assert "физически рабочий" in adapted.prompt
     assert "органами управления" in adapted.prompt
     assert "Без читаемого текста" in adapted.prompt
