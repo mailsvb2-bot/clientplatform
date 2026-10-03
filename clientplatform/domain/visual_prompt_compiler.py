@@ -32,8 +32,8 @@ _TRANSFORMATION_RE = re.compile(
 )
 _OBJECT_REPLACEMENT_RE = re.compile(
     r"(?:"
-    r"\\bзамен\\w*|\\bпоменя\\w*|\\bсмен\\w*|"
-    r"\\breplac(?:e|es|ed|ing|ement)\\b|\\bswap(?:s|ped|ping)?\\b"
+    r"\bзамен\w*|\bпоменя\w*|\bсмен\w*|"
+    r"\breplac(?:e|es|ed|ing|ement)\b|\bswap(?:s|ped|ping)?\b"
     r")",
     re.IGNORECASE,
 )
