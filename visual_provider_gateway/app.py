@@ -24,6 +24,7 @@ class SemanticQAContractRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     version: int = Field(ge=1, le=1)
     kind: str = Field(pattern="^image$")
+    country_code: str = Field(default="", max_length=16, pattern=r"^[A-Za-z0-9_-]*$")
     owner_request: str = Field(min_length=1, max_length=1500)
     semantic_flags: list[str] = Field(default_factory=list, max_length=16)
 
