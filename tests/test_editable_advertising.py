@@ -90,6 +90,7 @@ def test_schema_has_metadata_only_editable_project() -> None:
             for row in conn.execute("PRAGMA table_info(editable_ad_projects)").fetchall()
         }
         assert "source_job_id" in columns
+        assert "font_preset" in columns
         assert "source_receipt_id" not in columns
         assert all("BLOB" not in declared for declared in columns.values())
     finally:
@@ -112,6 +113,8 @@ def test_editable_project_reentry_and_expiry_preserve_copy_without_paid_reset() 
         )
         assert project.status == EditableAdProjectStatus.DRAFT
         assert project.revision == 1
+        assert project.font_preset == "auto"
+        assert project.composition()["typography"] == {"preset": "auto"}
 
         ready = repo.bind_source(
             actor=actor,
@@ -250,6 +253,7 @@ def _project(*, status=EditableAdProjectStatus.SOURCE_READY) -> EditableAdProjec
         body="Текст",
         cta="Записаться",
         layout="lower_card",
+        font_preset="auto",
         brand_json='{"accent_color":"#E9C46A","primary_color":"#172033","text_color":"#FFFFFF"}',
         source_job_id="visual-job-1",
         status=status,
@@ -469,6 +473,14 @@ def test_goal_first_safety_allows_editor_callbacks_without_weakening_other_state
     assert interaction_safety._state_local_callback_allowed(
         "GoalFirstAutopilotState:customizing",
         "cpo:editgen:image:business-token",
+    )
+    assert interaction_safety._state_local_callback_allowed(
+        "GoalFirstAutopilotState:customizing",
+        "cpo:editfont:business-token",
+    )
+    assert interaction_safety._state_local_callback_allowed(
+        "GoalFirstAutopilotState:customizing",
+        "cpo:editfontset:premium:business-token",
     )
     assert interaction_safety._state_local_callback_allowed(
         "GoalFirstAutopilotState:waiting_editable_headline",
@@ -1131,6 +1143,58 @@ async def test_receive_editable_field_wrappers_delegate(monkeypatch) -> None:
         "body",
         "cta",
     ]
+
+
+@pytest.mark.asyncio
+async def test_editable_font_selector_and_update_do_not_start_new_ai_job(monkeypatch) -> None:
+    project = _project()
+    actor = SimpleNamespace(business_id=project.business_id)
+    state = _State(
+        {
+            **_goal_data(),
+            "editable_ad_project_id": project.id,
+        }
+    )
+    target = _goal_target()
+    choose = _goal_callback("cpo:editfont:business-token", target)
+
+    monkeypatch.setattr(goal.control, "_actor", AsyncMock(return_value=actor))
+    monkeypatch.setattr(goal.control, "_callback_message", lambda cb: cb.message)
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(goal, "get_editable_ad_project", lambda **_kwargs: project)
+
+    await goal.choose_editable_font(choose, state)
+
+    labels = [
+        button.text
+        for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert any("Автоматически" in label for label in labels)
+    assert any("Lato" in label for label in labels)
+    assert any("Noto Serif" in label for label in labels)
+
+    updated = replace(project, font_preset="premium", revision=4)
+    update = Mock(return_value=updated)
+    show = AsyncMock()
+    monkeypatch.setattr(goal, "update_editable_ad_composition", update)
+    monkeypatch.setattr(goal, "_show_editable_editor", show)
+    selected = _goal_callback("cpo:editfontset:premium:business-token", target)
+
+    await goal.set_editable_font(selected, state)
+
+    assert update.call_args.kwargs["font_preset"] == "premium"
+    assert state.data["editable_source_revision"] == 4
+    assert selected.answer.await_args.args[0] == "Шрифт изменён"
+    show.assert_awaited_once()
+
+
+def test_editable_font_preset_is_validated_and_reaches_render_composition() -> None:
+    project = replace(_project(), font_preset="elegant")
+    assert project.composition()["typography"] == {"preset": "elegant"}
+
+    with pytest.raises(ValueError, match="editable_ad_font_preset_invalid"):
+        replace(project, font_preset="comic").composition()
 
 
 @pytest.mark.asyncio
