@@ -86,7 +86,7 @@ def test_prepared_image_menu_discloses_semantic_qa_before_continue(
         country_code="RU",
     )
     active = SimpleNamespace(
-        id="receipt-id",
+        id="22222222-2222-4222-8222-222222222222",
         request_text=request,
         provider_payload_json=frozen,
         status=CreativeGenerationReceiptStatus.PREPARED,
