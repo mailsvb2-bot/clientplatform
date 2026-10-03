@@ -343,8 +343,8 @@ def test_gigachat_adapter_keeps_sink_replacement_physical_and_contextual() -> No
     assert "Замена раковины" in adapted.prompt
     assert "монтаж нового объекта" in adapted.prompt or "до/после" in adapted.prompt
     assert "не одиночный предмет" in adapted.prompt
-    assert "физически рабочий" in adapted.prompt
-    assert "управлением" in adapted.prompt
+    assert "физически правдоподобен" in adapted.prompt
+    assert "управление" in adapted.prompt
     assert "подключениями" in adapted.prompt
     assert "Без читаемого текста" in adapted.prompt
     assert len(adapted.prompt) <= 1800
