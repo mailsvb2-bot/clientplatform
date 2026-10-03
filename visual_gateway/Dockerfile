@@ -12,6 +12,12 @@ RUN apt-get update \
       fonts-lato \
       fonts-liberation2 \
       fonts-noto-core \
+ && test -f /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf \
+ && test -f /usr/share/fonts/truetype/lato/Lato-Bold.ttf \
+ && test -f /usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf \
+ && test -f /usr/share/fonts/truetype/liberation2/LiberationSerif-Bold.ttf \
+ && test -f /usr/share/fonts/truetype/noto/NotoSans-Regular.ttf \
+ && test -f /usr/share/fonts/truetype/noto/NotoSerif-Bold.ttf \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY visual_gateway/requirements.txt ./visual_gateway/requirements.txt
