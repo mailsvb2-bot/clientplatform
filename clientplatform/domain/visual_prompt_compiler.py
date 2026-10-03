@@ -686,12 +686,12 @@ def compile_visual_prompt(
             "Do not rely on readable text, labels, logos or captions to explain the "
             "scene. Communicate the idea visually; typography is handled separately."
         )
-        if brand:
-            directives.append(
-                "Names from business grounding are semantic context only. Never render "
-                "those names as signs, labels, logos, captions or decorative lettering "
-                "unless the owner explicitly requested that exact visible text."
-            )
+    if brand:
+        directives.append(
+            "Names from business grounding are semantic context only. Never render "
+            "those names as signs, labels, logos, captions or decorative lettering "
+            "unless the owner explicitly requested that exact name as visible text."
+        )
 
     prompt = "\n".join(f"{index + 1}. {item}" for index, item in enumerate(directives))
     if len(prompt) > _MAX_COMPILED_PROMPT_CHARS:

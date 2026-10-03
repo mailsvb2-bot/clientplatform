@@ -13,7 +13,7 @@ import re
 from .models import CreativeBrief
 
 
-PROMPT_ADAPTER_VERSION = 9
+PROMPT_ADAPTER_VERSION = 10
 
 _RUNWAY_PROMPT_LIMIT = 1000
 _YANDEX_PROMPT_LIMIT = 500
@@ -126,18 +126,50 @@ def _natural_safety_parts(brief: CreativeBrief) -> tuple[str, ...]:
         or "cropped important subject" in folded_negative
     ):
         parts.append("Главные объекты полностью в кадре.")
-    if (
+    explicit_text = "readable text is explicitly part" in folded_prompt
+    if explicit_text:
+        parts.append(
+            "Показывай только явно запрошенный текст; без других надписей или букв."
+        )
+    elif (
         "no readable text, letters, captions or ui" in folded_prompt
         or "readable advertising text baked into image" in folded_negative
     ):
         parts.append("Без читаемого текста и UI.")
-    if (
-        str(brief.brand_context or "").strip()
-        and "readable text is explicitly part" not in folded_prompt
-    ):
-        parts.append("Названия бренда, услуг и методов не печатать в кадре.")
+    if str(brief.brand_context or "").strip():
+        parts.append(
+            "Не печатай названия бренда/услуг/методов без явного запроса на это."
+        )
 
     return tuple(parts)
+
+
+def _yandex_safety_parts(brief: CreativeBrief) -> tuple[str, ...]:
+    """Compact ordered constraints for Alice's 500-char prompt.
+
+    Meaning and owner-selected style get first claim on the tiny provider budget.
+    The most semantically important anti-lettering rules come first so truncation
+    cannot keep decorative safeguards while dropping accidental-text protection.
+    """
+
+    natural = _natural_safety_parts(brief)
+    joined = " ".join(natural)
+    clauses: list[str] = []
+    if "только явно запрошенный текст" in joined.casefold():
+        clauses.append("Только запрошенный текст; без других надписей.")
+    elif "Без читаемого текста" in joined:
+        clauses.append("Без читаемого текста/UI.")
+    if "названия бренда/услуг/методов" in joined.casefold():
+        clauses.append("Названия бренда/услуг не печатать без явного запроса.")
+    if "Без водяных знаков" in joined and "Без выдуманных логотипов" in joined:
+        clauses.append("Без водяных знаков. Без выдуманных логотипов.")
+    elif "Без водяных знаков" in joined:
+        clauses.append("Без водяных знаков.")
+    elif "Без выдуманных логотипов" in joined:
+        clauses.append("Без выдуманных логотипов.")
+    if "полностью в кадре" in joined:
+        clauses.append("Главные объекты полностью в кадре.")
+    return tuple(clauses)
 
 
 def _natural_policy_parts(brief: CreativeBrief) -> tuple[str, ...]:
@@ -305,20 +337,68 @@ _TRANSFORMATION_FROM_TO_PATTERNS = (
         re.IGNORECASE,
     ),
 )
+_EXPLICIT_STAGE_PATTERNS = (
+    re.compile(
+        r"\b(?:сначала|вначале|first)\b\s*[:,—-]?\s*([^;]{1,320})",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:затем|потом|then)\b\s*[:,—-]?\s*([^;]{1,320})",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:в\s+финальн\w*(?:\s+стади\w*)?|в\s+конце|наконец|finally|at\s+the\s+end)"
+        r"\b\s*[:,—-]?\s*([^;.!?]{1,320})",
+        re.IGNORECASE,
+    ),
+)
 _STATE_CONNECTOR_RE = re.compile(
     r"^(?:[\s,/]*(?:(?:и|and|also|очень|более|намного|явно|"
     r"гораздо|ещ[её]|very|more|much|clearly)\b[\s,/]*)*)$",
     re.IGNORECASE,
 )
 
+_COMPACT_EXPLICIT_STAGE_EVIDENCE = {
+    "доброжелательный расслабленный взгляд": "доброжелательный взгляд",
+    "заметно более густой пушистый мех": "густой пушистый мех",
+    "напряжённая закрытая поза": "напряжённая поза",
+    "настороженный взгляд": "настороженный взгляд",
+    "расслабленная поза": "расслабленная поза",
+    "иглы или фактура заметно смягчаются": "иглы/фактура смягчаются",
+    "спокойный расслабленный взгляд": "спокойный взгляд",
+    "напряжённый взгляд и жёсткая поза": "сердитый взгляд, жёсткая поза",
+    "тревожный взгляд и заметное напряжение тела": "тревожный взгляд, напряжённая поза",
+    "радостное выражение, открытая поза": "радостный взгляд, открытая поза",
+    "опущенный взгляд и сдержанная закрытая поза": "опущенный взгляд, закрытая поза",
+    "явно колючая жёсткая фактура или иглы": "жёсткие колючие иглы",
+    "фактура визуально мягче": "фактура мягче",
+}
+
+
 _STATE_EVIDENCE_RULES = (
     (
         re.compile(r"(?:\bдобр\w*|\bkind\b|\bgentle\b)", re.IGNORECASE),
-        "мягкий доброжелательный взгляд, расслабленная поза",
+        "доброжелательный расслабленный взгляд",
+    ),
+    (
+        re.compile(r"(?:\bнапряж\w*|\btense\b)", re.IGNORECASE),
+        "напряжённая закрытая поза",
+    ),
+    (
+        re.compile(r"(?:\bнасторож\w*|\bwary\b|\bguarded\b)", re.IGNORECASE),
+        "настороженный взгляд",
+    ),
+    (
+        re.compile(r"(?:\bрасслаб\w*|\brelax\w*)", re.IGNORECASE),
+        "расслабленная поза",
+    ),
+    (
+        re.compile(r"(?:\bсмягч\w*|\bsoften\w*)", re.IGNORECASE),
+        "иглы или фактура заметно смягчаются",
     ),
     (
         re.compile(r"(?:\bпушист\w*|\bfluffy\b)", re.IGNORECASE),
-        "шерсть/мех заметно гуще и пушистее",
+        "заметно более густой пушистый мех",
     ),
     (
         re.compile(r"(?:\bмягк\w*|\bsoft\b)", re.IGNORECASE),
@@ -326,7 +406,7 @@ _STATE_EVIDENCE_RULES = (
     ),
     (
         re.compile(r"(?:\bспокойн\w*|\bcalm\b)", re.IGNORECASE),
-        "спокойный взгляд и расслабленная поза",
+        "спокойный расслабленный взгляд",
     ),
     (
         re.compile(r"(?:\bзл\w*|\bangry\b)", re.IGNORECASE),
@@ -338,7 +418,7 @@ _STATE_EVIDENCE_RULES = (
     ),
     (
         re.compile(r"(?:\bсчастлив\w*|\bhappy\b)", re.IGNORECASE),
-        "явно радостное выражение и открытая поза",
+        "радостное выражение, открытая поза",
     ),
     (
         re.compile(r"(?:\bгруст\w*|\bsad\b)", re.IGNORECASE),
@@ -417,6 +497,43 @@ def _trailing_state_evidence(text: str, *, limit: int = 2) -> tuple[str, ...]:
     return tuple(dict.fromkeys(item[2] for item in cluster))
 
 
+def _state_evidence_anywhere(text: str, *, limit: int = 3) -> tuple[str, ...]:
+    """Collect ordered concrete state evidence from an explicitly scoped stage."""
+
+    selected: list[str] = []
+    for _start, _end, evidence in _state_matches(text):
+        if evidence not in selected:
+            selected.append(evidence)
+        if len(selected) >= limit:
+            break
+    return tuple(selected)
+
+
+def _parsed_explicit_stage_evidence(
+    owner_request: str,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]] | None:
+    """Parse owner-authored сначала → затем → финал wording without copying labels.
+
+    The stage markers provide the scope, so state words from later secondary
+    subjects cannot leak into the transformed subject's earlier/final evidence.
+    """
+
+    request = " ".join(str(owner_request or "").split()).strip()
+    matches = tuple(pattern.search(request) for pattern in _EXPLICIT_STAGE_PATTERNS)
+    if any(match is None for match in matches):
+        return None
+    initial_match, middle_match, final_match = matches
+    assert initial_match is not None
+    assert middle_match is not None
+    assert final_match is not None
+    initial = _state_evidence_anywhere(initial_match.group(1), limit=3)
+    middle = _state_evidence_anywhere(middle_match.group(1), limit=3)
+    final = _state_evidence_anywhere(final_match.group(1), limit=3)
+    if not final:
+        return None
+    return initial, middle, final
+
+
 def _parsed_transformation_evidence(
     owner_request: str,
 ) -> tuple[tuple[str, ...], tuple[str, ...]] | None:
@@ -448,39 +565,60 @@ def _detailed_transformation_stage_cue(
     listening: bool,
     allow_labels: bool,
 ) -> str | None:
+    explicit_stages = _parsed_explicit_stage_evidence(owner_request)
     parsed = _parsed_transformation_evidence(owner_request)
-    if parsed is None:
+    if explicit_stages is None and parsed is None:
         return None
-    initial_evidence, final_evidence = parsed
-    opening = (
-        "; ".join(initial_evidence)
-        if initial_evidence
-        else "нейтральное начало без финальных признаков"
-    )
-    if listening:
-        middle = (
-            "явно слушает аудио в наушниках или через физическое устройство, "
-            "не абстрактный символ волны"
+
+    if explicit_stages is not None:
+        initial_raw, middle_raw, final_raw = explicit_stages
+        initial_evidence = tuple(
+            _COMPACT_EXPLICIT_STAGE_EVIDENCE.get(item, item)
+            for item in initial_raw
+        )
+        middle_evidence = tuple(
+            _COMPACT_EXPLICIT_STAGE_EVIDENCE.get(item, item)
+            for item in middle_raw
+        )
+        final_evidence = tuple(
+            _COMPACT_EXPLICIT_STAGE_EVIDENCE.get(item, item)
+            for item in final_raw
         )
     else:
-        middle = "видима причина/действие и первые признаки изменения"
-    final = "; ".join(final_evidence)
+        assert parsed is not None
+        initial_evidence, final_evidence = parsed
+        middle_evidence = ()
+
+    opening = ", ".join(initial_evidence) if initial_evidence else "обычный"
+    if listening:
+        middle = "слушает аудио в заметных наушниках"
+        if explicit_stages is None:
+            middle += ", не символом волны"
+        if middle_evidence:
+            middle += ", " + ", ".join(middle_evidence)
+        middle += ", и меняется"
+    else:
+        middle = (
+            ", ".join(middle_evidence)
+            if middle_evidence
+            else "видна причина/действие и первые признаки изменения"
+        )
+    final = ", ".join(final_evidence)
     prefix = (
-        "Три сцены, один и тот же субъект: "
+        "Один герой, три стадии: "
         if allow_labels
-        else "Три сцены без подписей, один и тот же субъект: "
+        else "Один герой, три стадии без подписей: "
     )
     return (
         prefix
-        + "сначала — "
+        + "сначала "
         + opening
-        + "; затем — "
+        + "; затем "
         + middle
-        + "; в финале — "
+        + "; финал — "
         + final
         + "."
     )
-
 
 def _compiled_semantic_visual_cues(
     lines: tuple[str, ...],
@@ -511,7 +649,8 @@ def _compiled_semantic_visual_cues(
 
     # Highest priority: one compact cue carries the state change and, when present,
     # its causal interaction. Compiler v5+ receives concrete stage descriptions;
-    # frozen older prompts keep the previous adapter contract unchanged.
+    # frozen older compiler prompts are normalized too, so internal stage labels
+    # cannot leak into newly submitted provider prompts.
     if transformation:
         if str(kind or "").strip().lower() == "video":
             cues.append(
@@ -539,24 +678,38 @@ def _compiled_semantic_visual_cues(
                     )
                 cues.append(fallback)
         elif listening:
-            suffix = (
-                "; ПОСЛЕ заметно меняется по всем указанным признакам."
+            prefix = (
+                "Один герой, три стадии: "
+                if explicit_text
+                else "Один герой, три стадии без подписей: "
+            )
+            final = (
+                "финал заметно отличается по всем указанным признакам."
                 if visible_state
-                else "; не один финальный портрет."
+                else "финал ясно отличается от начала."
             )
             cues.append(
-                "Сториборд в одном кадре: тот же герой ДО → Слушает аудио "
-                "(видны наушники, колонка или устройство) → ПОСЛЕ" + suffix
+                prefix
+                + "сначала исходное состояние; затем герой явно слушает аудио "
+                "через наушники/устройство и меняется; "
+                + final
             )
         else:
-            suffix = (
-                "; ПОСЛЕ заметно меняется по всем указанным признакам."
+            prefix = (
+                "Один герой, три стадии: "
+                if explicit_text
+                else "Один герой, три стадии без подписей: "
+            )
+            final = (
+                "финал заметно отличается по всем указанным признакам."
                 if visible_state
-                else "; не один финальный портрет."
+                else "финал ясно отличается от начала."
             )
             cues.append(
-                "Сториборд в одном кадре: тот же герой ДО → видимая причина/действие "
-                "→ ПОСЛЕ" + suffix
+                prefix
+                + "сначала исходное состояние; затем видна причина/действие "
+                "и изменение; "
+                + final
             )
     elif visible_state:
         cues.append(
@@ -635,15 +788,64 @@ def _bounded_yandex_prompt(
     brief: CreativeBrief,
     extras: tuple[str, ...] = (),
 ) -> str:
-    """Preserve owner meaning, explicit style and safety under Alice's hard limit."""
+    """Preserve owner meaning and style first under Alice's hard 500-char limit."""
 
-    safety = _natural_safety_parts(brief)
-    safety_block = _bounded_join(list(safety), limit=_YANDEX_PROMPT_LIMIT)
+    safety = _yandex_safety_parts(brief)
     stage_priority = any(
-        cue.startswith("Три сцены") for cue in semantic_cues
+        cue.startswith("Один герой, три стадии")
+        or cue.startswith("Три сцены")
+        for cue in semantic_cues
     )
-    style_block = _bounded_join(list(style_cues), limit=60 if stage_priority else 120)
-    minimum_scene_head = 90 if stage_priority else 180
+    normalized_scene_head = " ".join(str(scene_head or "").split()).strip()
+
+    if stage_priority:
+        # Transformation prompts are the failure-prone case: never let secondary
+        # safety/style bookkeeping truncate the final-state evidence. Keep a compact
+        # but useful style budget, reserve the first anti-lettering clauses, and let
+        # the owner scene use whatever remains.
+        bounded_semantics = _bounded_join(list(semantic_cues), limit=300)
+        style_block = _bounded_join(list(style_cues), limit=96)
+        # Reserve the whole compact safety block when it fits. Only in an
+        # impossible all-at-once 500-char case may the ordered tail be trimmed.
+        safety_reserve = _bounded_join(list(safety), limit=180)
+        reserved = (
+            len(bounded_semantics)
+            + len(style_block)
+            + len(safety_reserve)
+            + sum(
+                1
+                for block in (bounded_semantics, style_block, safety_reserve)
+                if block
+            )
+        )
+        scene_limit = max(40, _YANDEX_PROMPT_LIMIT - reserved)
+        if len(normalized_scene_head) <= scene_limit:
+            bounded_scene_head = normalized_scene_head
+        else:
+            # _bounded_join intentionally refuses tiny fragments. Here even a
+            # short natural subject anchor is semantically valuable (for example
+            # keeping "ёж" instead of leaving only generic "one hero" cues).
+            bounded_scene_head = (
+                normalized_scene_head[:scene_limit]
+                .rsplit(" ", 1)[0]
+                .rstrip(" ,;:.")
+            )
+            if not bounded_scene_head:
+                bounded_scene_head = normalized_scene_head[:scene_limit].rstrip()
+        core = [bounded_scene_head, bounded_semantics, style_block]
+        core = [part for part in core if part]
+        used = sum(len(part) for part in core) + max(0, len(core) - 1)
+        remaining = max(0, _YANDEX_PROMPT_LIMIT - used - (1 if safety else 0))
+        safety_block = _bounded_join(list(safety), limit=remaining)
+        return _bounded_join(
+            [*core, safety_block, *extras],
+            limit=_YANDEX_PROMPT_LIMIT,
+        )
+
+    safety_block = _bounded_join(list(safety), limit=_YANDEX_PROMPT_LIMIT)
+    style_block = _bounded_join(list(style_cues), limit=120)
+    minimum_scene_head = 180
+    scene_reserve = min(len(normalized_scene_head), minimum_scene_head)
     fixed_reserved = (
         len(safety_block)
         + len(style_block)
@@ -654,7 +856,7 @@ def _bounded_yandex_prompt(
         70,
         _YANDEX_PROMPT_LIMIT
         - fixed_reserved
-        - minimum_scene_head
+        - scene_reserve
         - 1,
     )
     bounded_semantics = _bounded_join(list(semantic_cues), limit=semantic_budget)
@@ -667,13 +869,12 @@ def _bounded_yandex_prompt(
         + len(bounded_semantics)
         + (1 if bounded_semantics else 0)
     )
-    scene_limit = max(minimum_scene_head, _YANDEX_PROMPT_LIMIT - reserved)
-    bounded_scene_head = _bounded_join([scene_head], limit=scene_limit)
+    scene_limit = max(scene_reserve, _YANDEX_PROMPT_LIMIT - reserved)
+    bounded_scene_head = _bounded_join([normalized_scene_head], limit=scene_limit)
     return _bounded_join(
         [bounded_scene_head, *semantic_parts, *style_parts, *safety, *extras],
         limit=_YANDEX_PROMPT_LIMIT,
     )
-
 
 def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
     lines = _compiled_directives(brief.prompt)
@@ -687,13 +888,10 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
     style_cues = _compiled_style_cues(lines)
     folded = tuple(line.casefold() for line in lines)
     if any(line.startswith("the transformation is mandatory") for line in folded):
-        if any(line.startswith("transformation stage detail") for line in folded):
-            scene_head = owner_request
-        else:
-            scene_head = (
-                "Сториборд в одном изображении: один и тот же герой повторён как "
-                "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ. " + owner_request
-            )
+        # The semantic cue owns staging. Keep the scene head natural so internal
+        # BEFORE/ACTION/AFTER meta-labels can never leak into generated pixels,
+        # including frozen compiler-v2/v3/v4 receipts.
+        scene_head = owner_request
     elif any(
         line.startswith("treat object replacement as a constrained")
         for line in folded
@@ -792,13 +990,7 @@ def _adapt_gigachat(brief: CreativeBrief) -> CreativeBrief:
     style_cues = _compiled_style_cues(lines)
     folded = tuple(line.casefold() for line in lines)
     if any(line.startswith("the transformation is mandatory") for line in folded):
-        if any(line.startswith("transformation stage detail") for line in folded):
-            scene_head = owner_request
-        else:
-            scene_head = (
-                "Сториборд в одном изображении: один и тот же герой повторён как "
-                "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ. " + owner_request
-            )
+        scene_head = owner_request
     elif any(
         line.startswith("treat object replacement as a constrained")
         for line in folded

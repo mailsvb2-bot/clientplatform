@@ -586,17 +586,43 @@ class VisualCreativeEngine:
         return job
 
 
+def _compiled_prompt_allows_readable_text(prompt: str) -> bool:
+    folded = " ".join(str(prompt or "").casefold().split())
+    return "readable text is explicitly part of the owner's concept" in folded
+
+
+def _is_compiled_visual_prompt(prompt: str) -> bool:
+    folded = " ".join(str(prompt or "").casefold().split())
+    return "owner request, preserve its meaning exactly:" in folded
+
+
 def _apply_visual_safety(brief: CreativeBrief) -> CreativeBrief:
-    """Presentation-only constraints; this function never chooses an offer/audience."""
+    """Presentation-only constraints; never contradict the frozen scene contract."""
     rules = [
         "No watermarks.",
         "Do not invent brand logos or certifications.",
         "Keep important subjects away from the outer 8 percent safe-area edges.",
     ]
-    if not _truthy("VISUAL_ALLOW_MODEL_TEXT", "0"):
-        rules.append("No readable text, letters, captions or UI in the generated pixels; leave clean negative space for real typography overlay.")
-    if brief.brand_context:
-        rules.append("Brand direction: " + brief.brand_context)
+    readable_text_allowed = (
+        _truthy("VISUAL_ALLOW_MODEL_TEXT", "0")
+        or _compiled_prompt_allows_readable_text(brief.prompt)
+    )
+    if not readable_text_allowed:
+        # Typography/copy-space is owned by the compiled style contract. Do not
+        # manufacture blank bands merely because generated text is forbidden.
+        rules.append(
+            "No readable text, letters, captions or UI in the generated pixels."
+        )
+    if brief.brand_context and not _is_compiled_visual_prompt(brief.prompt):
+        # Compiled ClientPlatform prompts already carry bounded business grounding
+        # plus exact rules for whether any wording may become visible. Re-appending
+        # raw brand context here used to make names look like requested lettering.
+        rules.append(
+            "Use the supplied brand context only for visual direction and factual "
+            "grounding. Do not render brand-context wording as visible text unless "
+            "the prompt explicitly requests that exact wording. Brand direction: "
+            + brief.brand_context
+        )
     prompt = brief.prompt.rstrip() + "\n\nProduction constraints: " + " ".join(rules)
     return replace(brief, prompt=prompt)
 

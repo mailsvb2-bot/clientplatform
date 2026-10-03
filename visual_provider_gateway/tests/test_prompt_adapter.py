@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from clientplatform.domain.visual_prompt_compiler import compile_visual_prompt
+from clientplatform.domain.visual_style_intent import VisualStyleIntent
 from visual_provider_gateway import engine
 from visual_provider_gateway.models import CreativeBrief, CreativeJob
 from visual_provider_gateway.prompt_adapter import adapt_visual_brief_for_provider
@@ -45,10 +46,11 @@ def test_yandex_adapter_uses_natural_owner_description_without_compiler_meta() -
     adapted = adapt_visual_brief_for_provider(_compiled_brief(), provider="yandexart")
 
     assert adapted.prompt.startswith(
-        "Сториборд в одном изображении: один и тот же герой повторён как "
-        "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ."
+        "a prickly hedgehog listens to an audio session and becomes gentle"
     )
-    assert "a prickly hedgehog listens to an audio session and becomes gentle" in adapted.prompt
+    assert "Один герой, три стадии без подписей" in adapted.prompt
+    assert "ДО →" not in adapted.prompt
+    assert "ДЕЙСТВИЕ/ПРИЧИНА" not in adapted.prompt
     assert "Owner request" not in adapted.prompt
     assert "Render the owner's requested scene faithfully" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
@@ -82,17 +84,108 @@ def test_yandex_adapter_expands_resource_audio_transformation_into_visual_stages
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert adapted.prompt.startswith(request)
-    assert "Три сцены без подписей" in adapted.prompt
-    assert "нейтральное начало без финальных признаков" in adapted.prompt
-    assert "явно слушает аудио" in adapted.prompt
+    assert "Один герой, три стадии без подписей" in adapted.prompt
+    assert "сначала обычный" in adapted.prompt
+    assert "слушает аудио" in adapted.prompt
     assert "наушниках" in adapted.prompt
-    assert "не абстрактный символ волны" in adapted.prompt
-    assert "мягкий доброжелательный взгляд" in adapted.prompt
-    assert "шерсть/мех заметно гуще и пушистее" in adapted.prompt
+    assert "не символом волны" in adapted.prompt
+    assert "доброжелательный расслабленный взгляд" in adapted.prompt
+    assert "заметно более густой пушистый мех" in adapted.prompt
     assert "ДО →" not in adapted.prompt
     assert "Owner request" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
     assert len(adapted.prompt) <= 500
+
+def test_yandex_preserves_owner_authored_three_stage_transformation_in_auto_and_artistic_modes() -> None:
+    request = (
+        "ёж во время прослушивания ресурсного аудио постепенно меняется: "
+        "сначала он напряжённый, настороженный и очень колючий; "
+        "затем, продолжая слушать в заметных наушниках, его выражение становится "
+        "спокойнее, поза расслабляется, иголки постепенно смягчаются; "
+        "в финальной стадии это тот же узнаваемый ёж, но уже доброжелательный, "
+        "расслабленный и заметно пушистый. Трансформация должна визуально читаться "
+        "слева направо как непрерывное изменение одного персонажа, а не три разных ежа."
+    )
+    styles = (
+        None,
+        VisualStyleIntent(
+            quick_styles="warm_friendly,premium,illustrative",
+        ),
+    )
+
+    for style in styles:
+        compiled = compile_visual_prompt(
+            request=request,
+            kind="image",
+            style_intent=style,
+        )
+        brief = CreativeBrief(
+            kind="image",
+            prompt=compiled.prompt,
+            country_code="RU",
+            aspect_ratio="4:5",
+            negative_prompt=compiled.negative_prompt,
+        )
+
+        adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
+
+        assert len(adapted.prompt) <= 500
+        assert adapted.prompt.startswith("ёж во время прослушивания ресурсного")
+        assert "Один герой, три стадии без подписей" in adapted.prompt
+        assert "напряжённая поза" in adapted.prompt
+        assert "настороженный взгляд" in adapted.prompt
+        assert "жёсткие колючие иглы" in adapted.prompt
+        assert "слушает аудио в заметных наушниках" in adapted.prompt
+        assert "спокойный взгляд" in adapted.prompt
+        assert "иглы/фактура смягчаются" in adapted.prompt
+        assert "доброжелательный взгляд" in adapted.prompt
+        assert "густой пушистый мех" in adapted.prompt
+        assert "ДО →" not in adapted.prompt
+        assert "ДЕЙСТВИЕ" not in adapted.prompt
+        assert "ПРИЧИНА" not in adapted.prompt
+
+        if style is not None:
+            assert "тёплый дружелюбный" in adapted.prompt
+            assert "премиальный" in adapted.prompt
+            assert "художественный" in adapted.prompt
+
+
+def test_yandex_stage_prompt_keeps_final_state_and_artistic_style_with_brand_context() -> None:
+    request = (
+        "ёж, который слушает ресурсные аудио трансы "
+        "и становится добрым и пушистым"
+    )
+    brand_context = "Example Wellness: guided resource audio."
+    compiled = compile_visual_prompt(
+        request=request,
+        kind="image",
+        brand_context=brand_context,
+        style_intent=VisualStyleIntent(
+            quick_styles="warm_friendly,premium,illustrative",
+        ),
+    )
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+        brand_context=brand_context,
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
+
+    assert len(adapted.prompt) <= 500
+    assert adapted.prompt.startswith(request)
+    assert "Один герой, три стадии без подписей" in adapted.prompt
+    assert "слушает аудио в заметных наушниках" in adapted.prompt
+    assert "доброжелательный расслабленный взгляд" in adapted.prompt
+    assert "заметно более густой пушистый мех" in adapted.prompt
+    assert "тёплый дружелюбный" in adapted.prompt
+    assert "премиальный" in adapted.prompt
+    assert "художественный" in adapted.prompt
+    assert "Названия бренда/услуг не печатать без явного запроса" in adapted.prompt
+
 
 def test_transformation_final_state_does_not_absorb_another_subject_state() -> None:
     request = "злой ёж становится добрым и обнимает грустного друга"
@@ -108,7 +201,7 @@ def test_transformation_final_state_does_not_absorb_another_subject_state() -> N
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert "напряжённый взгляд и жёсткая поза" in adapted.prompt
-    assert "мягкий доброжелательный взгляд" in adapted.prompt
+    assert "доброжелательный расслабленный взгляд" in adapted.prompt
     assert "опущенный взгляд и сдержанная закрытая поза" not in adapted.prompt
     assert len(adapted.prompt) <= 500
 
@@ -127,8 +220,8 @@ def test_from_to_transformation_preserves_explicit_initial_and_final_states() ->
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert "напряжённый взгляд и жёсткая поза" in adapted.prompt
-    assert "мягкий доброжелательный взгляд" in adapted.prompt
-    assert "нейтральное начало без финальных признаков" not in adapted.prompt
+    assert "доброжелательный расслабленный взгляд" in adapted.prompt
+    assert "сначала обычный" not in adapted.prompt
     assert len(adapted.prompt) <= 500
 
 
@@ -146,7 +239,7 @@ def test_transformation_state_scope_stops_before_secondary_subject_without_actio
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert "напряжённый взгляд и жёсткая поза" in adapted.prompt
-    assert "мягкий доброжелательный взгляд" in adapted.prompt
+    assert "доброжелательный расслабленный взгляд" in adapted.prompt
     assert "опущенный взгляд и сдержанная закрытая поза" not in adapted.prompt
     assert len(adapted.prompt) <= 500
 
@@ -165,7 +258,7 @@ def test_unparsed_transformation_does_not_invent_neutral_or_final_state() -> Non
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert "исходное и итоговое состояния бери только из запроса" in adapted.prompt
-    assert "нейтральное начало без финальных признаков" not in adapted.prompt
+    assert "сначала обычный" not in adapted.prompt
     assert len(adapted.prompt) <= 500
 
 
@@ -183,9 +276,10 @@ def test_explicit_before_after_labels_are_not_suppressed_by_provider_cue() -> No
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert adapted.prompt.startswith(request)
-    assert "Три сцены, один и тот же субъект" in adapted.prompt
-    assert "Три сцены без подписей" not in adapted.prompt
+    assert "Один герой, три стадии" in adapted.prompt
+    assert "Один герой, три стадии без подписей" not in adapted.prompt
     assert "Без читаемого текста" not in adapted.prompt
+    assert "Только запрошенный текст; без других надписей" in adapted.prompt
     assert len(adapted.prompt) <= 500
 
 
@@ -301,8 +395,9 @@ def test_yandex_adapter_preserves_multiple_selected_styles_with_semantics() -> N
 
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
-    assert "Слушает аудио" in adapted.prompt
-    assert "ДО" in adapted.prompt
+    assert "явно слушает аудио" in adapted.prompt
+    assert "Один герой, три стадии без подписей" in adapted.prompt
+    assert "ДО →" not in adapted.prompt
     assert "Стиль:" in adapted.prompt
     assert "тёплый дружелюбный" in adapted.prompt
     assert "премиальный" in adapted.prompt
@@ -360,12 +455,11 @@ def test_yandex_adapter_keeps_all_safety_clauses_for_long_owner_request() -> Non
 
     assert len(adapted.prompt) <= 500
     assert adapted.prompt.startswith(
-        "Сториборд в одном изображении: один и тот же герой повторён как "
-        "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ."
+        "a hedgehog listens to a guided audio wellness session"
     )
-    assert "a hedgehog listens to a guided audio wellness session" in adapted.prompt
-    assert "Слушает аудио" in adapted.prompt
-    assert "ДО" in adapted.prompt
+    assert "Один герой, три стадии без подписей" in adapted.prompt
+    assert "явно слушает аудио" in adapted.prompt
+    assert "ДО →" not in adapted.prompt
     assert "Без водяных знаков" in adapted.prompt
     assert "Без выдуманных логотипов" in adapted.prompt
     assert "полностью в кадре" in adapted.prompt
@@ -407,12 +501,12 @@ def test_gigachat_adapter_preserves_listening_transformation_without_compiler_me
     adapted = adapt_visual_brief_for_provider(brief, provider="gigachat")
 
     assert adapted.prompt.startswith(request)
-    assert "Три сцены без подписей" in adapted.prompt
-    assert "нейтральное начало без финальных признаков" in adapted.prompt
-    assert "явно слушает аудио" in adapted.prompt
-    assert "не абстрактный символ волны" in adapted.prompt
-    assert "мягкий доброжелательный взгляд" in adapted.prompt
-    assert "шерсть/мех заметно гуще и пушистее" in adapted.prompt
+    assert "Один герой, три стадии без подписей" in adapted.prompt
+    assert "сначала обычный" in adapted.prompt
+    assert "слушает аудио" in adapted.prompt
+    assert "не символом волны" in adapted.prompt
+    assert "доброжелательный расслабленный взгляд" in adapted.prompt
+    assert "заметно более густой пушистый мех" in adapted.prompt
     assert "Owner request" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
     assert len(adapted.prompt) <= 1800
@@ -464,7 +558,8 @@ def test_gigachat_adapter_does_not_leak_raw_business_context_into_pixels() -> No
     assert "Business grounding" not in adapted.prompt
     assert "Brand name:" not in adapted.prompt
     assert brand_name not in adapted.prompt
-    assert "Названия бренда, услуг и методов не печатать в кадре." in adapted.prompt
+    assert "Не печатай названия бренда/услуг/методов" in adapted.prompt
+    assert "явного запроса на это" in adapted.prompt
     assert "Без читаемого текста" in adapted.prompt
     assert len(adapted.prompt) <= 1800
 
@@ -521,15 +616,15 @@ def test_gigachat_adapter_reserves_safety_for_near_limit_owner_request() -> None
 
     assert len(adapted.prompt) <= 1800
     assert adapted.prompt.startswith("ёж слушает ресурсное аудио")
-    assert "Три сцены без подписей" in adapted.prompt
-    assert "явно слушает аудио" in adapted.prompt
-    assert "мягкий доброжелательный взгляд" in adapted.prompt
-    assert "шерсть/мех заметно гуще и пушистее" in adapted.prompt
+    assert "Один герой, три стадии без подписей" in adapted.prompt
+    assert "слушает аудио" in adapted.prompt
+    assert "доброжелательный расслабленный взгляд" in adapted.prompt
+    assert "заметно более густой пушистый мех" in adapted.prompt
     assert "Без водяных знаков" in adapted.prompt
     assert "Без выдуманных логотипов" in adapted.prompt
     assert "полностью в кадре" in adapted.prompt
     assert "Без читаемого текста" in adapted.prompt
-    assert "Названия бренда, услуг и методов не печатать в кадре." in adapted.prompt
+    assert "Не печатай названия бренда/услуг/методов" in adapted.prompt
     assert "Не выдумывай награды" in adapted.prompt
     assert "Brand name:" not in adapted.prompt
 
@@ -616,9 +711,103 @@ def test_engine_applies_adapter_only_after_provider_selection(monkeypatch) -> No
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 9
+    assert result.provider_payload["prompt_adapter_version"] == 10
     assert "Owner request" not in captured["brief"].prompt
     assert "hedgehog listens to an audio session" in captured["brief"].prompt
+
+
+def test_engine_respects_explicit_text_from_compiled_contract(monkeypatch) -> None:
+    captured = {}
+    request = (
+        'злой ёж становится добрым, коллаж до/после, '
+        'подпись слева «ДО», справа «ПОСЛЕ»'
+    )
+    compiled = compile_visual_prompt(
+        request=request,
+        kind="image",
+        brand_context="Example Wellness: guided resource audio.",
+    )
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+        brand_context="Example Wellness: guided resource audio.",
+    )
+
+    class FakeProvider:
+        def configured(self, kind):
+            return kind == "image"
+
+        def submit(self, provider_brief):
+            captured["brief"] = provider_brief
+            return CreativeJob(
+                provider="yandexart",
+                kind="image",
+                status="succeeded",
+                external_id="job-explicit-text",
+            )
+
+    monkeypatch.setattr(engine, "provider_order", lambda *_args, **_kwargs: ("yandexart",))
+    monkeypatch.setattr(engine, "build_provider", lambda _name: FakeProvider())
+
+    result = engine.VisualCreativeEngine(enabled=True).submit(brief)
+
+    assert result.status == "succeeded"
+    prompt = captured["brief"].prompt
+    assert prompt.startswith(request)
+    assert "Один герой, три стадии" in prompt
+    assert "Один герой, три стадии без подписей" not in prompt
+    assert "Без читаемого текста" not in prompt
+    assert "Только запрошенный текст; без других надписей" in prompt
+    assert "leave clean negative space" not in prompt
+    assert "Названия бренда/услуг не печатать без явного запроса" in prompt
+    assert len(prompt) <= 500
+
+
+def test_engine_does_not_reappend_raw_brand_direction_to_compiled_prompt(monkeypatch) -> None:
+    captured = {}
+    brand_context = "Example Wellness: guided resource audio."
+    compiled = compile_visual_prompt(
+        request="уютная иллюстрация ежа в наушниках",
+        kind="image",
+        brand_context=brand_context,
+    )
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="DE",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+        brand_context=brand_context,
+    )
+
+    class FakeProvider:
+        def configured(self, kind):
+            return kind == "image"
+
+        def submit(self, provider_brief):
+            captured["brief"] = provider_brief
+            return CreativeJob(
+                provider="openai",
+                kind="image",
+                status="succeeded",
+                external_id="job-openai-compiled",
+            )
+
+    monkeypatch.setattr(engine, "provider_order", lambda *_args, **_kwargs: ("openai",))
+    monkeypatch.setattr(engine, "build_provider", lambda _name: FakeProvider())
+
+    result = engine.VisualCreativeEngine(enabled=True).submit(brief)
+
+    assert result.status == "succeeded"
+    prompt = captured["brief"].prompt
+    assert "Brand direction:" not in prompt
+    assert "Names from business grounding are semantic context only" in prompt
+    assert "Production constraints:" in prompt
+    assert "No readable text, letters, captions or UI in the generated pixels." in prompt
+    assert "leave clean negative space" not in prompt
 
 
 def test_engine_applies_meaning_adapter_to_gigachat_fallback(monkeypatch) -> None:
@@ -643,14 +832,14 @@ def test_engine_applies_meaning_adapter_to_gigachat_fallback(monkeypatch) -> Non
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 9
+    assert result.provider_payload["prompt_adapter_version"] == 10
     prompt = captured["brief"].prompt
     assert prompt.startswith(
-        "Сториборд в одном изображении: один и тот же герой повторён как "
-        "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ."
+        "a prickly hedgehog listens to an audio session and becomes gentle"
     )
-    assert "hedgehog listens to an audio session" in prompt
-    assert "Сториборд в одном кадре" in prompt
+    assert "Один герой, три стадии без подписей" in prompt
+    assert "ДО →" not in prompt
+    assert "ДЕЙСТВИЕ/ПРИЧИНА" not in prompt
     assert "Owner request" not in prompt
     assert "mandatory" not in prompt.casefold()
 
@@ -683,10 +872,10 @@ def test_yandex_adapter_prioritizes_owner_request_before_style_and_brand_context
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert adapted.prompt.startswith(
-        "Сториборд в одном изображении: один и тот же герой повторён как "
-        "ДО → ДЕЙСТВИЕ/ПРИЧИНА → ПОСЛЕ."
+        "a prickly hedgehog listens to an audio session and becomes gentle"
     )
-    assert "a prickly hedgehog listens to an audio session and becomes gentle" in adapted.prompt
+    assert "Один герой, три стадии без подписей" in adapted.prompt
+    assert "ДО →" not in adapted.prompt
     assert "Example brand context" not in adapted.prompt
     assert "не печатать" in adapted.prompt
     assert len(adapted.prompt) <= 500
