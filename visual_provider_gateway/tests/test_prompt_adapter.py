@@ -84,10 +84,10 @@ def test_yandex_adapter_expands_resource_audio_transformation_into_visual_stages
 
     assert adapted.prompt.startswith(request)
     assert "Один герой, три стадии без подписей" in adapted.prompt
-    assert "обычный исходный вид" in adapted.prompt
+    assert "сначала обычный" in adapted.prompt
     assert "слушает аудио" in adapted.prompt
     assert "наушниках" in adapted.prompt
-    assert "не символ волны" in adapted.prompt
+    assert "не символом волны" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
     assert "заметно более густой пушистый мех" in adapted.prompt
     assert "ДО →" not in adapted.prompt
@@ -166,7 +166,7 @@ def test_from_to_transformation_preserves_explicit_initial_and_final_states() ->
 
     assert "напряжённый взгляд и жёсткая поза" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
-    assert "обычный исходный вид" not in adapted.prompt
+    assert "сначала обычный" not in adapted.prompt
     assert len(adapted.prompt) <= 500
 
 
@@ -203,7 +203,7 @@ def test_unparsed_transformation_does_not_invent_neutral_or_final_state() -> Non
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert "исходное и итоговое состояния бери только из запроса" in adapted.prompt
-    assert "обычный исходный вид" not in adapted.prompt
+    assert "сначала обычный" not in adapted.prompt
     assert len(adapted.prompt) <= 500
 
 
@@ -446,9 +446,9 @@ def test_gigachat_adapter_preserves_listening_transformation_without_compiler_me
 
     assert adapted.prompt.startswith(request)
     assert "Один герой, три стадии без подписей" in adapted.prompt
-    assert "обычный исходный вид" in adapted.prompt
+    assert "сначала обычный" in adapted.prompt
     assert "слушает аудио" in adapted.prompt
-    assert "не символ волны" in adapted.prompt
+    assert "не символом волны" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
     assert "заметно более густой пушистый мех" in adapted.prompt
     assert "Owner request" not in adapted.prompt
