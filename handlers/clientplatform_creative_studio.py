@@ -1263,7 +1263,16 @@ async def _finish_visual(
             qa = None
         warning = _semantic_qa_warning(qa)
         if warning:
-            await target.answer(warning)
+            try:
+                await target.answer(warning)
+            except TelegramAPIError:
+                # The image is already delivered and marked delivered. A secondary
+                # advisory warning must never turn that success into an ambiguous
+                # delivery or invite an automatic rerender.
+                logger.debug(
+                    "Could not deliver semantic QA advisory after image delivery",
+                    exc_info=True,
+                )
     await target.answer(
         "Можно сохранить результат из чата, создать ещё один или перейти к рекламе.",
         reply_markup=_result_rows(token, receipt),
