@@ -5,7 +5,7 @@ import json
 import re
 from dataclasses import dataclass
 
-from clientplatform.domain.editable_advertising import normalize_editable_ad_font_preset
+from clientplatform.domain.visual_typography import normalize_visual_typography_preset
 
 _COLOR_RE = re.compile(r"#[0-9A-Fa-f]{6}")
 
@@ -64,7 +64,7 @@ class TenantBrandDNA:
             primary_color=_color(self.primary_color, "#172033"),
             accent_color=_color(self.accent_color, "#E9C46A"),
             text_color=_color(self.text_color, "#FFFFFF"),
-            font_preset=normalize_editable_ad_font_preset(self.font_preset),
+            font_preset=normalize_visual_typography_preset(self.font_preset),
         )
 
     def assert_business(self, business_id: str) -> None:
