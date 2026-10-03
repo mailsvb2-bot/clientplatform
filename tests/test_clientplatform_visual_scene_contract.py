@@ -173,10 +173,11 @@ def test_hybrid_director_returns_five_distinct_options_in_one_ai_call() -> None:
     assert recommended_scene_variant(variants).id in {"v1", "v5"}
 
 
-def test_supplement_refines_selected_variant_without_replacing_contract() -> None:
+def test_supplement_refines_selected_variant_without_replacing_contract(monkeypatch) -> None:
     request = "кошка смотрит на дождь за окном"
     flags = semantic_flags_for_request(request)
     contract = fallback_scene_contract(request=request, semantic_flags=flags)
+    monkeypatch.setenv("VISUAL_SCENE_VARIANTS_ENABLED", "0")
     variants = build_visual_scene_variants(
         request=request,
         scene_contract=contract,
