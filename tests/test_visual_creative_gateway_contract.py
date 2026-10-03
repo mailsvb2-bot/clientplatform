@@ -313,6 +313,52 @@ def test_wait_visual_returns_terminal_or_polls_until_done(monkeypatch: pytest.Mo
     assert gateway.wait_visual(running, wait_seconds=0) is running
 
 
+def test_semantic_qa_client_posts_exact_scope_and_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed = {}
+
+    def fake_json(method, path, *, payload=None, timeout_seconds=None):
+        observed.update(
+            method=method,
+            path=path,
+            payload=payload,
+            timeout_seconds=timeout_seconds,
+        )
+        return {
+            "status": "needs_review",
+            "issues": ["лишний текст в кадре"],
+            "summary": "смысл требует проверки",
+        }
+
+    monkeypatch.setattr(gateway, "_json", fake_json)
+    job = gateway.VisualCreativeJob(
+        id="job_123",
+        provider="yandexart",
+        scope_id="business-1",
+        kind="image",
+        status="succeeded",
+        asset_ready=True,
+    )
+    contract = {
+        "version": 1,
+        "kind": "image",
+        "owner_request": "Замена раковины",
+        "semantic_flags": ["object_replacement"],
+    }
+
+    result = gateway.review_visual_semantics(job, contract=contract)
+
+    assert result.needs_review is True
+    assert result.issues == ("лишний текст в кадре",)
+    assert observed["method"] == "POST"
+    assert observed["path"].endswith("/job_123/semantic-qa")
+    assert observed["payload"] == {
+        "scope_id": "business-1",
+        "contract": contract,
+    }
+
+
 def test_download_visual_materializes_verified_media(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         gateway,
