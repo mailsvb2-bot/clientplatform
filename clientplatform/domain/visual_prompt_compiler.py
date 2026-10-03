@@ -369,12 +369,16 @@ def _transformation_directives(kind: str, flags: tuple[str, ...]) -> list[str]:
             "transition, then a clearly readable final state.",
         ]
     return [
-        "The transformation is mandatory visual evidence, not optional mood. Show "
-        "both the initial and final states of the same subject in one coherent image. "
-        "Prefer a clear split/paired composition or a continuous in-frame transition "
-        "when that makes the change immediately understandable.",
-        "Keep identity continuity between the before and after states. The viewer "
-        "must understand what changed without relying on explanatory text.",
+        "The transformation is mandatory visual evidence, not optional mood. In a "
+        "single image, deliberately repeat the same subject as a compact visual "
+        "storyboard: BEFORE, the causal action or interaction, then AFTER. Repetition "
+        "of the same subject is intentional; never collapse the request to one "
+        "final-state portrait.",
+        "If the owner did not define an initial state, use a neutral ordinary baseline "
+        "instead of inventing an extreme opposite. Keep identity continuity across "
+        "stages. Make every requested changed quality visibly stronger in the AFTER "
+        "state through expression, posture, texture, material condition or grooming, "
+        "and keep the causal action spatially connected to the transition.",
     ]
 
 
@@ -459,9 +463,10 @@ def _autonomous_scene_directives(
             )
         elif kind == "image" and "transformation" in flags:
             directives.append(
-                "Autonomous composition default: use a clear before/after, paired, "
-                "or continuous transformation composition that keeps the same subject "
-                "recognizable and makes cause and result understandable at a glance."
+                "Autonomous composition default: use a compact storyboard, triptych "
+                "or paired transformation composition. The same subject may appear "
+                "more than once intentionally so BEFORE, cause/action and AFTER are "
+                "all readable in the single image."
             )
         elif kind == "image" and has_action and "portrait" not in flags:
             directives.append(
