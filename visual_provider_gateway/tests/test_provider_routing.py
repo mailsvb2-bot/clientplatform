@@ -105,6 +105,107 @@ def test_provider_snapshot_does_not_expose_credentials(monkeypatch):
     assert "secret-selfhost" not in rendered
 
 
+def test_gigachat_semantic_qa_is_non_generative_and_cleans_uploaded_file(
+    tmp_path,
+    monkeypatch,
+):
+    image_path = tmp_path / "result.png"
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\nsemantic-image")
+    transport_calls = []
+    chat_payloads = []
+
+    def fake_request(
+        method,
+        url,
+        *,
+        headers=None,
+        body=None,
+        timeout=30,
+        max_bytes=0,
+        ca_bundle_file="",
+    ):
+        transport_calls.append(
+            {
+                "method": method,
+                "url": url,
+                "headers": headers or {},
+                "body": body,
+                "ca_bundle_file": ca_bundle_file,
+            }
+        )
+        if url.endswith("/files"):
+            assert b'name="purpose"' in body
+            assert b"general" in body
+            assert b'image/png' in body
+            assert b"semantic-image" in body
+            return 200, {"content-type": "application/json"}, b'{"id":"qa-file-1"}'
+        if url.endswith("/files/qa-file-1/delete"):
+            return 200, {"content-type": "application/json"}, b'{}'
+        raise AssertionError(url)
+
+    def fake_json_request(
+        method,
+        url,
+        *,
+        headers=None,
+        payload=None,
+        timeout=30,
+        max_bytes=0,
+        ca_bundle_file="",
+    ):
+        chat_payloads.append(payload)
+        assert method == "POST"
+        assert url.endswith("/chat/completions")
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"status":"needs_review",'
+                            '"issues":["нет явной трансформации"],'
+                            '"summary":"смысл передан не полностью"}'
+                        )
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr(providers, "_request", fake_request)
+    monkeypatch.setattr(providers, "_json_request", fake_json_request)
+    provider = providers.GigaChatImageProvider(
+        ProviderConfig(
+            name="gigachat",
+            base_url="https://api.giga.chat/v1",
+            credentials="credentials",
+            oauth_url="https://oauth.example.test",
+            model_image="GigaChat-2-Pro",
+            ca_bundle_file="/tmp/ca.pem",
+        )
+    )
+    monkeypatch.setattr(provider, "_access_token", lambda: "token")
+
+    result = provider.review_image_semantics(
+        image_path=image_path,
+        owner_request=(
+            "ёж слушает ресурсное аудио и становится добрым и пушистым"
+        ),
+        semantic_flags=("listening", "transformation", "visible_state"),
+    )
+
+    assert result["status"] == "needs_review"
+    assert result["issues"] == ["нет явной трансформации"]
+    assert len(chat_payloads) == 1
+    payload = chat_payloads[0]
+    assert payload["function_call"] == "none"
+    assert payload["messages"][0]["attachments"] == ["qa-file-1"]
+    assert "Ничего не генерируй" in payload["messages"][0]["content"]
+    assert sum(call["url"].endswith("/files") for call in transport_calls) == 1
+    assert sum(
+        call["url"].endswith("/files/qa-file-1/delete")
+        for call in transport_calls
+    ) == 1
+
+
 def test_selfhosted_forwards_operator_selected_model(monkeypatch):
     observed = {}
 
