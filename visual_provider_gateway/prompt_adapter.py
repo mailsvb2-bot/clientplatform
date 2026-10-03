@@ -811,7 +811,19 @@ def _bounded_yandex_prompt(
             )
         )
         scene_limit = max(40, _YANDEX_PROMPT_LIMIT - reserved)
-        bounded_scene_head = _bounded_join([normalized_scene_head], limit=scene_limit)
+        if len(normalized_scene_head) <= scene_limit:
+            bounded_scene_head = normalized_scene_head
+        else:
+            # _bounded_join intentionally refuses tiny fragments. Here even a
+            # short natural subject anchor is semantically valuable (for example
+            # keeping "ёж" instead of leaving only generic "one hero" cues).
+            bounded_scene_head = (
+                normalized_scene_head[:scene_limit]
+                .rsplit(" ", 1)[0]
+                .rstrip(" ,;:.")
+            )
+            if not bounded_scene_head:
+                bounded_scene_head = normalized_scene_head[:scene_limit].rstrip()
         core = [bounded_scene_head, bounded_semantics, style_block]
         core = [part for part in core if part]
         used = sum(len(part) for part in core) + max(0, len(core) - 1)
