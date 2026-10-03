@@ -8,33 +8,22 @@ from enum import StrEnum
 
 _COLOR_RE = re.compile(r"#[0-9A-Fa-f]{6}")
 
-EDITABLE_AD_FONT_PRESETS = (
-    "auto",
-    "modern",
-    "strict",
-    "friendly",
-    "premium",
-    "editorial",
-    "elegant",
-    "bold_ad",
+from clientplatform.domain.visual_typography import (
+    VISUAL_TYPOGRAPHY_LABELS_RU,
+    VISUAL_TYPOGRAPHY_PRESETS,
+    normalize_visual_typography_preset,
 )
-EDITABLE_AD_FONT_LABELS_RU = {
-    "auto": "Автоматически",
-    "modern": "Современный · Lato",
-    "strict": "Строгий · Liberation Sans",
-    "friendly": "Дружелюбный · DejaVu Sans",
-    "premium": "Премиальный · Noto Serif + Sans",
-    "editorial": "Редакционный · Noto Serif",
-    "elegant": "Элегантный · Liberation Serif",
-    "bold_ad": "Жирный рекламный · Lato Heavy",
-}
+
+EDITABLE_AD_FONT_PRESETS = VISUAL_TYPOGRAPHY_PRESETS
+EDITABLE_AD_FONT_LABELS_RU = VISUAL_TYPOGRAPHY_LABELS_RU
 
 
 def normalize_editable_ad_font_preset(value: object) -> str:
-    token = str(value or "auto").strip().lower()
-    if token not in EDITABLE_AD_FONT_PRESETS:
-        raise ValueError("editable_ad_font_preset_invalid")
-    return token
+    try:
+        return normalize_visual_typography_preset(value)
+    except ValueError as exc:
+        raise ValueError("editable_ad_font_preset_invalid") from exc
+
 
 
 class EditableAdProjectStatus(StrEnum):
