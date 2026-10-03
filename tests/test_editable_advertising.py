@@ -97,6 +97,60 @@ def test_schema_has_metadata_only_editable_project() -> None:
         conn.close()
 
 
+def test_editable_project_schema_migrates_legacy_rows_to_auto_typography() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute(
+            """
+            CREATE TABLE editable_ad_projects(
+                id TEXT PRIMARY KEY,
+                business_id TEXT NOT NULL,
+                created_by_member_id TEXT NOT NULL,
+                publication_job_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                headline TEXT NOT NULL,
+                body TEXT NOT NULL,
+                cta TEXT NOT NULL DEFAULT '',
+                layout TEXT NOT NULL DEFAULT 'lower_card',
+                brand_json TEXT NOT NULL,
+                source_job_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'draft',
+                revision INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO editable_ad_projects(
+                id,business_id,created_by_member_id,publication_job_id,kind,
+                headline,body,cta,layout,brand_json,source_job_id,status,
+                revision,created_at,updated_at
+            ) VALUES(
+                'p1','b1','m1','j1','image',
+                'Заголовок','Текст','','lower_card','{}','','draft',
+                1,'2026-10-03','2026-10-03'
+            )
+            """
+        )
+
+        clientplatform_creative_experiments.ensure(conn)
+
+        columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(editable_ad_projects)").fetchall()
+        }
+        assert "font_preset" in columns
+        row = conn.execute(
+            "SELECT font_preset FROM editable_ad_projects WHERE id='p1'"
+        ).fetchone()
+        assert row["font_preset"] == "auto"
+    finally:
+        conn.close()
+
+
 def test_editable_project_reentry_and_expiry_preserve_copy_without_paid_reset() -> None:
     conn, actor, publication_job_id = _repository_fixture()
     try:
