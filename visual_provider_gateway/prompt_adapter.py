@@ -283,67 +283,66 @@ def _compiled_style_cues(lines: tuple[str, ...]) -> tuple[str, ...]:
 
 
 _TRANSFORMATION_TARGET_RE = re.compile(
-    r"(?:\\bстанов\\w*|\\bпревращ\\w*\\s+в\\b|\\bbecomes?\\b|"
-    r"\\bturns?\\s+into\\b|\\btransforms?\\s+into\\b)\\s+"
+    r"(?:\bстанов\w*|\bпревращ\w*\s+в\b|\bbecomes?\b|"
+    r"\bturns?\s+into\b|\btransforms?\s+into\b)\s+"
     r"([^.!?;]{1,180})",
     re.IGNORECASE,
 )
 
 _STATE_EVIDENCE_RULES = (
     (
-        re.compile(r"(?:\\bдобр\\w*|\\bkind\\b|\\bgentle\\b)", re.IGNORECASE),
+        re.compile(r"(?:\bдобр\w*|\bkind\b|\bgentle\b)", re.IGNORECASE),
         "мягкий доброжелательный взгляд, расслабленная поза",
     ),
     (
-        re.compile(r"(?:\\bпушист\\w*|\\bfluffy\\b)", re.IGNORECASE),
+        re.compile(r"(?:\bпушист\w*|\bfluffy\b)", re.IGNORECASE),
         "шерсть/мех заметно гуще и пушистее",
     ),
     (
-        re.compile(r"(?:\\bмягк\\w*|\\bsoft\\b)", re.IGNORECASE),
+        re.compile(r"(?:\bмягк\w*|\bsoft\b)", re.IGNORECASE),
         "фактура визуально мягче",
     ),
     (
-        re.compile(r"(?:\\bспокойн\\w*|\\bcalm\\b)", re.IGNORECASE),
+        re.compile(r"(?:\bспокойн\w*|\bcalm\b)", re.IGNORECASE),
         "спокойный взгляд и расслабленная поза",
     ),
     (
-        re.compile(r"(?:\\bзл\\w*|\\bangry\\b)", re.IGNORECASE),
+        re.compile(r"(?:\bзл\w*|\bangry\b)", re.IGNORECASE),
         "напряжённый взгляд и жёсткая поза",
     ),
     (
-        re.compile(r"(?:\\bтревож\\w*|\\bиспуган\\w*|\\banxious\\b|\\bafraid\\b)", re.IGNORECASE),
+        re.compile(r"(?:\bтревож\w*|\bиспуган\w*|\banxious\b|\bafraid\b)", re.IGNORECASE),
         "тревожный взгляд и заметное напряжение тела",
     ),
     (
-        re.compile(r"(?:\\bсчастлив\\w*|\\bhappy\\b)", re.IGNORECASE),
+        re.compile(r"(?:\bсчастлив\w*|\bhappy\b)", re.IGNORECASE),
         "явно радостное выражение и открытая поза",
     ),
     (
-        re.compile(r"(?:\\bгруст\\w*|\\bsad\\b)", re.IGNORECASE),
+        re.compile(r"(?:\bгруст\w*|\bsad\b)", re.IGNORECASE),
         "опущенный взгляд и сдержанная закрытая поза",
     ),
     (
-        re.compile(r"(?:\\bколюч\\w*|\\bprickly\\b)", re.IGNORECASE),
+        re.compile(r"(?:\bколюч\w*|\bprickly\b)", re.IGNORECASE),
         "явно колючая жёсткая фактура или иглы",
     ),
     (
-        re.compile(r"(?:\\bгрязн\\w*|\\bdirty\\b)", re.IGNORECASE),
+        re.compile(r"(?:\bгрязн\w*|\bdirty\b)", re.IGNORECASE),
         "видимые грязь, пятна или налёт",
     ),
     (
-        re.compile(r"(?:\\bчист\\w*|\\bclean\\b)", re.IGNORECASE),
+        re.compile(r"(?:\bчист\w*|\bclean\b)", re.IGNORECASE),
         "явно чистая поверхность или шерсть",
     ),
     (
-        re.compile(r"(?:\\bблестящ\\w*|\\bshiny\\b)", re.IGNORECASE),
+        re.compile(r"(?:\bблестящ\w*|\bshiny\b)", re.IGNORECASE),
         "чистый блеск и правдоподобные световые блики",
     ),
     (
-        re.compile(r"(?:\\bуверенн\\w*|\\bconfident\\b)", re.IGNORECASE),
+        re.compile(r"(?:\bуверенн\w*|\bconfident\b)", re.IGNORECASE),
         "устойчивая открытая поза и уверенный взгляд",
     ),
 )
-
 
 def _state_evidence(text: str, *, limit: int = 3) -> tuple[str, ...]:
     selected: list[str] = []
