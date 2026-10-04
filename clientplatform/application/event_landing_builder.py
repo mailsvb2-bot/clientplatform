@@ -34,6 +34,15 @@ class EventLandingAIUnavailable(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
+class EventLandingEditorState:
+    draft: EventLandingContent
+    draft_source: str
+    revision: int
+    is_published: bool
+    has_unpublished_changes: bool
+
+
+@dataclass(frozen=True, slots=True)
 class EventLandingPreview:
     url: str
     revision: int
@@ -192,6 +201,29 @@ def get_event_landing_profile(
 ) -> EventLandingProfile | None:
     with get_db_ro() as conn:
         return EventLandingRepository(conn).get(actor=actor, event_id=event_id)
+
+
+def get_event_landing_editor_state(
+    *,
+    actor: TenantContext,
+    event_id: str,
+) -> EventLandingEditorState:
+    existing = get_event_landing_profile(actor=actor, event_id=event_id)
+    if existing is None:
+        return EventLandingEditorState(
+            draft=build_event_landing_template(actor=actor, event_id=event_id),
+            draft_source="template",
+            revision=0,
+            is_published=False,
+            has_unpublished_changes=False,
+        )
+    return EventLandingEditorState(
+        draft=existing.draft,
+        draft_source=existing.draft_source,
+        revision=existing.revision,
+        is_published=existing.is_published,
+        has_unpublished_changes=existing.has_unpublished_changes,
+    )
 
 
 def ensure_event_landing_draft(
@@ -488,6 +520,7 @@ __all__ = [
     "build_event_landing_template",
     "ensure_event_landing_draft",
     "generate_event_landing_ai",
+    "get_event_landing_editor_state",
     "get_event_landing_profile",
     "get_public_event_landing",
     "get_public_event_landing_preview",
