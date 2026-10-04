@@ -106,15 +106,40 @@ jobs:
             privileged find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null \
               | sed 's#/.git$##' | LC_ALL=C sort || true
             echo "--- git worktree details ---"
+            worktree_audit_errors=0
+            # The cleanup scope never edits Git worktrees. Inventory discovered
+            # repositories as filesystem metadata only: executing Git in an arbitrary
+            # repository can run repository-controlled helpers/filters.
+            worktree_list="$(mktemp /tmp/clientplatform-worktrees.XXXXXX)"
+            if ! privileged find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null \
+              | LC_ALL=C sort > "$worktree_list"; then
+              printf 'WORKTREE_DISCOVERY_ERROR phase=pre_cleanup\\n' >&2
+              rm -f -- "$worktree_list"
+              echo "CLIENTPLATFORM_DISK_SNAPSHOT_END"
+              return 24
+            fi
             while IFS= read -r dotgit; do
               repo_path="${dotgit%/.git}"
-              origin="$(privileged git -C "$repo_path" remote get-url origin 2>/dev/null || true)"
-              branch="$(privileged git -C "$repo_path" branch --show-current 2>/dev/null || true)"
-              dirty="$(privileged git -C "$repo_path" status --porcelain 2>/dev/null | sed '/^$/d' | wc -l | tr -d '[:space:]')"
-              safe_origin="$(printf '%s' "$origin" | sed -E 's#(https?://)[^/@]+@#\\1***@#')"
-              printf 'WORKTREE path=%s branch=%s dirty=%s origin=%s\\n' "$repo_path" "$branch" "${dirty:-0}" "$safe_origin"
-            done < <(privileged find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null | LC_ALL=C sort)
+              repo_uid="$(privileged stat -c '%u' "$dotgit" 2>/dev/null || true)"
+              case "$repo_uid" in ''|*[!0-9]*)
+                printf 'WORKTREE_AUDIT_ERROR path=%s reason=owner_unknown\\n' "$repo_path" >&2
+                worktree_audit_errors=$((worktree_audit_errors + 1))
+                printf 'WORKTREE path=%s owner_uid=unknown branch=not_evaluated dirty=not_evaluated audit=error\\n' "$repo_path"
+                continue
+                ;;
+              esac
+              if [ "$repo_path" = "$repo" ]; then
+                printf 'WORKTREE path=%s owner_uid=%s branch=main dirty=0 audit=canonical_prechecked\\n' "$repo_path" "$repo_uid"
+              else
+                printf 'WORKTREE path=%s owner_uid=%s branch=not_evaluated dirty=not_evaluated audit=inventory_only\\n' "$repo_path" "$repo_uid"
+              fi
+            done < "$worktree_list"
+            rm -f -- "$worktree_list"
             echo "CLIENTPLATFORM_DISK_SNAPSHOT_END"
+            if [ "$worktree_audit_errors" -ne 0 ]; then
+              echo "worktree inventory failed: $worktree_audit_errors worktree(s) lacked readable ownership metadata" >&2
+              return 24
+            fi
           }
           snapshot
           if [ "$mode" = "cleanup" ]; then
@@ -123,6 +148,7 @@ jobs:
             trap 'rm -f "$cleanup_script"' EXIT
             cat > "$cleanup_script" <<'CLEANUP'
           set -Eeuo pipefail
+          repo=/opt/clientplatform
           echo "CLIENTPLATFORM_DISK_CLEANUP_BEGIN"
           # Build cache is rebuildable and the canonical deploy already prunes it.
           # Do not prune images, containers, networks, volumes, backups, or application data here.
@@ -143,15 +169,39 @@ jobs:
           find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null \
             | sed 's#/.git$##' | LC_ALL=C sort || true
           echo "--- git worktree details ---"
+          worktree_audit_errors=0
+          # Cleanup does not mutate repositories, so post-cleanup verification also
+          # inventories filesystem metadata without executing repository-controlled Git.
+          worktree_list="$(mktemp /tmp/clientplatform-worktrees.XXXXXX)"
+          if ! find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null \
+            | LC_ALL=C sort > "$worktree_list"; then
+            printf 'WORKTREE_DISCOVERY_ERROR phase=post_cleanup\\n' >&2
+            rm -f -- "$worktree_list"
+            echo "CLIENTPLATFORM_DISK_SNAPSHOT_END"
+            exit 24
+          fi
           while IFS= read -r dotgit; do
             repo_path="${dotgit%/.git}"
-            origin="$(git -C "$repo_path" remote get-url origin 2>/dev/null || true)"
-            branch="$(git -C "$repo_path" branch --show-current 2>/dev/null || true)"
-            dirty="$(git -C "$repo_path" status --porcelain 2>/dev/null | sed '/^$/d' | wc -l | tr -d '[:space:]')"
-            safe_origin="$(printf '%s' "$origin" | sed -E 's#(https?://)[^/@]+@#\\1***@#')"
-            printf 'WORKTREE path=%s branch=%s dirty=%s origin=%s\\n' "$repo_path" "$branch" "${dirty:-0}" "$safe_origin"
-          done < <(find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null | LC_ALL=C sort)
+            repo_uid="$(stat -c '%u' "$dotgit" 2>/dev/null || true)"
+            case "$repo_uid" in ''|*[!0-9]*)
+              printf 'WORKTREE_AUDIT_ERROR path=%s reason=owner_unknown\\n' "$repo_path" >&2
+              worktree_audit_errors=$((worktree_audit_errors + 1))
+              printf 'WORKTREE path=%s owner_uid=unknown branch=not_evaluated dirty=not_evaluated audit=error\\n' "$repo_path"
+              continue
+              ;;
+            esac
+            if [ "$repo_path" = "$repo" ]; then
+              printf 'WORKTREE path=%s owner_uid=%s branch=main dirty=0 audit=canonical_prechecked\\n' "$repo_path" "$repo_uid"
+            else
+              printf 'WORKTREE path=%s owner_uid=%s branch=not_evaluated dirty=not_evaluated audit=inventory_only\\n' "$repo_path" "$repo_uid"
+            fi
+          done < "$worktree_list"
+          rm -f -- "$worktree_list"
           echo "CLIENTPLATFORM_DISK_SNAPSHOT_END"
+          if [ "$worktree_audit_errors" -ne 0 ]; then
+            echo "worktree inventory failed: $worktree_audit_errors worktree(s) lacked readable ownership metadata" >&2
+            exit 24
+          fi
           CLEANUP
             if [ "$(id -u)" -eq 0 ]; then
               flock -w 300 -x "$lock" bash "$cleanup_script"

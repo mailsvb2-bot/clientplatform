@@ -115,6 +115,55 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, text)
 
+    def test_disk_maintenance_foreign_worktree_audit_is_ownership_safe_and_fail_closed(self) -> None:
+        text = self._text(DISK_MAINTENANCE)
+
+        # Canonical /opt/clientplatform is already checked for branch=main and a clean
+        # tracked worktree before snapshot. Arbitrary discovered repositories are
+        # inventory-only: never execute Git in a repository we do not trust.
+        self.assertGreaterEqual(text.count("audit=inventory_only"), 2)
+        self.assertGreaterEqual(text.count("audit=canonical_prechecked"), 2)
+        self.assertGreaterEqual(text.count("branch=not_evaluated"), 2)
+        self.assertGreaterEqual(text.count("dirty=not_evaluated"), 2)
+        self.assertGreaterEqual(text.count("reason=owner_unknown"), 2)
+        self.assertNotIn("audit_git_as_owner", text)
+        self.assertNotIn('git -C "$repo_path"', text)
+        self.assertNotIn('git -c safe.directory="$repo_path"', text)
+        self.assertNotIn('core.fsmonitor=false', text)
+        self.assertNotIn('core.hooksPath=/dev/null', text)
+
+        # The cleanup body runs in a fresh shell under flock, so it must initialize
+        # the canonical repository path inside that subprocess instead of relying
+        # on a non-exported parent-shell variable.
+        cleanup_body = text.split("cat > \"$cleanup_script\" <<'CLEANUP'", 1)[1]
+        self.assertIn("repo=/opt/clientplatform", cleanup_body)
+
+        # Discovery itself is critical and must not disappear inside process
+        # substitution or a best-effort `|| true`.
+        self.assertGreaterEqual(text.count("WORKTREE_DISCOVERY_ERROR"), 2)
+        self.assertIn("phase=pre_cleanup", text)
+        self.assertIn("phase=post_cleanup", text)
+        self.assertGreaterEqual(
+            text.count('worktree_list="$(mktemp /tmp/clientplatform-worktrees.XXXXXX)"'),
+            2,
+        )
+        self.assertGreaterEqual(text.count('done < "$worktree_list"'), 2)
+        self.assertNotIn(
+            'done < <(privileged find /root /home /opt /srv /tmp',
+            text,
+        )
+        self.assertNotIn(
+            'done < <(find /root /home /opt /srv /tmp',
+            text,
+        )
+        self.assertGreaterEqual(text.count("worktree_audit_errors=0"), 2)
+        self.assertGreaterEqual(
+            text.count('if [ "$worktree_audit_errors" -ne 0 ]; then'),
+            2,
+        )
+        self.assertIn("return 24", text)
+        self.assertIn("exit 24", text)
+
     def test_branch_cleanup_deletes_only_exact_merged_pr_heads(self) -> None:
         text = self._text(BRANCH_CLEANUP)
         for required in (
