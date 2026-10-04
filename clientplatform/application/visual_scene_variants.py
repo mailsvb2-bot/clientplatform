@@ -27,9 +27,14 @@ _VARIANT_COUNT = 5
 _MAX_DIRECTION_CHARS = 700
 _MAX_DESCRIPTION_CHARS = 360
 _MAX_SUPPLEMENT_CHARS = 600
-_ALLOWED_COMPOSITIONS = frozenset(
-    {"clear_story", "cinematic", "editorial", "focused", "sequential"}
+_COMPOSITION_ORDER = (
+    "clear_story",
+    "cinematic",
+    "editorial",
+    "focused",
+    "sequential",
 )
+_ALLOWED_COMPOSITIONS = frozenset(_COMPOSITION_ORDER)
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,14 +190,30 @@ def _score_variant(
     return max(0, min(score, 100))
 
 
+def _safe_direction_for_composition(
+    contract: VisualSceneContract,
+    composition: str,
+) -> str:
+    if composition not in _ALLOWED_COMPOSITIONS:
+        raise ValueError("visual_scene_variant_invalid")
+    directions = _fallback_directions(contract)
+    mapping = {
+        name: direction
+        for name, (_title, _description, direction) in zip(
+            _COMPOSITION_ORDER,
+            directions,
+            strict=True,
+        )
+    }
+    return mapping[composition]
+
+
 def _fallback_variants(
     *,
     contract: VisualSceneContract,
     style: VisualStyleIntent,
 ) -> tuple[VisualSceneVariant, ...]:
-    compositions = (
-        "clear_story", "cinematic", "editorial", "focused", "sequential",
-    )
+    compositions = _COMPOSITION_ORDER
     variants: list[VisualSceneVariant] = []
     for index, ((title, description, direction), composition) in enumerate(
         zip(_fallback_directions(contract), compositions, strict=True),
@@ -203,7 +224,7 @@ def _fallback_variants(
                 id=f"v{index}",
                 title=title,
                 description=description,
-                direction=direction,
+                direction=_safe_direction_for_composition(contract, composition),
                 composition=composition,
                 score=_score_variant(
                     contract=contract,
@@ -238,7 +259,10 @@ def _parse_variant_items(
             description = _clean(
                 item["description"], limit=_MAX_DESCRIPTION_CHARS,
             )
-            direction = _clean(item["direction"], limit=_MAX_DIRECTION_CHARS)
+            # Validate the model payload shape/size, but never trust provider-facing
+            # prose from an LLM. The actual direction is reconstructed exclusively
+            # from a deterministic composition token after semantic validation.
+            _clean(item["direction"], limit=_MAX_DIRECTION_CHARS)
         except ValueError:
             return None
         composition = str(item["composition"] or "").strip().lower()
