@@ -32,9 +32,17 @@ from clientplatform.application.event_content_assets import (
     EventContentAssetError,
     store_generated_event_content_asset,
 )
+from clientplatform.application.visual_scene_plan_receipts import (
+    claim_visual_scene_plan,
+    complete_visual_scene_plan,
+    mark_visual_scene_plan_ambiguous,
+)
 from clientplatform.application.visual_scene_variants import (
     VisualSceneVariant,
     build_visual_scene_bundle,
+    deterministic_visual_scene_bundle,
+    freeze_visual_scene_bundle,
+    load_visual_scene_bundle,
     recommended_scene_variant,
     supplement_scene_variant,
 )
@@ -70,6 +78,7 @@ from clientplatform.domain.programs import ContentKind
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.domain.visual_prompt_compiler import semantic_flags_for_request
 from clientplatform.domain.visual_scene_contract import VisualSceneContract
+from clientplatform.domain.visual_scene_plan import VisualScenePlanStatus
 from clientplatform.domain.visual_style_intent import (
     VisualStyleIntent,
     infer_visual_style_intent,
@@ -158,6 +167,8 @@ def _scene_variants_from_state(data: dict) -> tuple[VisualSceneVariant, ...]:
 async def _ensure_scene_variants(
     state: FSMContext,
     data: dict,
+    *,
+    actor,
 ) -> tuple[VisualSceneContract, str, tuple[VisualSceneVariant, ...]]:
     cached_contract = data.get("creative_scene_contract")
     cached_variants = data.get("creative_scene_variants")
@@ -176,12 +187,64 @@ async def _ensure_scene_variants(
     request = normalize_business_image_request(str(data["creative_pending_prompt"]))
     style = _style_intent_from_state(data)
     flags = semantic_flags_for_request(request)
-    contract, source, variants = await asyncio.to_thread(
-        build_visual_scene_bundle,
+    receipt, claimed = await asyncio.to_thread(
+        claim_visual_scene_plan,
+        actor=actor,
         request=request,
-        semantic_flags=flags,
         style_intent=style,
     )
+
+    if not claimed and receipt.status == VisualScenePlanStatus.READY:
+        contract, source, variants = load_visual_scene_bundle(receipt.result_json)
+    elif not claimed:
+        # Another callback/restart may already have caused a paid provider egress.
+        # Never issue a second automatic text-AI call from an uncertain receipt.
+        contract, source, variants = deterministic_visual_scene_bundle(
+            request=request,
+            semantic_flags=flags,
+            style_intent=style,
+        )
+    else:
+        try:
+            contract, source, variants = await asyncio.to_thread(
+                build_visual_scene_bundle,
+                request=request,
+                semantic_flags=flags,
+                style_intent=style,
+            )
+            frozen_bundle = freeze_visual_scene_bundle(
+                scene_contract=contract,
+                planner_source=source,
+                variants=variants,
+            )
+            await asyncio.to_thread(
+                complete_visual_scene_plan,
+                actor=actor,
+                receipt_id=receipt.id,
+                result_json=frozen_bundle,
+            )
+        except (OSError, RuntimeError, ValueError):
+            logger.warning(
+                "Visual scene planning became ambiguous; refusing automatic retry",
+                exc_info=True,
+            )
+            try:
+                await asyncio.to_thread(
+                    mark_visual_scene_plan_ambiguous,
+                    actor=actor,
+                    receipt_id=receipt.id,
+                )
+            except (LookupError, ValueError):
+                logger.warning(
+                    "Could not mark visual scene plan ambiguous after planning failure",
+                    exc_info=True,
+                )
+            contract, source, variants = deterministic_visual_scene_bundle(
+                request=request,
+                semantic_flags=flags,
+                style_intent=style,
+            )
+
     await state.update_data(
         creative_scene_contract=contract.to_mapping(),
         creative_scene_planner_source=source,
