@@ -363,6 +363,16 @@ def load_visual_scene_bundle(
     return contract, source, variants
 
 
+def visual_scene_ai_planning_available() -> bool:
+    enabled = (
+        str(os.getenv("VISUAL_SCENE_PLANNER_ENABLED", "1")).strip().lower()
+        in {"1", "true", "yes", "on"}
+        and str(os.getenv("VISUAL_SCENE_VARIANTS_ENABLED", "1")).strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+    return enabled and OpenAIClient.from_settings() is not None
+
+
 def deterministic_visual_scene_bundle(
     *,
     request: str,
@@ -400,13 +410,7 @@ def build_visual_scene_bundle(
             style_intent=style_intent,
         )
     )
-    enabled = (
-        str(os.getenv("VISUAL_SCENE_PLANNER_ENABLED", "1")).strip().lower()
-        in {"1", "true", "yes", "on"}
-        and str(os.getenv("VISUAL_SCENE_VARIANTS_ENABLED", "1")).strip().lower()
-        in {"1", "true", "yes", "on"}
-    )
-    if not enabled:
+    if client is None and not visual_scene_ai_planning_available():
         return fallback_contract, "deterministic", fallback_variants
 
     selected = client or OpenAIClient.from_settings()
@@ -577,4 +581,5 @@ __all__ = [
     "load_visual_scene_bundle",
     "recommended_scene_variant",
     "supplement_scene_variant",
+    "visual_scene_ai_planning_available",
 ]
