@@ -29,9 +29,11 @@ class FakeEngine:
         self.asset = asset
         self.generations = 0
         self.polls = 0
+        self.last_brief = None
 
     def generate(self, brief, *, wait_seconds=0):
         self.generations += 1
+        self.last_brief = brief
         assert brief.prompt
         assert wait_seconds >= 0
         return CreativeJob(provider="fake", kind=brief.kind, status="queued", external_id="provider-1", model="m1")
@@ -123,6 +125,91 @@ def test_service_submit_retry_does_not_duplicate_provider_call(tmp_path, monkeyp
     path, mime = svc.content_path(created["id"], client_id="client-a", scope_id="tenant-a")
     assert path == asset.resolve()
     assert mime == "image/png"
+
+
+def test_service_binds_scene_contract_into_provider_brief_and_idempotency(
+    tmp_path,
+    monkeypatch,
+):
+    output = tmp_path / "out"
+    output.mkdir()
+    asset = output / "image.png"
+    asset.write_bytes(b"png")
+    monkeypatch.setenv("VISUAL_CREATIVE_OUTPUT_DIR", str(output))
+    engine = FakeEngine(asset)
+    svc = VisualGatewayService(
+        store=JobStore(str(tmp_path / "jobs.sqlite3")),
+        engine=engine,
+    )
+    scene = {
+        "version": 1,
+        "topology": "action",
+        "primary_subject": "собака",
+        "initial_state": [],
+        "actions": ["бежит"],
+        "cause": "",
+        "transition": [],
+        "final_state": [],
+        "explicit_text": [],
+        "required_evidence": ["requested action visible"],
+        "forbidden": ["unrelated subject"],
+    }
+
+    created = svc.submit(payload(scene_contract=scene), client_id="client-a")
+
+    assert created["status"] == "queued"
+    assert engine.last_brief.scene_contract == scene
+
+    changed = dict(scene)
+    changed["actions"] = ["летит"]
+    with pytest.raises(ValueError, match="payload_conflict"):
+        svc.submit(payload(scene_contract=changed), client_id="client-a")
+
+
+def test_semantic_qa_v2_accepts_full_scene_contract_and_v1_stays_compatible(
+    tmp_path,
+):
+    svc = VisualGatewayService(
+        store=JobStore(str(tmp_path / "jobs.sqlite3")),
+        engine=SnapshotEngine({}),
+    )
+    scene = {
+        "version": 1,
+        "topology": "transformation",
+        "primary_subject": "ёж",
+        "initial_state": [],
+        "actions": ["слушает аудио"],
+        "cause": "слушает аудио",
+        "transition": ["становится"],
+        "final_state": ["добрым", "пушистым"],
+        "explicit_text": [],
+        "required_evidence": ["same subject identity across stages"],
+        "forbidden": ["stage labels"],
+    }
+    v2 = svc._semantic_qa_contract(
+        {
+            "version": 2,
+            "kind": "image",
+            "country_code": "RU",
+            "owner_request": "ёж слушает аудио и становится добрым и пушистым",
+            "semantic_flags": ["transformation", "listening", "visible_state"],
+            "scene_contract": scene,
+        }
+    )
+    assert v2["version"] == 2
+    assert v2["scene_contract"] == scene
+
+    v1 = svc._semantic_qa_contract(
+        {
+            "version": 1,
+            "kind": "image",
+            "country_code": "RU",
+            "owner_request": "собака бежит",
+            "semantic_flags": ["generic_action"],
+        }
+    )
+    assert v1["version"] == 1
+    assert "scene_contract" not in v1
 
 
 def test_semantic_qa_is_claimed_once_and_reused_across_retries(
