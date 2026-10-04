@@ -106,15 +106,28 @@ jobs:
             privileged find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null \
               | sed 's#/.git$##' | LC_ALL=C sort || true
             echo "--- git worktree details ---"
+            worktree_audit_errors=0
             while IFS= read -r dotgit; do
               repo_path="${dotgit%/.git}"
-              origin="$(privileged git -C "$repo_path" remote get-url origin 2>/dev/null || true)"
-              branch="$(privileged git -C "$repo_path" branch --show-current 2>/dev/null || true)"
-              dirty="$(privileged git -C "$repo_path" status --porcelain 2>/dev/null | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+              origin="$(privileged git -c safe.directory="$repo_path" -C "$repo_path" remote get-url origin 2>/dev/null || true)"
+              branch="$(privileged git -c safe.directory="$repo_path" -C "$repo_path" branch --show-current 2>/dev/null || true)"
+              if status="$(privileged git -c safe.directory="$repo_path" -C "$repo_path" status --porcelain 2>/dev/null)"; then
+                dirty="$(printf '%s\\n' "$status" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+                audit="ok"
+              else
+                dirty="unknown"
+                audit="error"
+                worktree_audit_errors=$((worktree_audit_errors + 1))
+                printf 'WORKTREE_AUDIT_ERROR path=%s\\n' "$repo_path" >&2
+              fi
               safe_origin="$(printf '%s' "$origin" | sed -E 's#(https?://)[^/@]+@#\\1***@#')"
-              printf 'WORKTREE path=%s branch=%s dirty=%s origin=%s\\n' "$repo_path" "$branch" "${dirty:-0}" "$safe_origin"
+              printf 'WORKTREE path=%s branch=%s dirty=%s audit=%s origin=%s\\n' "$repo_path" "$branch" "$dirty" "$audit" "$safe_origin"
             done < <(privileged find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null | LC_ALL=C sort)
             echo "CLIENTPLATFORM_DISK_SNAPSHOT_END"
+            if [ "$worktree_audit_errors" -ne 0 ]; then
+              echo "worktree audit failed: $worktree_audit_errors worktree(s) were unreadable" >&2
+              return 24
+            fi
           }
           snapshot
           if [ "$mode" = "cleanup" ]; then
@@ -143,15 +156,28 @@ jobs:
           find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null \
             | sed 's#/.git$##' | LC_ALL=C sort || true
           echo "--- git worktree details ---"
+          worktree_audit_errors=0
           while IFS= read -r dotgit; do
             repo_path="${dotgit%/.git}"
-            origin="$(git -C "$repo_path" remote get-url origin 2>/dev/null || true)"
-            branch="$(git -C "$repo_path" branch --show-current 2>/dev/null || true)"
-            dirty="$(git -C "$repo_path" status --porcelain 2>/dev/null | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+            origin="$(git -c safe.directory="$repo_path" -C "$repo_path" remote get-url origin 2>/dev/null || true)"
+            branch="$(git -c safe.directory="$repo_path" -C "$repo_path" branch --show-current 2>/dev/null || true)"
+            if status="$(git -c safe.directory="$repo_path" -C "$repo_path" status --porcelain 2>/dev/null)"; then
+              dirty="$(printf '%s\\n' "$status" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+              audit="ok"
+            else
+              dirty="unknown"
+              audit="error"
+              worktree_audit_errors=$((worktree_audit_errors + 1))
+              printf 'WORKTREE_AUDIT_ERROR path=%s\\n' "$repo_path" >&2
+            fi
             safe_origin="$(printf '%s' "$origin" | sed -E 's#(https?://)[^/@]+@#\\1***@#')"
-            printf 'WORKTREE path=%s branch=%s dirty=%s origin=%s\\n' "$repo_path" "$branch" "${dirty:-0}" "$safe_origin"
+            printf 'WORKTREE path=%s branch=%s dirty=%s audit=%s origin=%s\\n' "$repo_path" "$branch" "$dirty" "$audit" "$safe_origin"
           done < <(find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null | LC_ALL=C sort)
           echo "CLIENTPLATFORM_DISK_SNAPSHOT_END"
+          if [ "$worktree_audit_errors" -ne 0 ]; then
+            echo "worktree audit failed: $worktree_audit_errors worktree(s) were unreadable" >&2
+            exit 24
+          fi
           CLEANUP
             if [ "$(id -u)" -eq 0 ]; then
               flock -w 300 -x "$lock" bash "$cleanup_script"
