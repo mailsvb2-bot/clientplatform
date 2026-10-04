@@ -50,9 +50,23 @@ def _registration_form(
     source: object,
     campaign_ref: object,
     advertiser_label: object | None,
+    enabled: bool = True,
 ) -> str:
     source_value = str(source or "").strip()[:160]
     campaign_value = str(campaign_ref or "").strip()[:240]
+    if not enabled:
+        return (
+            "<section id=registration class='landing-registration'>"
+            "<fieldset disabled><legend>Регистрация на мероприятие</legend>"
+            "<label>Имя</label><input value='Предпросмотр'>"
+            "<label>E-mail</label><input value='preview@example.test'>"
+            "<label>Телефон (необязательно)</label><input>"
+            "<label><input style='width:auto' type=checkbox checked> "
+            "Согласие на обработку данных</label></fieldset>"
+            "<button type=button disabled>Зарегистрироваться</button>"
+            "<p><small>В предпросмотре форма отключена и ничего не отправляет.</small></p>"
+            "</section>"
+        )
     action = f"/e/{quote(event.public_slug, safe='')}/register"
     return (
         "<section id=registration class='landing-registration'>"
@@ -91,6 +105,7 @@ def _sales_landing(
     source: object,
     campaign_ref: object,
     advertiser_label: object | None,
+    registration_enabled: bool = True,
 ) -> str:
     faq = ""
     if landing.faq:
@@ -158,6 +173,7 @@ def _sales_landing(
             source=source,
             campaign_ref=campaign_ref,
             advertiser_label=advertiser_label,
+            enabled=registration_enabled,
         )
         + "</div>"
     )
@@ -170,6 +186,7 @@ def render_event_landing_body(
     campaign_ref: object = "",
     advertiser_label: object | None = None,
     landing: EventLandingContent | None = None,
+    registration_enabled: bool = True,
 ) -> str:
     if landing is not None:
         return _sales_landing(
@@ -178,6 +195,7 @@ def render_event_landing_body(
             source=source,
             campaign_ref=campaign_ref,
             advertiser_label=advertiser_label,
+            registration_enabled=registration_enabled,
         )
     return (
         f"<h1>{escape(event.title)}</h1>"
@@ -188,6 +206,7 @@ def render_event_landing_body(
             source=source,
             campaign_ref=campaign_ref,
             advertiser_label=advertiser_label,
+            enabled=registration_enabled,
         )
     )
 
