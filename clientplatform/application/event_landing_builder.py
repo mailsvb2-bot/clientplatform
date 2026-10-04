@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from clientplatform.application.activity import get_business_profile
 from clientplatform.application.business_profile import get_business_profile_details
+from clientplatform.domain.activity import ActivityNotFound
 from clientplatform.domain.business_profile import BusinessProfileDetails
 from clientplatform.domain.event_landing import (
     EventLandingContent,
@@ -113,7 +114,7 @@ def _event_context(*, actor: TenantContext, event_id: str):
     profile = get_business_profile(actor=actor)
     try:
         stored_details = get_business_profile_details(actor=actor)
-    except Exception:  # validator: allow-wide-except - absence/corruption must not block safe template
+    except (ActivityNotFound, ValueError):
         details = BusinessProfileDetails()
         details_confirmed = False
     else:
