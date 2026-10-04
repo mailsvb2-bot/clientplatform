@@ -100,8 +100,11 @@ jobs:
             echo "--- journal ---"
             privileged journalctl --disk-usage || true
             echo "--- major directories ---"
-            privileged du -x -B1 --max-depth=1 /var/lib /var/log /var/backups /opt 2>/dev/null \
-              | sort -nr | head -40 || true
+            privileged du -x -B1 --max-depth=1 /root /home /usr /var /opt /tmp 2>/dev/null \
+              | sort -nr | head -80 || true
+            echo "--- git worktrees ---"
+            privileged find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null \
+              | sed 's#/.git$##' | LC_ALL=C sort || true
             echo "CLIENTPLATFORM_DISK_SNAPSHOT_END"
           }
           snapshot
@@ -125,8 +128,11 @@ jobs:
           echo "--- journal ---"
           journalctl --disk-usage || true
           echo "--- major directories ---"
-          du -x -B1 --max-depth=1 /var/lib /var/log /var/backups /opt 2>/dev/null \
-            | sort -nr | head -40 || true
+          du -x -B1 --max-depth=1 /root /home /usr /var /opt /tmp 2>/dev/null \
+            | sort -nr | head -80 || true
+          echo "--- git worktrees ---"
+          find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null \
+            | sed 's#/.git$##' | LC_ALL=C sort || true
           echo "CLIENTPLATFORM_DISK_SNAPSHOT_END"
           CLEANUP
             if [ "$(id -u)" -eq 0 ]; then
