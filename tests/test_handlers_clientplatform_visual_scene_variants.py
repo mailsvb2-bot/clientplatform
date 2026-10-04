@@ -395,3 +395,103 @@ def test_durable_uncertain_scene_plan_fails_closed_to_deterministic_bundle(
     assert len(variants) == 5
     build.assert_not_called()
 
+
+
+
+def test_claimed_scene_plan_completes_durable_bundle_before_cache(monkeypatch) -> None:
+    monkeypatch.setattr(studio, "visual_scene_ai_planning_available", lambda: True)
+    data = _data()
+    contract = studio._scene_contract_from_state(data)
+    variants = studio._scene_variants_from_state(data)
+    for key in (
+        "creative_scene_contract",
+        "creative_scene_planner_source",
+        "creative_scene_variants",
+    ):
+        data.pop(key, None)
+    state = FakeState(data)
+    actor = SimpleNamespace()
+    receipt = SimpleNamespace(
+        id="33333333-3333-4333-8333-333333333333",
+        status=VisualScenePlanStatus.PLANNING,
+        result_json="",
+    )
+    complete = Mock()
+    monkeypatch.setattr(
+        studio,
+        "claim_visual_scene_plan",
+        Mock(return_value=(receipt, True)),
+    )
+    monkeypatch.setattr(
+        studio,
+        "build_visual_scene_bundle",
+        Mock(return_value=(contract, "ai", variants)),
+    )
+    monkeypatch.setattr(studio, "complete_visual_scene_plan", complete)
+
+    restored_contract, source, restored_variants = asyncio.run(
+        studio._ensure_scene_variants(state, data, actor=actor)
+    )
+
+    assert restored_contract == contract
+    assert source == "ai"
+    assert restored_variants == variants
+    complete.assert_called_once()
+    assert complete.call_args.kwargs["actor"] is actor
+    assert complete.call_args.kwargs["receipt_id"] == receipt.id
+    frozen = complete.call_args.kwargs["result_json"]
+    assert '"planner_source":"ai"' in frozen
+    assert state.data["creative_scene_planner_source"] == "ai"
+    assert len(state.data["creative_scene_variants"]) == 5
+
+
+def test_claimed_scene_plan_failures_never_retry_paid_planner(monkeypatch) -> None:
+    monkeypatch.setattr(studio, "visual_scene_ai_planning_available", lambda: True)
+    cases = (
+        (OSError("transport"), None),
+        (RuntimeError("runtime"), LookupError("already changed")),
+        (ValueError("invalid"), ValueError("state changed")),
+    )
+
+    for index, (planning_error, mark_error) in enumerate(cases, start=1):
+        data = _data()
+        for key in (
+            "creative_scene_contract",
+            "creative_scene_planner_source",
+            "creative_scene_variants",
+        ):
+            data.pop(key, None)
+        state = FakeState(data)
+        receipt = SimpleNamespace(
+            id=f"44444444-4444-4444-8444-44444444444{index}",
+            status=VisualScenePlanStatus.PLANNING,
+            result_json="",
+        )
+        build = Mock(side_effect=planning_error)
+        mark = (
+            Mock()
+            if mark_error is None
+            else Mock(side_effect=mark_error)
+        )
+        monkeypatch.setattr(
+            studio,
+            "claim_visual_scene_plan",
+            Mock(return_value=(receipt, True)),
+        )
+        monkeypatch.setattr(studio, "build_visual_scene_bundle", build)
+        monkeypatch.setattr(studio, "mark_visual_scene_plan_ambiguous", mark)
+
+        contract, source, variants = asyncio.run(
+            studio._ensure_scene_variants(
+                state,
+                data,
+                actor=SimpleNamespace(),
+            )
+        )
+
+        assert source == "deterministic"
+        assert contract.primary_subject
+        assert len(variants) == 5
+        build.assert_called_once()
+        mark.assert_called_once()
+        assert state.data["creative_scene_planner_source"] == "deterministic"
