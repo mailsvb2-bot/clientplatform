@@ -132,6 +132,12 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
         self.assertNotIn('core.fsmonitor=false', text)
         self.assertNotIn('core.hooksPath=/dev/null', text)
 
+        # The cleanup body runs in a fresh shell under flock, so it must initialize
+        # the canonical repository path inside that subprocess instead of relying
+        # on a non-exported parent-shell variable.
+        cleanup_body = text.split("cat > \"$cleanup_script\" <<'CLEANUP'", 1)[1]
+        self.assertIn("repo=/opt/clientplatform", cleanup_body)
+
         # Discovery itself is critical and must not disappear inside process
         # substitution or a best-effort `|| true`.
         self.assertGreaterEqual(text.count("WORKTREE_DISCOVERY_ERROR"), 2)
