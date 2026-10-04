@@ -153,7 +153,7 @@ class EventLandingRepository:
             SELECT revision FROM clientplatform_event_landing_profiles
             WHERE business_id=? AND event_id=? LIMIT 1
             """,
-            (actor.business_id, normalized),
+            (current.business_id, normalized),
         ).fetchone()
         if existing is None:
             self._conn.execute(
@@ -283,13 +283,13 @@ class EventLandingRepository:
         ttl_seconds: int = 1800,
         now: str | None = None,
     ) -> IssuedEventLandingPreview:
-        current, normalized = self._event(actor=actor, event_id=event_id)
-        profile = self.get(actor=current, event_id=normalized)
+        current_actor, normalized = self._event(actor=actor, event_id=event_id)
+        profile = self.get(actor=current_actor, event_id=normalized)
         if profile is None:
             raise ValueError("event landing draft is missing")
         ttl = max(60, min(int(ttl_seconds), 3600))
-        current = _parse_utc(now or _utc_now()).replace(microsecond=0)
-        expires = current + timedelta(seconds=ttl)
+        current_time = _parse_utc(now or _utc_now()).replace(microsecond=0)
+        expires = current_time + timedelta(seconds=ttl)
         token = secrets.token_urlsafe(32)
         digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
         cursor = self._conn.execute(
@@ -303,9 +303,9 @@ class EventLandingRepository:
                 digest,
                 profile.revision,
                 expires.isoformat(),
-                current.membership_id,
-                current.isoformat(),
-                current.business_id,
+                current_actor.membership_id,
+                current_time.isoformat(),
+                current_actor.business_id,
                 profile.event_id,
                 profile.revision,
             ),
