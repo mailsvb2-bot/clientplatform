@@ -97,6 +97,7 @@ class ProviderConfig:
     api_key: str = ""
     model_image: str = ""
     model_video: str = ""
+    model_orchestrator: str = ""
     folder_id: str = ""
     credentials: str = ""
     oauth_url: str = ""
@@ -118,6 +119,7 @@ class ProviderConfig:
             "base_url": safe_base,
             "model_image": self.model_image,
             "model_video": self.model_video,
+            "model_orchestrator": self.model_orchestrator,
             "folder_id_configured": bool(self.folder_id),
             "credentials_configured": bool(self.credentials or self.api_key),
             "ca_bundle_configured": bool(self.ca_bundle_file),

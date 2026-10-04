@@ -271,6 +271,29 @@ def _is_alice_image_model(model_uri: str) -> bool:
     return str(model_uri or "").strip().rsplit("/", 1)[-1] == "aliceai-image-art-3.0"
 
 
+def _yandex_art_pipeline() -> str:
+    raw = str(os.getenv("YANDEX_ART_PIPELINE", "responses") or "responses").strip().lower()
+    aliases = {
+        "agent": "responses",
+        "image_tool": "responses",
+        "image-generation-tool": "responses",
+        "direct": "images",
+        "openai_images": "images",
+    }
+    normalized = aliases.get(raw, raw)
+    return normalized if normalized in {"responses", "images"} else "responses"
+
+
+def _yandex_responses_instructions() -> str:
+    return (
+        "Создай ровно одно изображение через image_generation. Сохрани исходный "
+        "смысл, героя, действие, причинно-следственную связь и запрошенное изменение "
+        "состояния. Если есть превращение или последовательность, сделай её визуально "
+        "понятной, сохраняя одного и того же героя. Не заменяй генерацию текстовым "
+        "ответом и не добавляй надписи, логотипы или утверждения, которых не просили."
+    )
+
+
 def _definitive_model_rejection(exc: BaseException) -> bool:
     if not isinstance(exc, ProviderTransportError):
         return False
@@ -402,6 +425,112 @@ class YandexArtProvider:
         job.error_code = ""
         return _store_asset(self.config, job, raw)
 
+    def _submit_responses_image_tool(
+        self,
+        brief: CreativeBrief,
+        *,
+        authorization: str,
+        model_uri: str,
+    ) -> CreativeJob:
+        orchestrator = str(self.config.model_orchestrator or "").strip()
+        if not orchestrator:
+            if not self.config.folder_id:
+                raise ProviderTransportError("provider_not_configured")
+            orchestrator = f"gpt://{self.config.folder_id}/aliceai-llm"
+
+        natural_input = str(
+            (brief.metadata or {}).get("yandex_responses_input") or brief.prompt
+        ).strip()
+        if not natural_input:
+            raise ProviderTransportError("invalid_request")
+
+        quality = str(
+            os.getenv("YANDEX_ART_RESPONSES_QUALITY", "high") or "high"
+        ).strip().lower()
+        if quality not in {"low", "medium", "high", "auto"}:
+            quality = "high"
+
+        data = _json_request(
+            "POST",
+            self.config.base_url.rstrip("/") + "/v1/responses",
+            headers={
+                "Authorization": authorization,
+                "OpenAI-Project": self.config.folder_id,
+            },
+            payload={
+                "model": orchestrator,
+                "instructions": _yandex_responses_instructions(),
+                "input": natural_input,
+                "tools": [
+                    {
+                        "type": "image_generation",
+                        "model": "aliceai-image-art-3.0",
+                        "quality": quality,
+                        "size": _openai_image_size(brief.aspect_ratio),
+                        "output_format": "png",
+                    }
+                ],
+                "tool_choice": {"type": "image_generation"},
+                "max_tool_calls": 1,
+                "parallel_tool_calls": False,
+            },
+            timeout=self.config.timeout_seconds,
+            max_bytes=self.config.max_json_bytes,
+        )
+
+        rows = data.get("output") if isinstance(data.get("output"), list) else []
+        call = next(
+            (
+                row
+                for row in rows
+                if isinstance(row, dict)
+                and str(row.get("type") or "") == "image_generation_call"
+            ),
+            None,
+        )
+        job = CreativeJob(
+            provider="yandexart",
+            kind="image",
+            status="failed",
+            external_id=str(
+                (call or {}).get("id") or data.get("id") or uuid.uuid4().hex
+            ),
+            model=model_uri,
+            mime_type="image/png",
+            provider_payload={
+                "transport": "responses_image_generation",
+                "orchestrator_model": orchestrator,
+            },
+        )
+        if not isinstance(call, dict):
+            job.error_code = "yandex_responses_missing_image_call"
+            return job
+
+        call_status = str(call.get("status") or "").strip().lower()
+        if call_status and call_status not in {"completed", "succeeded"}:
+            job.error_code = "yandex_responses_image_call_incomplete"
+            return job
+
+        encoded = str(call.get("result") or "").strip()
+        if not encoded:
+            job.error_code = "yandex_responses_missing_image"
+            return job
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError, TypeError):
+            job.error_code = "invalid_image_encoding"
+            return job
+
+        response_id = str(data.get("id") or "").strip()
+        if response_id:
+            job.provider_payload["response_id"] = response_id
+        file_id = str(call.get("file_id") or "").strip()
+        if file_id:
+            job.provider_payload["file_id"] = file_id
+        job.status = "succeeded"
+        job.error_code = ""
+        return _store_asset(self.config, job, raw)
+
     def _submit_compat_model(
         self,
         brief: CreativeBrief,
@@ -477,9 +606,16 @@ class YandexArtProvider:
         for model_uri in _yandex_image_model_candidates(self.config):
             try:
                 if _is_alice_image_model(model_uri):
-                    # Alice AI ART 3.0 is served through the current
-                    # OpenAI-compatible Images API. Do not send it through the
-                    # deprecated native YandexART transport first.
+                    # The default path lets Alice AI LLM interpret the natural
+                    # owner request and invoke Alice AI ART via the Responses API
+                    # Image Generation Tool. Operators can explicitly select the
+                    # direct Images API for controlled rollback/recovery.
+                    if _yandex_art_pipeline() == "responses":
+                        return self._submit_responses_image_tool(
+                            brief,
+                            authorization=authorization,
+                            model_uri=model_uri,
+                        )
                     return self._submit_compat_model(
                         brief,
                         authorization=authorization,

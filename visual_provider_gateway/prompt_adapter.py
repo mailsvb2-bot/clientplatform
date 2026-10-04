@@ -13,7 +13,7 @@ import re
 from .models import CreativeBrief
 
 
-PROMPT_ADAPTER_VERSION = 11
+PROMPT_ADAPTER_VERSION = 12
 
 _RUNWAY_PROMPT_LIMIT = 1000
 _YANDEX_PROMPT_LIMIT = 500
@@ -988,9 +988,23 @@ def _bounded_yandex_prompt(
 def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
     lines = _compiled_directives(brief.prompt)
     owner_request = _compiled_owner_request(lines)
+
+    # The Responses/Image Generation Tool path has a language model in front of
+    # Alice AI ART. Preserve a natural, substantially uncompressed owner-facing
+    # request for that orchestrator instead of feeding it our 500-character
+    # direct-model compression. The direct Images API prompt is still compiled
+    # below for explicit legacy/recovery mode.
+    responses_input = _bounded_join(
+        _yandex_natural_prompt_parts(brief),
+        limit=4000,
+    )
+    metadata = dict(brief.metadata or {})
+    if responses_input:
+        metadata["yandex_responses_input"] = responses_input
+
     if not owner_request:
         prompt = _bounded_join([brief.prompt], limit=_YANDEX_PROMPT_LIMIT)
-        return replace(brief, prompt=prompt)
+        return replace(brief, prompt=prompt, metadata=metadata)
 
     extras: list[str] = []
     contract_head, contract_cues = _scene_contract_yandex_parts(brief)
@@ -1032,7 +1046,7 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
         brief=brief,
         extras=tuple(extras),
     )
-    return replace(brief, prompt=prompt)
+    return replace(brief, prompt=prompt, metadata=metadata)
 
 
 def _adapt_yandex_motion(brief: CreativeBrief) -> CreativeBrief:

@@ -64,6 +64,7 @@ def provider_configs() -> dict[str, ProviderConfig]:
             base_url=_env("YANDEX_ART_BASE_URL", "https://ai.api.cloud.yandex.net:443"),
             api_key=_env("YANDEX_API_KEY", _env("YANDEX_ART_IAM_TOKEN", "")),
             model_image=_env("YANDEX_ART_MODEL_URI", f"art://{yandex_folder}/aliceai-image-art-3.0" if yandex_folder else ""),
+            model_orchestrator=_env("YANDEX_IMAGE_ORCHESTRATOR_MODEL", f"gpt://{yandex_folder}/aliceai-llm" if yandex_folder else ""),
             folder_id=yandex_folder,
             timeout_seconds=timeout,
             max_json_bytes=max_json,
@@ -75,6 +76,7 @@ def provider_configs() -> dict[str, ProviderConfig]:
             base_url=_env("YANDEX_ART_BASE_URL", "https://ai.api.cloud.yandex.net:443"),
             api_key=_env("YANDEX_API_KEY", _env("YANDEX_ART_IAM_TOKEN", "")),
             model_image=_env("YANDEX_ART_MODEL_URI", f"art://{yandex_folder}/aliceai-image-art-3.0" if yandex_folder else ""),
+            model_orchestrator=_env("YANDEX_IMAGE_ORCHESTRATOR_MODEL", f"gpt://{yandex_folder}/aliceai-llm" if yandex_folder else ""),
             folder_id=yandex_folder,
             timeout_seconds=timeout,
             max_json_bytes=max_json,
@@ -317,6 +319,13 @@ def _model_lifecycle(model_uri: str) -> dict[str, object]:
     }
 
 
+def _yandex_image_api_family() -> str:
+    raw = str(_env("YANDEX_ART_PIPELINE", "responses") or "responses").strip().lower()
+    if raw in {"images", "direct", "openai_images"}:
+        return "openai_images"
+    return "responses_image_generation"
+
+
 def provider_snapshot(country_code: str = "") -> dict[str, object]:
     configs = provider_configs()
     yandex = configs["yandexart"]
@@ -349,7 +358,8 @@ def provider_snapshot(country_code: str = "") -> dict[str, object]:
         "models": {
             "yandexart": {
                 **_model_lifecycle(yandex.model_image),
-                "api_family": "openai_images",
+                "api_family": _yandex_image_api_family(),
+                "orchestrator_model": yandex.model_orchestrator,
                 "catalog_configured": catalog.configured,
                 "catalog_available": catalog.available,
                 "catalog_error": catalog.error_code,

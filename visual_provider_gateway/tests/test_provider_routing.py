@@ -105,6 +105,21 @@ def test_provider_snapshot_does_not_expose_credentials(monkeypatch):
     assert "secret-selfhost" not in rendered
 
 
+def test_provider_snapshot_reports_yandex_responses_pipeline_and_orchestrator(monkeypatch):
+    monkeypatch.setenv("YANDEX_ART_FOLDER_ID", "folder")
+    monkeypatch.delenv("YANDEX_ART_PIPELINE", raising=False)
+
+    snapshot = provider_snapshot("RU")
+    yandex = snapshot["models"]["yandexart"]
+
+    assert yandex["api_family"] == "responses_image_generation"
+    assert yandex["orchestrator_model"] == "gpt://folder/aliceai-llm"
+
+    monkeypatch.setenv("YANDEX_ART_PIPELINE", "images")
+    snapshot = provider_snapshot("RU")
+    assert snapshot["models"]["yandexart"]["api_family"] == "openai_images"
+
+
 def test_gigachat_semantic_qa_is_non_generative_and_cleans_uploaded_file(
     tmp_path,
     monkeypatch,
@@ -332,7 +347,90 @@ def test_deprecated_yandex_candidate_requires_explicit_operator_opt_in(monkeypat
     )
 
 
+def test_yandexart_defaults_to_responses_image_generation_tool(monkeypatch, tmp_path):
+    from visual_provider_gateway.providers import YandexArtProvider
+
+    observed = {}
+    encoded = base64.b64encode(b"responses-image").decode("ascii")
+
+    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0, ca_bundle_file=""):
+        observed.update({"method": method, "url": url, "headers": headers, "payload": payload})
+        return {
+            "id": "response-123",
+            "output": [
+                {
+                    "id": "image-call-123",
+                    "type": "image_generation_call",
+                    "status": "completed",
+                    "result": encoded,
+                    "file_id": "file-123",
+                }
+            ],
+        }
+
+    monkeypatch.delenv("YANDEX_ART_PIPELINE", raising=False)
+    monkeypatch.setenv("YANDEX_API_KEY", "test")
+    monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(providers, "_json_request", fake_json_request)
+
+    provider = YandexArtProvider(
+        ProviderConfig(
+            name="yandexart",
+            base_url="https://ai.api.cloud.yandex.net",
+            api_key="test",
+            folder_id="folder",
+            model_image="art://folder/aliceai-image-art-3.0",
+            model_orchestrator="gpt://folder/aliceai-llm",
+            output_dir=str(tmp_path / "visual"),
+        )
+    )
+    job = provider.submit(
+        CreativeBrief(
+            kind="image",
+            prompt="compressed-direct-prompt",
+            aspect_ratio="16:9",
+            metadata={
+                "yandex_responses_input": (
+                    "ёж, который слушает ресурсные аудио трансы и становится "
+                    "добрым и пушистым"
+                )
+            },
+        )
+    )
+
+    assert observed["method"] == "POST"
+    assert observed["url"] == "https://ai.api.cloud.yandex.net/v1/responses"
+    assert observed["headers"] == {
+        "Authorization": "Api-Key test",
+        "OpenAI-Project": "folder",
+    }
+    payload = observed["payload"]
+    assert payload["model"] == "gpt://folder/aliceai-llm"
+    assert payload["input"].startswith("ёж, который слушает")
+    assert payload["tool_choice"] == {"type": "image_generation"}
+    assert payload["max_tool_calls"] == 1
+    assert payload["parallel_tool_calls"] is False
+    assert payload["tools"] == [
+        {
+            "type": "image_generation",
+            "model": "aliceai-image-art-3.0",
+            "quality": "high",
+            "size": "1536x1024",
+            "output_format": "png",
+        }
+    ]
+    assert "превращение" in payload["instructions"]
+    assert job.status == "succeeded"
+    assert job.model == "art://folder/aliceai-image-art-3.0"
+    assert job.provider_payload["transport"] == "responses_image_generation"
+    assert job.provider_payload["orchestrator_model"] == "gpt://folder/aliceai-llm"
+    assert job.provider_payload["response_id"] == "response-123"
+    assert job.provider_payload["file_id"] == "file-123"
+
+
 def test_alice_ai_art_uses_openai_compatible_images_api(tmp_path, monkeypatch):
+    monkeypatch.setenv("YANDEX_ART_PIPELINE", "images")
     from visual_provider_gateway.providers import YandexArtProvider
 
     calls = []
@@ -605,6 +703,7 @@ def test_yandex_motion_bounds_local_render_retries_without_new_provider_submit(
 
 
 def test_current_alice_model_failure_is_not_masked_by_deprecated_fallback(monkeypatch):
+    monkeypatch.setenv("YANDEX_ART_PIPELINE", "images")
     from visual_provider_gateway.providers import (
         ProviderTransportError,
         YandexArtProvider,
@@ -638,6 +737,7 @@ def test_current_alice_model_failure_is_not_masked_by_deprecated_fallback(monkey
 
 
 def test_alice_ai_art_auth_rejection_can_use_renewable_iam(tmp_path, monkeypatch):
+    monkeypatch.setenv("YANDEX_ART_PIPELINE", "images")
     from services.yandex_iam_token import YandexIamTokenResult
     from visual_provider_gateway.providers import (
         ProviderTransportError,
@@ -689,6 +789,7 @@ def test_alice_ai_art_auth_rejection_can_use_renewable_iam(tmp_path, monkeypatch
 
 
 def test_yandexart_does_not_retry_model_after_ambiguous_submit(monkeypatch):
+    monkeypatch.setenv("YANDEX_ART_PIPELINE", "images")
     from visual_provider_gateway.providers import (
         ProviderTransportError,
         YandexArtProvider,
@@ -1163,6 +1264,7 @@ def test_submit_never_exposes_unstructured_transport_error_text(monkeypatch):
 
 
 def test_yandexart_uses_current_alice_images_api(monkeypatch, tmp_path):
+    monkeypatch.setenv("YANDEX_ART_PIPELINE", "images")
     from visual_provider_gateway.providers import YandexArtProvider
 
     observed = {}
@@ -1277,6 +1379,7 @@ def test_yandexart_motion_video_renders_current_alice_keyframe(monkeypatch, tmp_
 
 
 def test_yandex_model_candidate_skips_deprecated_model_and_uses_current_alice(monkeypatch, tmp_path):
+    monkeypatch.setenv("YANDEX_ART_PIPELINE", "images")
     from visual_provider_gateway.providers import YandexArtProvider
 
     calls = []
@@ -1382,6 +1485,7 @@ def test_visual_provider_gateway_image_contains_ffmpeg_contract():
     assert "apt-get install -y --no-install-recommends ffmpeg" in dockerfile
 
 def test_yandexart_retries_with_renewable_iam_after_static_auth_rejection(monkeypatch, tmp_path):
+    monkeypatch.setenv("YANDEX_ART_PIPELINE", "images")
     from visual_provider_gateway.providers import ProviderTransportError, YandexArtProvider
 
     calls = []
@@ -1470,6 +1574,7 @@ def test_yandexart_does_not_switch_credentials_after_ambiguous_failure(monkeypat
 
 
 def test_yandexart_can_be_configured_by_renewable_iam_only(monkeypatch, tmp_path):
+    monkeypatch.setenv("YANDEX_ART_PIPELINE", "images")
     from visual_provider_gateway.providers import YandexArtProvider
 
     encoded = base64.b64encode(b"renewable-only-image").decode("ascii")
