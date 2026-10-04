@@ -239,6 +239,7 @@ def test_show_scene_variant_choices_handles_stale_success_and_planner_failure(
             target,
             state,
             token="business-token",
+            user_id=101,
         )
     )
     assert state.state == studio.ClientPlatformCreativeStudioState.choosing_style
@@ -263,6 +264,7 @@ def test_show_scene_variant_choices_handles_stale_success_and_planner_failure(
             failing_target,
             failing_state,
             token="business-token",
+            user_id=101,
         )
     )
     assert "Не удалось подготовить варианты" in failing_target.answer.await_args.args[0]
