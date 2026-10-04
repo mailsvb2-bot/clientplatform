@@ -193,9 +193,13 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
             "pull.head.sha === branch.commit.sha",
             "const auditedStaleRefs = new Map([",
             "auditedStaleSha === branch.commit.sha",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
             "github.rest.git.getRef",
             "currentRef.data.object.sha !== branch.commit.sha",
             "openPullsBeforeDelete",
+            "--force-with-lease=${leasedRef}:${branch.commit.sha}",
+            "['push', lease, 'origin', `:${leasedRef}`]",
+            "lease-delete-failed",
             "Deleting proven-merged non-main branch",
             "Deleting exact-SHA audited stale branch",
             "Refusing to delete non-main branches without exact merged or audited-stale proof",
@@ -207,6 +211,7 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
             with self.subTest(branch=branch):
                 self.assertIn(f"['{branch}', '{sha}']", text)
         self.assertNotIn("Deleting non-main branch:", text)
+        self.assertNotIn("github.rest.git.deleteRef", text)
 
     def test_repair_bootstrap_only_configures_dedicated_clientplatform_ssh(self) -> None:
         text = self._text(REPAIR)
