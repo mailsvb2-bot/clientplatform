@@ -126,7 +126,7 @@ def test_short_prompt_enters_optional_style_step_before_any_paid_preparation(
         for row in message.answer.await_args.kwargs["reply_markup"].inline_keyboard
         for button in row
     ]
-    assert "🤖 Сделать всё автоматически" in labels
+    assert "🤖 AI-авто — подготовить постановку" in labels
     assert "🎬 Показать 5 вариантов" in labels
     assert "один текстовый AI-вызов" in text
 
@@ -225,7 +225,7 @@ def test_style_dashboard_stays_within_owner_button_budget() -> None:
     assert len(buttons) <= 20
     labels = [label for label, _callback in buttons]
     assert "🤖 Авто — всё решит ClientPlatform" in labels
-    assert "✅ Готово — ClientPlatform выберет лучший" in labels
+    assert "✅ AI-авто — выбрать лучший" in labels
 
 
 def test_style_rows_show_checkmark_for_current_choice_and_compact_finish_action() -> None:
