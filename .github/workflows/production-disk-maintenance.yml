@@ -107,13 +107,29 @@ jobs:
               | sed 's#/.git$##' | LC_ALL=C sort || true
             echo "--- git worktree details ---"
             worktree_audit_errors=0
-            # Discovered worktrees may be owned by another account. Never allow
-            # repository-controlled fsmonitor/hooks to execute under privileged audit.
+            audit_git_as_owner() {
+              owner_uid="$1"; repo_path="$2"; shift 2
+              if [ "$(id -u)" = "$owner_uid" ]; then
+                env GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$repo_path" -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path" "$@"
+              else
+                sudo -n -u "#$owner_uid" -- env GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$repo_path" -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path" "$@"
+              fi
+            }
+            # Discovery/stat may require privilege, but Git itself must run as the
+            # worktree owner so repository-controlled configuration never runs as root.
             while IFS= read -r dotgit; do
               repo_path="${dotgit%/.git}"
-              origin="$(privileged env GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$repo_path" -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path" remote get-url origin 2>/dev/null || true)"
-              branch="$(privileged env GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$repo_path" -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path" branch --show-current 2>/dev/null || true)"
-              if status="$(privileged env GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$repo_path" -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path" status --porcelain 2>/dev/null)"; then
+              repo_uid="$(privileged stat -c '%u' "$dotgit" 2>/dev/null || true)"
+              case "$repo_uid" in ''|*[!0-9]*)
+                printf 'WORKTREE_AUDIT_ERROR path=%s reason=owner_unknown\\n' "$repo_path" >&2
+                worktree_audit_errors=$((worktree_audit_errors + 1))
+                printf 'WORKTREE path=%s branch=unknown dirty=unknown audit=error origin=\\n' "$repo_path"
+                continue
+                ;;
+              esac
+              origin="$(audit_git_as_owner "$repo_uid" "$repo_path" remote get-url origin 2>/dev/null || true)"
+              branch="$(audit_git_as_owner "$repo_uid" "$repo_path" branch --show-current 2>/dev/null || true)"
+              if status="$(audit_git_as_owner "$repo_uid" "$repo_path" status --porcelain 2>/dev/null)"; then
                 dirty="$(printf '%s\\n' "$status" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
                 audit="ok"
               else
@@ -159,13 +175,28 @@ jobs:
             | sed 's#/.git$##' | LC_ALL=C sort || true
           echo "--- git worktree details ---"
           worktree_audit_errors=0
-          # Keep the post-cleanup audit read-only even for foreign repositories.
-          # Command-line config overrides repository-local execution hooks.
+          audit_git_as_owner() {
+            owner_uid="$1"; repo_path="$2"; shift 2
+            if [ "$(id -u)" = "$owner_uid" ]; then
+              env GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$repo_path" -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path" "$@"
+            else
+              sudo -n -u "#$owner_uid" -- env GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$repo_path" -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path" "$@"
+            fi
+          }
+          # The cleanup body runs as root, but foreign Git repositories do not.
           while IFS= read -r dotgit; do
             repo_path="${dotgit%/.git}"
-            origin="$(env GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$repo_path" -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path" remote get-url origin 2>/dev/null || true)"
-            branch="$(env GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$repo_path" -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path" branch --show-current 2>/dev/null || true)"
-            if status="$(env GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$repo_path" -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path" status --porcelain 2>/dev/null)"; then
+            repo_uid="$(stat -c '%u' "$dotgit" 2>/dev/null || true)"
+            case "$repo_uid" in ''|*[!0-9]*)
+              printf 'WORKTREE_AUDIT_ERROR path=%s reason=owner_unknown\\n' "$repo_path" >&2
+              worktree_audit_errors=$((worktree_audit_errors + 1))
+              printf 'WORKTREE path=%s branch=unknown dirty=unknown audit=error origin=\\n' "$repo_path"
+              continue
+              ;;
+            esac
+            origin="$(audit_git_as_owner "$repo_uid" "$repo_path" remote get-url origin 2>/dev/null || true)"
+            branch="$(audit_git_as_owner "$repo_uid" "$repo_path" branch --show-current 2>/dev/null || true)"
+            if status="$(audit_git_as_owner "$repo_uid" "$repo_path" status --porcelain 2>/dev/null)"; then
               dirty="$(printf '%s\\n' "$status" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
               audit="ok"
             else
