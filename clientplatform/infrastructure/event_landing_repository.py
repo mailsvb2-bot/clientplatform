@@ -140,6 +140,7 @@ class EventLandingRepository:
         event_id: str,
         content: EventLandingContent,
         source: str,
+        expected_revision: int | None = None,
         now: str | None = None,
     ) -> EventLandingProfile:
         current, normalized = self._event(actor=actor, event_id=event_id)
@@ -156,6 +157,8 @@ class EventLandingRepository:
             (current.business_id, normalized),
         ).fetchone()
         if existing is None:
+            if expected_revision not in {None, 0}:
+                raise RuntimeError("event landing changed concurrently; refresh and retry")
             self._conn.execute(
                 """
                 INSERT INTO clientplatform_event_landing_profiles(
@@ -176,6 +179,8 @@ class EventLandingRepository:
             )
         else:
             revision = int(_value(existing, "revision", 0))
+            if expected_revision is not None and revision != int(expected_revision):
+                raise RuntimeError("event landing changed concurrently; refresh and retry")
             cursor = self._conn.execute(
                 """
                 UPDATE clientplatform_event_landing_profiles
@@ -200,6 +205,46 @@ class EventLandingRepository:
         if stored is None:
             raise RuntimeError("event landing draft was not persisted")
         return stored
+
+    def ensure_draft(
+        self,
+        *,
+        actor: TenantContext,
+        event_id: str,
+        content: EventLandingContent,
+        source: str = "template",
+        now: str | None = None,
+    ) -> EventLandingProfile:
+        current, normalized = self._event(actor=actor, event_id=event_id)
+        source_value = str(source or "").strip().lower()
+        if source_value not in {"template", "ai", "owner"}:
+            raise ValueError("event landing source is invalid")
+        body = event_landing_content_to_json(content)
+        timestamp = str(now or _utc_now())
+        self._conn.execute(
+            """
+            INSERT INTO clientplatform_event_landing_profiles(
+                business_id,event_id,draft_json,published_json,draft_source,
+                revision,published_revision,preview_token_digest,preview_revision,
+                preview_expires_at,updated_by_member_id,created_at,updated_at,published_at
+            ) VALUES(?,?,?,NULL,?,1,NULL,NULL,NULL,NULL,?,?,?,NULL)
+            ON CONFLICT(business_id,event_id) DO NOTHING
+            """,
+            (
+                current.business_id,
+                normalized,
+                body,
+                source_value,
+                current.membership_id,
+                timestamp,
+                timestamp,
+            ),
+        )
+        stored = self.get(actor=current, event_id=normalized)
+        if stored is None:
+            raise RuntimeError("event landing draft was not persisted")
+        return stored
+
 
     def publish(
         self,
