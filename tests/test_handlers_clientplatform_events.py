@@ -64,12 +64,20 @@ def test_event_hub_is_repeatable_navigation_but_creation_remains_a_mutation() ->
     assert safety._is_clientplatform_callback(f"cpev:home:{_TOKEN}")
     assert safety._is_repeatable_navigation(f"cpev:home:{_TOKEN}")
     assert safety._is_repeatable_navigation(f"cpev:settings:{_TOKEN}")
+    assert safety._is_repeatable_navigation(f"cpev:landing:{_TOKEN}:{_TOKEN}")
+    for action in ("la", "lt", "lr", "lp", "lx", "ls"):
+        assert not safety._is_repeatable_navigation(f"cpev:{action}:{_TOKEN}:{_TOKEN}")
     assert not safety._is_repeatable_navigation(f"cpev:new:{_TOKEN}")
     state_name = "ClientPlatformControlState:activity_description"
     assert not safety._callback_conflicts_with_state(state_name, f"cpev:home:{_TOKEN}")
     assert safety._callback_should_clear_state(state_name, f"cpev:home:{_TOKEN}")
     assert safety._callback_should_clear_state(state_name, f"cpev:settings:{_TOKEN}")
-    for event_state in ("waiting_details", "waiting_time", "waiting_join_url"):
+    for event_state in (
+        "waiting_details",
+        "waiting_time",
+        "waiting_join_url",
+        "waiting_landing_section",
+    ):
         assert safety._state_local_callback_allowed(
             f"ClientPlatformEventState:{event_state}",
             f"cpev:cancel:{_TOKEN}",
