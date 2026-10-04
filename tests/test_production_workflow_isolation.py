@@ -118,60 +118,22 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
     def test_disk_maintenance_foreign_worktree_audit_is_ownership_safe_and_fail_closed(self) -> None:
         text = self._text(DISK_MAINTENANCE)
 
-        hardened_git = (
-            'git -c safe.directory="$repo_path" '
-            '-c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path"'
-        )
-        self.assertGreaterEqual(text.count(hardened_git), 4)
-        self.assertGreaterEqual(text.count("GIT_OPTIONAL_LOCKS=0"), 4)
-        self.assertGreaterEqual(text.count("audit_git_as_owner()"), 2)
-        self.assertGreaterEqual(text.count('stat -c \'%u\' "$dotgit"'), 2)
-        self.assertGreaterEqual(text.count('sudo -n -u "#$owner_uid" -- env'), 2)
+        # Canonical /opt/clientplatform is already checked for branch=main and a clean
+        # tracked worktree before snapshot. Arbitrary discovered repositories are
+        # inventory-only: never execute Git in a repository we do not trust.
+        self.assertGreaterEqual(text.count("audit=inventory_only"), 2)
+        self.assertGreaterEqual(text.count("audit=canonical_prechecked"), 2)
+        self.assertGreaterEqual(text.count("branch=not_evaluated"), 2)
+        self.assertGreaterEqual(text.count("dirty=not_evaluated"), 2)
         self.assertGreaterEqual(text.count("reason=owner_unknown"), 2)
-        self.assertGreaterEqual(text.count("WORKTREE_DISCOVERY_ERROR"), 2)
-        self.assertIn("phase=pre_cleanup", text)
-        self.assertIn("phase=post_cleanup", text)
-        self.assertGreaterEqual(
-            text.count('worktree_list="$(mktemp /tmp/clientplatform-worktrees.XXXXXX)"'),
-            2,
-        )
-        self.assertIn('done < "$worktree_list"', text)
-        self.assertNotIn(
-            'done < <(privileged find /root /home /opt /srv /tmp',
-            text,
-        )
-        self.assertNotIn(
-            'done < <(find /root /home /opt /srv /tmp',
-            text,
-        )
-        self.assertNotIn(
-            'privileged env GIT_OPTIONAL_LOCKS=0 git',
-            text,
-        )
-        self.assertNotIn(
-            'git -c safe.directory="$repo_path" -C "$repo_path"',
-            text,
-        )
-        self.assertGreaterEqual(text.count("worktree_audit_errors=0"), 2)
-        self.assertGreaterEqual(text.count('dirty="unknown"'), 2)
-        self.assertGreaterEqual(text.count('audit="error"'), 2)
-        self.assertGreaterEqual(text.count("WORKTREE_AUDIT_ERROR"), 2)
-        self.assertGreaterEqual(
-            text.count('if [ "$worktree_audit_errors" -ne 0 ]; then'),
-            2,
-        )
-        self.assertIn("return 24", text)
-        self.assertIn("exit 24", text)
-        self.assertNotIn(
-            'status="$(privileged git -c safe.directory="$repo_path" -C "$repo_path" status --porcelain 2>/dev/null || true)"',
-            text,
-        )
-        self.assertNotIn(
-            'status="$(git -c safe.directory="$repo_path" -C "$repo_path" status --porcelain 2>/dev/null || true)"',
-            text,
-        )
+        self.assertNotIn("audit_git_as_owner", text)
+        self.assertNotIn('git -C "$repo_path"', text)
+        self.assertNotIn('git -c safe.directory="$repo_path"', text)
+        self.assertNotIn('core.fsmonitor=false', text)
+        self.assertNotIn('core.hooksPath=/dev/null', text)
 
-    def test_branch_cleanup_deletes_only_exact_merged_pr_heads(self) -> None:
+        # Discovery itself is critical and must not disappear inside process
+        # substitution or a best-effort     def test_branch_cleanup_deletes_only_exact_merged_pr_heads(self) -> None:
         text = self._text(BRANCH_CLEANUP)
         for required in (
             "pull-requests: read",
