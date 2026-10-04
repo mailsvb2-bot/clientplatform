@@ -207,8 +207,8 @@ def style_dashboard_rows(
             [("🤖 Авто — всё решит ClientPlatform", f"cpc:st:reset:{token}")],
             [("💾 Запомнить этот стиль", f"cpc:st:save:{token}")],
             [("🗑 Не использовать сохранённый стиль", f"cpc:st:clear:{token}")],
-            [("🎬 Показать 5 вариантов", f"cpc:sv:show:{token}")],
-            [("✅ Готово — ClientPlatform выберет лучший", f"cpc:st:go:{token}")],
+            [("🎬 Сгенерировать 5 AI-вариантов", f"cpc:sv:show:{token}")],
+            [("✅ AI-авто — выбрать лучший", f"cpc:st:go:{token}")],
         ]
     )
     return rows
@@ -237,8 +237,8 @@ def style_dimension_rows(
                 )
             )
         rows.append(row)
-    rows.append([("🎬 Показать 5 вариантов", f"cpc:sv:show:{token}")])
-    rows.append([("✅ Готово — ClientPlatform выберет лучший", f"cpc:st:go:{token}")])
+    rows.append([("🎬 Сгенерировать 5 AI-вариантов", f"cpc:sv:show:{token}")])
+    rows.append([("✅ AI-авто — выбрать лучший", f"cpc:st:go:{token}")])
     rows.append([("⬅️ Все настройки", f"cpc:st:open:{token}")])
     return rows
 
