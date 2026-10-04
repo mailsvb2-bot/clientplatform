@@ -339,7 +339,13 @@ def get_published_event_landing(
     ).fetchone()
     if row is None:
         return None
-    return event_landing_content_from_json(_value(row, "published_json", 0))
+    try:
+        return event_landing_content_from_json(_value(row, "published_json", 0))
+    except ValueError:
+        # Landing copy is an optional presentation layer. Corruption must not
+        # take the canonical registration endpoint down; the caller falls back
+        # to the established simple event landing.
+        return None
 
 
 def get_preview_event_landing(
@@ -373,7 +379,10 @@ def get_preview_event_landing(
     current = _parse_utc(now or _utc_now())
     if preview_revision != revision or expires_at is None or _parse_utc(expires_at) <= current:
         return None
-    return event_landing_content_from_json(_value(row, "draft_json", 0))
+    try:
+        return event_landing_content_from_json(_value(row, "draft_json", 0))
+    except ValueError:
+        return None
 
 
 __all__ = [
