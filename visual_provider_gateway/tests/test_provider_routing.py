@@ -407,6 +407,7 @@ def test_yandexart_defaults_to_responses_image_generation_tool(monkeypatch, tmp_
     }
     payload = observed["payload"]
     assert payload["model"] == "gpt://folder/aliceai-llm"
+    assert payload["store"] is False
     assert payload["input"].startswith("ёж, который слушает")
     assert payload["tool_choice"] == {"type": "image_generation"}
     assert payload["max_tool_calls"] == 1
@@ -427,6 +428,115 @@ def test_yandexart_defaults_to_responses_image_generation_tool(monkeypatch, tmp_
     assert job.provider_payload["orchestrator_model"] == "gpt://folder/aliceai-llm"
     assert job.provider_payload["response_id"] == "response-123"
     assert job.provider_payload["file_id"] == "file-123"
+
+
+def test_yandex_responses_derives_folder_from_explicit_art_model_uri(monkeypatch, tmp_path):
+    from visual_provider_gateway.providers import YandexArtProvider
+
+    encoded = base64.b64encode(b"derived-folder-image").decode("ascii")
+    observed = {}
+
+    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0, ca_bundle_file=""):
+        observed.update({"url": url, "headers": headers, "payload": payload})
+        return {
+            "id": "response-derived-folder",
+            "output": [{
+                "id": "image-derived-folder",
+                "type": "image_generation_call",
+                "status": "completed",
+                "result": encoded,
+            }],
+        }
+
+    monkeypatch.delenv("YANDEX_ART_PIPELINE", raising=False)
+    monkeypatch.setenv("YANDEX_API_KEY", "test")
+    monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(providers, "_json_request", fake_json_request)
+
+    provider = YandexArtProvider(
+        ProviderConfig(
+            name="yandexart",
+            base_url="https://ai.api.cloud.yandex.net",
+            api_key="test",
+            folder_id="",
+            model_image="art://folder-from-uri/aliceai-image-art-3.0",
+            output_dir=str(tmp_path / "visual"),
+        )
+    )
+    job = provider.submit(CreativeBrief(kind="image", prompt="hedgehog"))
+
+    assert job.status == "succeeded"
+    assert observed["headers"]["OpenAI-Project"] == "folder-from-uri"
+    assert observed["payload"]["model"] == "gpt://folder-from-uri/aliceai-llm"
+
+
+def test_yandex_responses_403_falls_back_to_direct_images_for_image_only_key(monkeypatch, tmp_path):
+    from visual_provider_gateway.providers import YandexArtProvider
+
+    encoded = base64.b64encode(b"direct-fallback-image").decode("ascii")
+    calls = []
+
+    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0, ca_bundle_file=""):
+        calls.append((url, payload))
+        if url.endswith("/v1/responses"):
+            raise providers.ProviderTransportError("http_403")
+        assert url.endswith("/v1/images/generations")
+        return {"data": [{"b64_json": encoded}]}
+
+    monkeypatch.delenv("YANDEX_ART_PIPELINE", raising=False)
+    monkeypatch.setenv("YANDEX_API_KEY", "image-only-key")
+    monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(providers, "_json_request", fake_json_request)
+
+    provider = YandexArtProvider(
+        ProviderConfig(
+            name="yandexart",
+            base_url="https://ai.api.cloud.yandex.net",
+            api_key="image-only-key",
+            folder_id="folder",
+            model_image="art://folder/aliceai-image-art-3.0",
+            output_dir=str(tmp_path / "visual"),
+        )
+    )
+    job = provider.submit(CreativeBrief(kind="image", prompt="hedgehog"))
+
+    assert job.status == "succeeded"
+    assert [url for url, _ in calls] == [
+        "https://ai.api.cloud.yandex.net/v1/responses",
+        "https://ai.api.cloud.yandex.net/v1/images/generations",
+    ]
+    assert job.provider_payload["transport"] == "openai_compat"
+
+
+def test_yandex_responses_ambiguous_error_never_falls_back_to_direct_images(monkeypatch):
+    from visual_provider_gateway.providers import YandexArtProvider
+
+    calls = []
+
+    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0, ca_bundle_file=""):
+        calls.append(url)
+        raise providers.ProviderTransportError("TimeoutError")
+
+    monkeypatch.delenv("YANDEX_ART_PIPELINE", raising=False)
+    monkeypatch.setenv("YANDEX_API_KEY", "key")
+    monkeypatch.setattr(providers, "_json_request", fake_json_request)
+
+    provider = YandexArtProvider(
+        ProviderConfig(
+            name="yandexart",
+            base_url="https://ai.api.cloud.yandex.net",
+            api_key="key",
+            folder_id="folder",
+            model_image="art://folder/aliceai-image-art-3.0",
+        )
+    )
+
+    with pytest.raises(providers.ProviderTransportError, match="TimeoutError"):
+        provider.submit(CreativeBrief(kind="image", prompt="hedgehog"))
+
+    assert calls == ["https://ai.api.cloud.yandex.net/v1/responses"]
 
 
 def test_alice_ai_art_uses_openai_compatible_images_api(tmp_path, monkeypatch):
