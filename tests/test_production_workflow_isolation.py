@@ -122,8 +122,16 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
             'git -c safe.directory="$repo_path" '
             '-c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path"'
         )
-        self.assertGreaterEqual(text.count(hardened_git), 6)
-        self.assertGreaterEqual(text.count("GIT_OPTIONAL_LOCKS=0"), 6)
+        self.assertGreaterEqual(text.count(hardened_git), 4)
+        self.assertGreaterEqual(text.count("GIT_OPTIONAL_LOCKS=0"), 4)
+        self.assertGreaterEqual(text.count("audit_git_as_owner()"), 2)
+        self.assertGreaterEqual(text.count('stat -c \'%u\' "$dotgit"'), 2)
+        self.assertGreaterEqual(text.count('sudo -n -u "#$owner_uid" -- env'), 2)
+        self.assertGreaterEqual(text.count("reason=owner_unknown"), 2)
+        self.assertNotIn(
+            'privileged env GIT_OPTIONAL_LOCKS=0 git',
+            text,
+        )
         self.assertNotIn(
             'git -c safe.directory="$repo_path" -C "$repo_path"',
             text,
