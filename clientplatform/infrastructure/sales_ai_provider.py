@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import ipaddress
+import re
 import socket
 from urllib.parse import urlsplit
 from typing import TYPE_CHECKING, Any, Mapping, Protocol
