@@ -272,17 +272,18 @@ def _parse_variant_items(
         ):
             return None
         seen_compositions.add(composition)
+        safe_direction = _safe_direction_for_composition(contract, composition)
         variants.append(
             VisualSceneVariant(
                 id=f"v{index}",
                 title=title,
                 description=description,
-                direction=direction,
+                direction=safe_direction,
                 composition=composition,
                 score=_score_variant(
                     contract=contract,
                     composition=composition,
-                    direction=direction,
+                    direction=safe_direction,
                     style=style,
                     index=index,
                 ),
