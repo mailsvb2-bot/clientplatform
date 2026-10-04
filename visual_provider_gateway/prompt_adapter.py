@@ -286,6 +286,7 @@ def _scene_contract_yandex_parts(
     actions = items("actions")
     transition = items("transition")
     final = items("final_state")
+    explicit_text = items("explicit_text")
     evidence = items("required_evidence", limit=2)
     cause = " ".join(str(value.get("cause") or "").split()).strip()[:120]
     cues: list[str] = []
@@ -317,6 +318,9 @@ def _scene_contract_yandex_parts(
         if detail:
             cues.append("Главное действие явно видно: " + detail + ".")
 
+    if explicit_text:
+        quoted = " / ".join(f"«{item}»" for item in explicit_text)
+        cues.append("Точный запрошенный текст в кадре: " + quoted + ".")
     if evidence:
         cues.append("Обязательно видно: " + ", ".join(evidence) + ".")
     return subject, tuple(cues)
