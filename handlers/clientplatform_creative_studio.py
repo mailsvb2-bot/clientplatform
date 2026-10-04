@@ -220,6 +220,7 @@ async def _ensure_scene_variants(
             style_intent=style,
         )
     else:
+        planning_error_type = ""
         try:
             contract, source, variants = await asyncio.to_thread(
                 build_visual_scene_bundle,
@@ -238,10 +239,17 @@ async def _ensure_scene_variants(
                 receipt_id=receipt.id,
                 result_json=frozen_bundle,
             )
-        except (OSError, RuntimeError, ValueError):
+        except OSError as exc:
+            planning_error_type = type(exc).__name__
+        except RuntimeError as exc:
+            planning_error_type = type(exc).__name__
+        except ValueError as exc:
+            planning_error_type = type(exc).__name__
+
+        if planning_error_type:
             logger.warning(
                 "Visual scene planning became ambiguous; refusing automatic retry",
-                exc_info=True,
+                extra={"error_type": planning_error_type},
             )
             try:
                 await asyncio.to_thread(
@@ -249,10 +257,15 @@ async def _ensure_scene_variants(
                     actor=actor,
                     receipt_id=receipt.id,
                 )
-            except (LookupError, ValueError):
+            except LookupError as exc:
                 logger.warning(
                     "Could not mark visual scene plan ambiguous after planning failure",
-                    exc_info=True,
+                    extra={"error_type": type(exc).__name__},
+                )
+            except ValueError as exc:
+                logger.warning(
+                    "Could not mark visual scene plan ambiguous after planning failure",
+                    extra={"error_type": type(exc).__name__},
                 )
             contract, source, variants = deterministic_visual_scene_bundle(
                 request=request,
