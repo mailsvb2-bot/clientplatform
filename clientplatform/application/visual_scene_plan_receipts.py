@@ -12,6 +12,9 @@ from clientplatform.infrastructure.visual_scene_plan_receipt_repository import (
 from services.db import get_db, get_db_ro
 
 
+VISUAL_SCENE_PLAN_KEY_VERSION = 1
+
+
 def visual_scene_plan_key(
     *,
     request: str,
@@ -29,7 +32,12 @@ def visual_scene_plan_key(
         separators=(",", ":"),
     )
     digest = hashlib.sha256(
-        (owner_request + "\n" + style_json).encode("utf-8")
+        (
+            f"scene-plan-v{VISUAL_SCENE_PLAN_KEY_VERSION}\n"
+            + owner_request
+            + "\n"
+            + style_json
+        ).encode("utf-8")
     ).hexdigest()
     return digest, owner_request, style_json
 
@@ -97,6 +105,7 @@ def mark_visual_scene_plan_ambiguous(
 
 
 __all__ = [
+    "VISUAL_SCENE_PLAN_KEY_VERSION",
     "claim_visual_scene_plan",
     "complete_visual_scene_plan",
     "get_visual_scene_plan",
