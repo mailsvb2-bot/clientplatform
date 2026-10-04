@@ -115,6 +115,29 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, text)
 
+    def test_disk_maintenance_foreign_worktree_audit_is_ownership_safe_and_fail_closed(self) -> None:
+        text = self._text(DISK_MAINTENANCE)
+
+        self.assertGreaterEqual(text.count('git -c safe.directory="$repo_path" -C "$repo_path"'), 6)
+        self.assertGreaterEqual(text.count("worktree_audit_errors=0"), 2)
+        self.assertGreaterEqual(text.count('dirty="unknown"'), 2)
+        self.assertGreaterEqual(text.count('audit="error"'), 2)
+        self.assertGreaterEqual(text.count("WORKTREE_AUDIT_ERROR"), 2)
+        self.assertGreaterEqual(
+            text.count('if [ "$worktree_audit_errors" -ne 0 ]; then'),
+            2,
+        )
+        self.assertIn("return 24", text)
+        self.assertIn("exit 24", text)
+        self.assertNotIn(
+            'status="$(privileged git -c safe.directory="$repo_path" -C "$repo_path" status --porcelain 2>/dev/null || true)"',
+            text,
+        )
+        self.assertNotIn(
+            'status="$(git -c safe.directory="$repo_path" -C "$repo_path" status --porcelain 2>/dev/null || true)"',
+            text,
+        )
+
     def test_branch_cleanup_deletes_only_exact_merged_pr_heads(self) -> None:
         text = self._text(BRANCH_CLEANUP)
         for required in (
