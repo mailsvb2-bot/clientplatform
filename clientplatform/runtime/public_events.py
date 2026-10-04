@@ -125,6 +125,7 @@ def _landing(
         campaign_ref=campaign_ref,
         advertiser_label=advertiser_label,
         landing=landing,
+        registration_enabled=not preview,
     )
     if preview:
         body = (
