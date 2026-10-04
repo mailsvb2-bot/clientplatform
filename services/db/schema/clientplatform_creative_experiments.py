@@ -111,6 +111,39 @@ def ensure(c: sqlite3.Connection) -> None:
 
     c.execute(
         """
+        CREATE TABLE IF NOT EXISTS visual_scene_plan_receipts(
+            id TEXT PRIMARY KEY,
+            business_id TEXT NOT NULL,
+            created_by_member_id TEXT NOT NULL,
+            plan_key TEXT NOT NULL,
+            request_text TEXT NOT NULL,
+            style_json TEXT NOT NULL,
+            result_json TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(id, business_id),
+            UNIQUE(business_id, created_by_member_id, plan_key),
+            FOREIGN KEY(business_id) REFERENCES businesses(id) ON DELETE CASCADE,
+            FOREIGN KEY(created_by_member_id, business_id)
+                REFERENCES business_members(id, business_id) ON DELETE CASCADE,
+            CHECK(length(plan_key)=64),
+            CHECK(length(request_text) BETWEEN 1 AND 1500),
+            CHECK(length(style_json) BETWEEN 2 AND 2500),
+            CHECK(length(result_json) <= 12000),
+            CHECK(status IN ('planning','ready','ambiguous'))
+        )
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_visual_scene_plan_business_updated
+        ON visual_scene_plan_receipts(business_id, created_by_member_id, updated_at)
+        """
+    )
+
+    c.execute(
+        """
         CREATE TABLE IF NOT EXISTS editable_ad_projects(
             id TEXT PRIMARY KEY,
             business_id TEXT NOT NULL,
