@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import nullcontext
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -29,6 +30,7 @@ from clientplatform.infrastructure.event_landing_repository import (
     get_preview_event_landing,
     get_published_event_landing,
 )
+from clientplatform.domain.tenancy import TenantAccessDenied
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 from clientplatform.privacy_manifest import TENANT_POLICIES
 from services.db.schema import create_or_update_tables
@@ -257,7 +259,7 @@ def test_event_landing_repository_is_tenant_scoped_and_live_authorized() -> None
         "UPDATE business_members SET status='revoked' WHERE id=? AND business_id=?",
         (actor_a.membership_id, actor_a.business_id),
     )
-    with pytest.raises(Exception):
+    with pytest.raises(TenantAccessDenied, match="active business membership"):
         repository.get(actor=actor_a, event_id=event_a.id)
     conn.close()
 
@@ -334,8 +336,7 @@ def test_template_uses_only_event_and_confirmed_business_facts() -> None:
     assert not any("гарант" in item.casefold() for item in landing.outcome_points)
 
 
-@pytest.mark.asyncio
-async def test_ai_generation_saves_only_validated_draft_and_never_publishes() -> None:
+def test_ai_generation_saves_only_validated_draft_and_never_publishes() -> None:
     actor = SimpleNamespace()
     event = SimpleNamespace(
         kind="webinar",
@@ -387,9 +388,11 @@ async def test_ai_generation_saves_only_validated_draft_and_never_publishes() ->
         patch.object(event_landing_builder, "get_db", return_value=nullcontext(object())),
         patch.object(event_landing_builder, "EventLandingRepository", return_value=repo),
     ):
-        result = await event_landing_builder.generate_event_landing_ai(
-            actor=actor,
-            event_id="event",
+        result = asyncio.run(
+            event_landing_builder.generate_event_landing_ai(
+                actor=actor,
+                event_id="event",
+            )
         )
     assert result is stored
     assert result.draft_source == "ai"
@@ -397,8 +400,7 @@ async def test_ai_generation_saves_only_validated_draft_and_never_publishes() ->
     assert "published" not in repo.__dict__
 
 
-@pytest.mark.asyncio
-async def test_ai_invalid_output_preserves_existing_draft() -> None:
+def test_ai_invalid_output_preserves_existing_draft() -> None:
     actor = SimpleNamespace()
     safe = SimpleNamespace(draft=_landing("Не менять"))
     config = SimpleNamespace(enabled=True, provider="openai", model="model")
@@ -438,9 +440,11 @@ async def test_ai_invalid_output_preserves_existing_draft() -> None:
             event_landing_builder.EventLandingAIUnavailable,
             match="не изменён",
         ):
-            await event_landing_builder.generate_event_landing_ai(
-                actor=actor,
-                event_id="event",
+            asyncio.run(
+                event_landing_builder.generate_event_landing_ai(
+                    actor=actor,
+                    event_id="event",
+                )
             )
     database.assert_not_called()
 
@@ -457,3 +461,43 @@ def test_event_landing_privacy_manifest_is_explicit() -> None:
     policy = TENANT_POLICIES["clientplatform_event_landing_profiles"]
     assert policy.disposition == "retain"
     assert "participant identity" in policy.rationale
+
+
+def test_editor_projection_does_not_create_durable_draft_on_open() -> None:
+    actor = SimpleNamespace()
+    template = _landing("Виртуальная автоверсия")
+    with (
+        patch.object(event_landing_builder, "get_event_landing_profile", return_value=None),
+        patch.object(event_landing_builder, "build_event_landing_template", return_value=template),
+        patch.object(event_landing_builder, "get_db") as write_db,
+    ):
+        state = event_landing_builder.get_event_landing_editor_state(
+            actor=actor,
+            event_id="event",
+        )
+    assert state.draft == template
+    assert state.revision == 0
+    assert state.is_published is False
+    write_db.assert_not_called()
+
+
+def test_preview_render_disables_registration_submission() -> None:
+    event = PublicEvent(
+        public_slug="B" * 32,
+        kind="webinar",
+        title="Вебинар",
+        description="Описание",
+        starts_at=datetime(2026, 10, 8, 15, 0, tzinfo=timezone.utc),
+        ends_at=None,
+        timezone_name="Europe/Moscow",
+        provider_key="external",
+        provider_label=None,
+    )
+    body = render_event_landing_body(
+        event,
+        landing=_landing(),
+        registration_enabled=False,
+    )
+    assert "<form" not in body
+    assert "disabled>Зарегистрироваться" in body
+    assert f"/e/{event.public_slug}/register" not in body
