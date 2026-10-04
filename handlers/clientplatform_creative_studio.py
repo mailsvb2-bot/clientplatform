@@ -159,15 +159,19 @@ async def _ensure_scene_variants(
     state: FSMContext,
     data: dict,
 ) -> tuple[VisualSceneContract, str, tuple[VisualSceneVariant, ...]]:
-    try:
+    cached_contract = data.get("creative_scene_contract")
+    cached_variants = data.get("creative_scene_variants")
+    cached_source = str(
+        data.get("creative_scene_planner_source") or ""
+    ).strip().lower()
+    if (
+        isinstance(cached_contract, dict)
+        and isinstance(cached_variants, list)
+        and cached_source in {"ai", "deterministic"}
+    ):
         contract = _scene_contract_from_state(data)
         variants = _scene_variants_from_state(data)
-        source = str(data.get("creative_scene_planner_source") or "").strip().lower()
-        if source not in {"ai", "deterministic"}:
-            raise ValueError("visual scene planner source is invalid")
-        return contract, source, variants
-    except (TypeError, ValueError):
-        pass
+        return contract, cached_source, variants
 
     request = normalize_business_image_request(str(data["creative_pending_prompt"]))
     style = _style_intent_from_state(data)
@@ -533,15 +537,17 @@ async def send_creative_studio_menu(
             "У Вас уже подготовлен запрос:\n"
             f"{active.request_text}\n\n"
             + (
-                "Текстовый AI-планировщик уже мог использоваться при подготовке "
-                "варианта, но медиагенерация ещё не начиналась. Кнопка "
+                "Платный AI-вызов ещё не начинался. Текстовый AI-планировщик уже мог "
+                "использоваться при подготовке варианта; медиагенерация ещё не "
+                "начиналась. Кнопка "
                 "«Продолжить создание» подтверждает генерацию картинки и один "
                 "отдельный QA-вызов."
                 if _receipt_kind(active) == "image"
                 and _receipt_semantic_qa_enabled(active)
                 else (
-                    "Текстовый AI-планировщик уже мог использоваться при подготовке "
-                    "варианта, но платная медиагенерация ещё не начиналась."
+                    "Платный AI-вызов ещё не начинался. Текстовый AI-планировщик уже мог "
+                    "использоваться при подготовке варианта; платная "
+                    "медиагенерация ещё не начиналась."
                 )
             )
             + qa_disclosure
@@ -851,8 +857,8 @@ async def _show_paid_generation_confirmation(
         "ClientPlatform уже развернула короткое описание в подробное визуальное "
         "задание и зафиксировала выбранную постановку и стиль. Текстовый AI для "
         "разбора смысла/вариантов уже мог использоваться на предыдущем шаге; он не "
-        "создавал медиарезультат. Платная генерация картинки/видео начнётся только "
-        "после кнопки ниже. Повторный запуск этого же задания использует тот же "
+        "создавал медиарезультат. Платный вызов начнётся только после кнопки ниже "
+        "и создаст картинку/видео. Повторный запуск этого же задания использует тот же "
         "frozen brief и "
         "idempotency key."
         + (
