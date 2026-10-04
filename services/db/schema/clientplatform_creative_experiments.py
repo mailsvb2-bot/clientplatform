@@ -121,6 +121,7 @@ def ensure(c: sqlite3.Connection) -> None:
             body TEXT NOT NULL,
             cta TEXT NOT NULL DEFAULT '',
             layout TEXT NOT NULL DEFAULT 'lower_card',
+            font_preset TEXT NOT NULL DEFAULT 'auto',
             brand_json TEXT NOT NULL,
             source_job_id TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'draft',
@@ -138,6 +139,10 @@ def ensure(c: sqlite3.Connection) -> None:
             CHECK(length(body) BETWEEN 1 AND 500),
             CHECK(length(cta) <= 80),
             CHECK(layout IN ('lower_card','top_card')),
+            CHECK(font_preset IN (
+                'auto','modern','strict','friendly','premium',
+                'editorial','elegant','bold_ad'
+            )),
             CHECK(length(brand_json) BETWEEN 2 AND 512),
             CHECK(length(source_job_id) <= 128),
             CHECK(status IN ('draft','source_ready','source_expired','finished')),
@@ -152,6 +157,20 @@ def ensure(c: sqlite3.Connection) -> None:
         """
     )
 
+
+    editable_columns = {
+        str(row["name"] if hasattr(row, "keys") else row[1])
+        for row in c.execute("PRAGMA table_info(editable_ad_projects)").fetchall()
+    }
+    if "font_preset" not in editable_columns:
+        c.execute(
+            "ALTER TABLE editable_ad_projects "
+            "ADD COLUMN font_preset TEXT NOT NULL DEFAULT 'auto' "
+            "CHECK(font_preset IN ("
+            "'auto','modern','strict','friendly','premium',"
+            "'editorial','elegant','bold_ad'"
+            "))"
+        )
 
     c.execute(
         """

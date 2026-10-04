@@ -19,6 +19,8 @@ Authenticated endpoints:
 
 Render state and generated assets are stored under `VISUAL_GATEWAY_STATE_DIR` in SQLite + durable files. A pack is marked succeeded only after files have been fsync'd and their SHA-256 values are stored transactionally.
 
+Editable advertising typography is deterministic and is applied after the AI source is ready. The render composition accepts `typography.preset` with: `auto`, `modern`, `strict`, `friendly`, `premium`, `editorial`, `elegant`, or `bold_ad`. The container ships the required Lato, Liberation, Noto and DejaVu families; `auto` resolves from copy length and CTA density and never triggers a new AI generation.
+
 ## Required environment
 
 - `VISUAL_GATEWAY_TOKEN`: bearer token expected from ClientPlatform.

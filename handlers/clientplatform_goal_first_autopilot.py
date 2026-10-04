@@ -72,7 +72,11 @@ from clientplatform.domain.ad_publication_assets import (
     AdPublicationAssetSource,
 )
 from clientplatform.domain.ad_spend import AdSpendError
-from clientplatform.domain.editable_advertising import EditableAdProjectStatus
+from clientplatform.domain.editable_advertising import (
+    EDITABLE_AD_FONT_LABELS_RU,
+    EDITABLE_AD_FONT_PRESETS,
+    EditableAdProjectStatus,
+)
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.integrations.yandex_direct import YandexDirectError
@@ -219,7 +223,11 @@ def _result_keyboard(business_token: str, data: dict):
     )
 
 
-def _editable_keyboard(business_token: str):
+def _editable_keyboard(business_token: str, font_preset: str = "auto"):
+    label = EDITABLE_AD_FONT_LABELS_RU.get(
+        str(font_preset or "auto"),
+        EDITABLE_AD_FONT_LABELS_RU["auto"],
+    )
     return control._keyboard(
         [
             [
@@ -227,12 +235,36 @@ def _editable_keyboard(business_token: str):
                 ("📝 Текст", f"cpo:editfield:body:{business_token}"),
             ],
             [("🔘 CTA", f"cpo:editfield:cta:{business_token}")],
+            [("🔤 Шрифт: " + label, f"cpo:editfont:{business_token}")],
             [("↕️ Переместить текстовый блок", f"cpo:editlayout:{business_token}")],
             [("🔄 Обновить превью", f"cpo:editpreview:{business_token}")],
             [("✅ Завершить редактирование", f"cpo:editdone:{business_token}")],
             [("↩️ Назад к настройкам", f"cpo:custom:{business_token}")],
         ]
     )
+
+
+def _editable_font_keyboard(business_token: str, current: str):
+    rows: list[list[tuple[str, str]]] = []
+    pairs = (
+        ("auto", "modern"),
+        ("strict", "friendly"),
+        ("premium", "editorial"),
+        ("elegant", "bold_ad"),
+    )
+    for left, right in pairs:
+        row: list[tuple[str, str]] = []
+        for preset in (left, right):
+            marker = "✓ " if preset == current else ""
+            row.append(
+                (
+                    marker + EDITABLE_AD_FONT_LABELS_RU[preset],
+                    f"cpo:editfontset:{preset}:{business_token}",
+                )
+            )
+        rows.append(row)
+    rows.append([("⬅️ К редактору", f"cpo:editpreview:{business_token}")])
+    return control._keyboard(rows)
 
 
 def _editable_source_keyboard(kind: str, business_token: str):
@@ -884,6 +916,7 @@ async def _show_editable_editor(
     project_id: str,
     kind: str,
 ) -> None:
+    font_preset = str(data.get("editable_font_preset") or "auto")
     try:
         await _preview_editable_project(
             target,
@@ -893,7 +926,7 @@ async def _show_editable_editor(
             kind=kind,
         )
         note = (
-            "Это превью. Правки текста, CTA и положения блока не запускают новую "
+            "Это превью. Правки текста, CTA, шрифта и положения блока не запускают новую "
             "AI-генерацию и пока не меняют asset в рекламном provider. "
             "Нажмите «Завершить редактирование», когда макет готов."
         )
@@ -919,7 +952,7 @@ async def _show_editable_editor(
         )
     await target.answer(
         note,
-        reply_markup=_editable_keyboard(str(data["business_token"])),
+        reply_markup=_editable_keyboard(str(data["business_token"]), font_preset),
     )
 
 
@@ -948,6 +981,7 @@ async def ask_editable_ad_confirmation(callback: CallbackQuery, state: FSMContex
             headline=str(data.get("creative_title") or ""),
             body=str(data.get("creative_body") or ""),
             brand=brand.render_brand(),
+            font_preset=str(getattr(brand, "font_preset", "auto") or "auto"),
         )
     except (LookupError, ValueError, TenantPermissionDenied):
         await callback.answer("Не удалось открыть редактор рекламы", show_alert=True)
@@ -958,6 +992,7 @@ async def ask_editable_ad_confirmation(callback: CallbackQuery, state: FSMContex
         editable_ad_kind=kind,
         editable_generation_active=False,
         editable_source_revision=project.revision,
+        editable_font_preset=project.font_preset,
         creative_variant_id="",
         creative_variant_index="",
     )
@@ -974,7 +1009,11 @@ async def ask_editable_ad_confirmation(callback: CallbackQuery, state: FSMContex
         await _show_editable_editor(
             target,
             actor=actor,
-            data={**data, "business_token": business_token},
+            data={
+                **data,
+                "business_token": business_token,
+                "editable_font_preset": project.font_preset,
+            },
             project_id=project.id,
             kind=kind,
         )
@@ -993,7 +1032,7 @@ async def ask_editable_ad_confirmation(callback: CallbackQuery, state: FSMContex
     await target.answer(
         prefix
         + f"Для редактируемой рекламы сначала нужна AI-основа {noun}. "
-        "Это отдельный платный AI-вызов. После него заголовок, текст, CTA и "
+        "Это отдельный платный AI-вызов. После него заголовок, текст, CTA, шрифт и "
         "положение блока можно менять сколько угодно без новой AI-генерации.\n\n"
         "Сами пользовательские image/video bytes ClientPlatform постоянно не хранит.",
         reply_markup=_editable_source_keyboard(kind, business_token),
@@ -1100,12 +1139,13 @@ async def _finish_editable_source_generation(
         creative_generation_kind=kind,
         editable_generation_active=False,
         editable_source_revision=project.revision,
+        editable_font_preset=project.font_preset,
     )
     await state.set_state(GoalFirstAutopilotState.customizing)
     await _show_editable_editor(
         control._callback_message(event),
         actor=actor,
-        data=data,
+        data={**data, "editable_font_preset": project.font_preset},
         project_id=project.id,
         kind=kind,
     )
@@ -1193,6 +1233,81 @@ async def receive_editable_cta(message: Message, state: FSMContext) -> None:
     await _receive_editable_field(message, state, field="cta")
 
 
+@router.callback_query(F.data.startswith("cpo:editfont:"))
+async def choose_editable_font(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    data = await state.get_data()
+    project_id = str(data.get("editable_ad_project_id") or "").strip()
+    if not project_id or not _state_matches(data, business_token):
+        await callback.answer("Редактируемый макет уже недоступен", show_alert=True)
+        return
+    try:
+        actor = await control._actor(
+            int(callback.from_user.id),
+            str(data.get("business_id") or ""),
+        )
+        project = await asyncio.to_thread(
+            get_editable_ad_project,
+            actor=actor,
+            project_id=project_id,
+        )
+    except (LookupError, ValueError, TenantPermissionDenied):
+        await callback.answer("Не удалось открыть выбор шрифта", show_alert=True)
+        return
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "Выберите типографику. «Автоматически» подбирает вариант по объёму "
+        "заголовка и текста. Шрифт накладывает ClientPlatform после AI-генерации, "
+        "поэтому смена шрифта не расходует новую AI-квоту.",
+        reply_markup=_editable_font_keyboard(business_token, project.font_preset),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:editfontset:"))
+async def set_editable_font(callback: CallbackQuery, state: FSMContext) -> None:
+    try:
+        _, _, font_preset, business_token = str(callback.data).split(":", 3)
+    except ValueError:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    data = await state.get_data()
+    project_id = str(data.get("editable_ad_project_id") or "").strip()
+    if (
+        font_preset not in EDITABLE_AD_FONT_PRESETS
+        or not project_id
+        or not _state_matches(data, business_token)
+    ):
+        await callback.answer("Редактируемый макет уже недоступен", show_alert=True)
+        return
+    try:
+        actor = await control._actor(
+            int(callback.from_user.id),
+            str(data.get("business_id") or ""),
+        )
+        project = await asyncio.to_thread(
+            update_editable_ad_composition,
+            actor=actor,
+            project_id=project_id,
+            font_preset=font_preset,
+        )
+    except (LookupError, ValueError, TenantPermissionDenied):
+        await callback.answer("Не удалось изменить шрифт", show_alert=True)
+        return
+    await state.update_data(
+        editable_source_revision=project.revision,
+        editable_font_preset=project.font_preset,
+    )
+    await state.set_state(GoalFirstAutopilotState.customizing)
+    await callback.answer("Шрифт изменён")
+    await _show_editable_editor(
+        control._callback_message(callback),
+        actor=actor,
+        data={**data, "editable_font_preset": project.font_preset},
+        project_id=project.id,
+        kind=project.kind,
+    )
+
+
 @router.callback_query(F.data.startswith("cpo:editlayout:"))
 async def toggle_editable_layout(callback: CallbackQuery, state: FSMContext) -> None:
     business_token = str(callback.data).split(":", 2)[2]
@@ -1218,13 +1333,16 @@ async def toggle_editable_layout(callback: CallbackQuery, state: FSMContext) -> 
     except (LookupError, ValueError, TenantPermissionDenied):
         await callback.answer("Не удалось переместить текстовый блок", show_alert=True)
         return
-    await state.update_data(editable_source_revision=project.revision)
+    await state.update_data(
+        editable_source_revision=project.revision,
+        editable_font_preset=project.font_preset,
+    )
     await state.set_state(GoalFirstAutopilotState.customizing)
     await callback.answer("Положение блока изменено")
     await _show_editable_editor(
         control._callback_message(callback),
         actor=actor,
-        data=data,
+        data={**data, "editable_font_preset": project.font_preset},
         project_id=project.id,
         kind=project.kind,
     )
@@ -1249,10 +1367,11 @@ async def refresh_editable_preview(callback: CallbackQuery, state: FSMContext) -
         await callback.answer("Редактируемый макет уже недоступен", show_alert=True)
         return
     await callback.answer("Обновляю превью…")
+    await state.update_data(editable_font_preset=project.font_preset)
     await _show_editable_editor(
         control._callback_message(callback),
         actor=actor,
-        data=data,
+        data={**data, "editable_font_preset": project.font_preset},
         project_id=project.id,
         kind=project.kind,
     )

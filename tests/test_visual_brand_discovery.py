@@ -79,6 +79,7 @@ def test_brand_discovery_uses_strong_site_signals_and_preserves_safety_rules() -
         primary_color="#172033",
         accent_color="#E9C46A",
         text_color="#FFFFFF",
+        font_preset="premium",
     )
     html = """
     <html>
@@ -113,6 +114,7 @@ def test_brand_discovery_uses_strong_site_signals_and_preserves_safety_rules() -
     assert suggestion.brand.accent_color == "#ABCDEF"
     assert suggestion.brand.text_color == "#F0F0F0"
     assert suggestion.brand.tone == current.tone
+    assert suggestion.brand.font_preset == "premium"
     assert suggestion.brand.forbidden_visuals == current.forbidden_visuals
     assert suggestion.brand.visual_keywords == (
         "editorial",

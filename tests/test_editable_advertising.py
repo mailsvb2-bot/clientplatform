@@ -90,8 +90,63 @@ def test_schema_has_metadata_only_editable_project() -> None:
             for row in conn.execute("PRAGMA table_info(editable_ad_projects)").fetchall()
         }
         assert "source_job_id" in columns
+        assert "font_preset" in columns
         assert "source_receipt_id" not in columns
         assert all("BLOB" not in declared for declared in columns.values())
+    finally:
+        conn.close()
+
+
+def test_editable_project_schema_migrates_legacy_rows_to_auto_typography() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute(
+            """
+            CREATE TABLE editable_ad_projects(
+                id TEXT PRIMARY KEY,
+                business_id TEXT NOT NULL,
+                created_by_member_id TEXT NOT NULL,
+                publication_job_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                headline TEXT NOT NULL,
+                body TEXT NOT NULL,
+                cta TEXT NOT NULL DEFAULT '',
+                layout TEXT NOT NULL DEFAULT 'lower_card',
+                brand_json TEXT NOT NULL,
+                source_job_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'draft',
+                revision INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO editable_ad_projects(
+                id,business_id,created_by_member_id,publication_job_id,kind,
+                headline,body,cta,layout,brand_json,source_job_id,status,
+                revision,created_at,updated_at
+            ) VALUES(
+                'p1','b1','m1','j1','image',
+                'Заголовок','Текст','','lower_card','{}','','draft',
+                1,'2026-10-03','2026-10-03'
+            )
+            """
+        )
+
+        clientplatform_creative_experiments.ensure(conn)
+
+        columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(editable_ad_projects)").fetchall()
+        }
+        assert "font_preset" in columns
+        row = conn.execute(
+            "SELECT font_preset FROM editable_ad_projects WHERE id='p1'"
+        ).fetchone()
+        assert row["font_preset"] == "auto"
     finally:
         conn.close()
 
@@ -112,6 +167,8 @@ def test_editable_project_reentry_and_expiry_preserve_copy_without_paid_reset() 
         )
         assert project.status == EditableAdProjectStatus.DRAFT
         assert project.revision == 1
+        assert project.font_preset == "auto"
+        assert project.composition()["typography"] == {"preset": "auto"}
 
         ready = repo.bind_source(
             actor=actor,
@@ -126,6 +183,16 @@ def test_editable_project_reentry_and_expiry_preserve_copy_without_paid_reset() 
             headline="Новый заголовок",
         )
         assert edited.revision == 2
+        typed = repo.update_composition(
+            actor=actor,
+            project_id=project.id,
+            font_preset="premium",
+        )
+        assert typed.font_preset == "premium"
+        assert typed.source_job_id == "visual-job-1"
+        assert typed.status == EditableAdProjectStatus.SOURCE_READY
+        assert typed.revision == 3
+
         finished = repo.finish(actor=actor, project_id=project.id)
         assert finished.status == EditableAdProjectStatus.FINISHED
 
@@ -250,6 +317,7 @@ def _project(*, status=EditableAdProjectStatus.SOURCE_READY) -> EditableAdProjec
         body="Текст",
         cta="Записаться",
         layout="lower_card",
+        font_preset="auto",
         brand_json='{"accent_color":"#E9C46A","primary_color":"#172033","text_color":"#FFFFFF"}',
         source_job_id="visual-job-1",
         status=status,
@@ -471,6 +539,14 @@ def test_goal_first_safety_allows_editor_callbacks_without_weakening_other_state
         "cpo:editgen:image:business-token",
     )
     assert interaction_safety._state_local_callback_allowed(
+        "GoalFirstAutopilotState:customizing",
+        "cpo:editfont:business-token",
+    )
+    assert interaction_safety._state_local_callback_allowed(
+        "GoalFirstAutopilotState:customizing",
+        "cpo:editfontset:premium:business-token",
+    )
+    assert interaction_safety._state_local_callback_allowed(
         "GoalFirstAutopilotState:waiting_editable_headline",
         "cpo:custom:business-token",
     )
@@ -542,6 +618,40 @@ async def test_reopening_finished_editable_project_skips_paid_generation(monkeyp
     create_visual.assert_not_called()
     assert state.data["editable_ad_project_id"] == project.id
     assert state.state == goal.GoalFirstAutopilotState.customizing
+
+
+@pytest.mark.asyncio
+async def test_new_editable_project_inherits_saved_brand_typography(monkeypatch) -> None:
+    project = replace(
+        _project(status=EditableAdProjectStatus.DRAFT),
+        font_preset="premium",
+    )
+    state = _State(_goal_data())
+    target = _goal_target()
+    callback = _goal_callback("cpo:editask:image:business-token", target)
+    create_project = Mock(return_value=project)
+
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(
+        goal.control,
+        "_actor",
+        AsyncMock(return_value=SimpleNamespace(business_id=project.business_id)),
+    )
+    monkeypatch.setattr(goal.control, "_callback_message", lambda _callback: target)
+    monkeypatch.setattr(
+        goal,
+        "load_goal_visual_brand",
+        lambda **_kwargs: SimpleNamespace(
+            font_preset="premium",
+            render_brand=lambda: BRAND,
+        ),
+    )
+    monkeypatch.setattr(goal, "create_editable_ad_project", create_project)
+
+    await goal.ask_editable_ad_confirmation(callback, state)
+
+    assert create_project.call_args.kwargs["font_preset"] == "premium"
+    assert state.data["editable_font_preset"] == project.font_preset
 
 
 @pytest.mark.asyncio
@@ -1131,6 +1241,111 @@ async def test_receive_editable_field_wrappers_delegate(monkeypatch) -> None:
         "body",
         "cta",
     ]
+
+
+@pytest.mark.asyncio
+async def test_editable_font_selector_and_update_do_not_start_new_ai_job(monkeypatch) -> None:
+    project = _project()
+    actor = SimpleNamespace(business_id=project.business_id)
+    state = _State(
+        {
+            **_goal_data(),
+            "editable_ad_project_id": project.id,
+        }
+    )
+    target = _goal_target()
+    choose = _goal_callback("cpo:editfont:business-token", target)
+
+    monkeypatch.setattr(goal.control, "_actor", AsyncMock(return_value=actor))
+    monkeypatch.setattr(goal.control, "_callback_message", lambda cb: cb.message)
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(goal, "get_editable_ad_project", lambda **_kwargs: project)
+
+    await goal.choose_editable_font(choose, state)
+
+    labels = [
+        button.text
+        for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert any("Автоматически" in label for label in labels)
+    assert any("Lato" in label for label in labels)
+    assert any("Noto Serif" in label for label in labels)
+
+    updated = replace(project, font_preset="premium", revision=4)
+    update = Mock(return_value=updated)
+    show = AsyncMock()
+    monkeypatch.setattr(goal, "update_editable_ad_composition", update)
+    monkeypatch.setattr(goal, "_show_editable_editor", show)
+    selected = _goal_callback("cpo:editfontset:premium:business-token", target)
+
+    await goal.set_editable_font(selected, state)
+
+    assert update.call_args.kwargs["font_preset"] == "premium"
+    assert state.data["editable_source_revision"] == 4
+    assert selected.answer.await_args.args[0] == "Шрифт изменён"
+    show.assert_awaited_once()
+
+
+def test_editable_font_preset_is_validated_and_reaches_render_composition() -> None:
+    project = replace(_project(), font_preset="elegant")
+    assert project.composition()["typography"] == {"preset": "elegant"}
+
+    with pytest.raises(ValueError, match="editable_ad_font_preset_invalid"):
+        replace(project, font_preset="comic").composition()
+
+
+@pytest.mark.asyncio
+async def test_editable_font_controls_fail_closed_for_stale_and_invalid_state(monkeypatch) -> None:
+    stale_state = _State(_goal_data())
+    stale = _goal_callback("cpo:editfont:business-token")
+    await goal.choose_editable_font(stale, stale_state)
+    assert stale.answer.await_args.args[0] == "Редактируемый макет уже недоступен"
+    assert stale.answer.await_args.kwargs["show_alert"] is True
+
+    malformed = _goal_callback("cpo:editfontset")
+    await goal.set_editable_font(malformed, _State(_goal_data()))
+    assert malformed.answer.await_args.args[0] == "Кнопка устарела"
+    assert malformed.answer.await_args.kwargs["show_alert"] is True
+
+    invalid = _goal_callback("cpo:editfontset:comic:business-token")
+    await goal.set_editable_font(invalid, _State(_goal_data()))
+    assert invalid.answer.await_args.args[0] == "Редактируемый макет уже недоступен"
+    assert invalid.answer.await_args.kwargs["show_alert"] is True
+
+
+@pytest.mark.asyncio
+async def test_editable_font_controls_surface_load_and_update_failures(monkeypatch) -> None:
+    project = _project()
+    data = {
+        **_goal_data(),
+        "editable_ad_project_id": project.id,
+        "editable_font_preset": project.font_preset,
+    }
+    state = _State(data)
+    actor = SimpleNamespace(business_id=project.business_id)
+    monkeypatch.setattr(goal.asyncio, "to_thread", _direct)
+    monkeypatch.setattr(goal.control, "_actor", AsyncMock(return_value=actor))
+
+    monkeypatch.setattr(
+        goal,
+        "get_editable_ad_project",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError("missing")),
+    )
+    choose = _goal_callback("cpo:editfont:business-token")
+    await goal.choose_editable_font(choose, state)
+    assert choose.answer.await_args.args[0] == "Не удалось открыть выбор шрифта"
+    assert choose.answer.await_args.kwargs["show_alert"] is True
+
+    monkeypatch.setattr(
+        goal,
+        "update_editable_ad_composition",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError("invalid")),
+    )
+    selected = _goal_callback("cpo:editfontset:premium:business-token")
+    await goal.set_editable_font(selected, state)
+    assert selected.answer.await_args.args[0] == "Не удалось изменить шрифт"
+    assert selected.answer.await_args.kwargs["show_alert"] is True
 
 
 @pytest.mark.asyncio

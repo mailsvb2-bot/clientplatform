@@ -5,8 +5,25 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 
+from clientplatform.domain.visual_typography import (
+    VISUAL_TYPOGRAPHY_LABELS_RU,
+    VISUAL_TYPOGRAPHY_PRESETS,
+    normalize_visual_typography_preset,
+)
+
 
 _COLOR_RE = re.compile(r"#[0-9A-Fa-f]{6}")
+
+EDITABLE_AD_FONT_PRESETS = VISUAL_TYPOGRAPHY_PRESETS
+EDITABLE_AD_FONT_LABELS_RU = VISUAL_TYPOGRAPHY_LABELS_RU
+
+
+def normalize_editable_ad_font_preset(value: object) -> str:
+    try:
+        return normalize_visual_typography_preset(value)
+    except ValueError as exc:
+        raise ValueError("editable_ad_font_preset_invalid") from exc
+
 
 
 class EditableAdProjectStatus(StrEnum):
@@ -34,6 +51,7 @@ class EditableAdProject:
     body: str
     cta: str
     layout: str
+    font_preset: str
     brand_json: str
     source_job_id: str
     status: EditableAdProjectStatus
@@ -66,13 +84,21 @@ class EditableAdProject:
             raise ValueError("editable_ad_layout_invalid")
         if self.revision < 1:
             raise ValueError("editable_ad_revision_invalid")
+        font_preset = normalize_editable_ad_font_preset(self.font_preset)
         return {
             "headline": self.headline,
             "body": self.body,
             "cta": self.cta,
             "layout": self.layout,
+            "typography": {"preset": font_preset},
             "brand": self.brand(),
         }
 
 
-__all__ = ["EditableAdProject", "EditableAdProjectStatus"]
+__all__ = [
+    "EDITABLE_AD_FONT_LABELS_RU",
+    "EDITABLE_AD_FONT_PRESETS",
+    "EditableAdProject",
+    "EditableAdProjectStatus",
+    "normalize_editable_ad_font_preset",
+]

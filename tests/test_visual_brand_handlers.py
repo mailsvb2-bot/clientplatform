@@ -74,6 +74,7 @@ def _brand(business_id: str, *, display_name: str = "North Star") -> TenantBrand
         primary_color="#112233",
         accent_color="#DDAA44",
         text_color="#FFFFFF",
+        font_preset="modern",
     ).normalized()
 
 
@@ -104,6 +105,7 @@ def test_brand_helpers_preserve_safety_and_parse_manual_changes() -> None:
     assert "human, trustworthy" in text
     assert "editorial, calm" in text
     assert "#112233" in text
+    assert "Современный" in text
 
     changed = visual_brand._manual_brand(
         current,
@@ -113,6 +115,7 @@ def test_brand_helpers_preserve_safety_and_parse_manual_changes() -> None:
         "Акцентный цвет: #AABBCC\n"
         "Цвет текста: #F1F2F3\n"
         "Визуальный стиль: modern; warm, human\n"
+        "Шрифт: премиальный\n"
         "Неизвестно: ничего",
     )
     assert changed.display_name == "New Practice"
@@ -120,6 +123,7 @@ def test_brand_helpers_preserve_safety_and_parse_manual_changes() -> None:
     assert changed.accent_color == "#AABBCC"
     assert changed.text_color == "#F1F2F3"
     assert changed.visual_keywords == ("modern", "warm", "human")
+    assert changed.font_preset == "premium"
     assert changed.tone == current.tone
     assert changed.forbidden_visuals == current.forbidden_visuals
 
@@ -144,6 +148,7 @@ def test_brand_from_state_requires_proposal_and_normalizes_it() -> None:
                 "primary_color": source.primary_color,
                 "accent_color": source.accent_color,
                 "text_color": source.text_color,
+                "font_preset": source.font_preset,
             }
         },
         business_id,
@@ -168,8 +173,110 @@ def test_open_visual_brand_shows_current_profile(monkeypatch) -> None:
     assert "North Star" in target.answers[0][0]
     markup = target.answers[0][1]["reply_markup"]
     callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
-    assert callbacks == ["cpb:site:token", "cpb:manual:token", "cpj:home:token"]
+    assert callbacks == [
+        "cpb:site:token",
+        "cpb:font:token",
+        "cpb:manual:token",
+        "cpj:home:token",
+    ]
     assert actor is not None
+
+
+def test_brand_font_picker_saves_default_without_changing_other_brand_fields(monkeypatch) -> None:
+    business_id = str(uuid4())
+    actor = _install_actor(monkeypatch, business_id)
+    target = _install_callback_message(monkeypatch)
+    current = _brand(business_id)
+    saved_calls: list[TenantBrandDNA] = []
+
+    monkeypatch.setattr(visual_brand, "_business_id", lambda _token: business_id)
+    monkeypatch.setattr(
+        visual_brand,
+        "load_goal_visual_brand",
+        lambda *, actor: current,
+    )
+
+    choose = _Callback("cpb:font:token")
+    _run(visual_brand.choose_brand_font(choose))
+
+    markup = target.answers[-1][1]["reply_markup"]
+    labels = [
+        button.text
+        for row in markup.inline_keyboard
+        for button in row
+    ]
+    assert any("Современный" in label and label.startswith("✓ ") for label in labels)
+    assert any("Премиальный" in label for label in labels)
+
+    def save(*, actor, brand):
+        saved_calls.append(brand)
+        return brand
+
+    monkeypatch.setattr(visual_brand, "save_goal_visual_brand", save)
+    selected = _Callback("cpb:fontset:premium:token")
+    _run(visual_brand.set_brand_font(selected))
+
+    assert selected.answers == [("Шрифт сохранён", False)]
+    assert len(saved_calls) == 1
+    saved = saved_calls[0]
+    assert saved.font_preset == "premium"
+    assert saved.display_name == current.display_name
+    assert saved.tone == current.tone
+    assert saved.visual_keywords == current.visual_keywords
+    assert saved.forbidden_visuals == current.forbidden_visuals
+    assert actor is not None
+
+
+def test_brand_font_picker_failure_paths_are_closed(monkeypatch) -> None:
+    business_id = str(uuid4())
+    monkeypatch.setattr(visual_brand, "_business_id", lambda _token: business_id)
+
+    async def denied(_user_id: int, _business_id: str):
+        raise TenantPermissionDenied("denied")
+
+    monkeypatch.setattr(visual_brand.control, "_actor", denied)
+    choose = _Callback("cpb:font:token")
+    _run(visual_brand.choose_brand_font(choose))
+    assert choose.answers == [("Не удалось открыть выбор шрифта", True)]
+
+    malformed = _Callback("cpb:fontset")
+    _run(visual_brand.set_brand_font(malformed))
+    assert malformed.answers == [("Кнопка устарела", True)]
+
+    unknown = _Callback("cpb:fontset:comic:token")
+    _run(visual_brand.set_brand_font(unknown))
+    assert unknown.answers == [("Неизвестный шрифт", True)]
+
+
+def test_brand_font_save_permission_and_validation_fail_closed(monkeypatch) -> None:
+    business_id = str(uuid4())
+    current = _brand(business_id)
+    _install_actor(monkeypatch, business_id)
+    monkeypatch.setattr(visual_brand, "_business_id", lambda _token: business_id)
+    monkeypatch.setattr(
+        visual_brand,
+        "load_goal_visual_brand",
+        lambda *, actor: current,
+    )
+    monkeypatch.setattr(
+        visual_brand,
+        "save_goal_visual_brand",
+        lambda **_kwargs: (_ for _ in ()).throw(TenantPermissionDenied("denied")),
+    )
+    denied = _Callback("cpb:fontset:premium:token")
+    _run(visual_brand.set_brand_font(denied))
+    assert denied.answers == [
+        ("Сохранять фирменный стиль может владелец или администратор", True)
+    ]
+
+    monkeypatch.setattr(
+        visual_brand,
+        "save_goal_visual_brand",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError("invalid")),
+    )
+    invalid = _Callback("cpb:fontset:premium:token")
+    _run(visual_brand.set_brand_font(invalid))
+    assert invalid.answers == [("Не удалось сохранить шрифт", True)]
 
 
 def test_open_visual_brand_fails_closed_for_invalid_business(monkeypatch) -> None:
@@ -428,6 +535,7 @@ def test_apply_visual_brand_requires_fresh_proposal_and_manager_permission(monke
                 "primary_color": proposal.primary_color,
                 "accent_color": proposal.accent_color,
                 "text_color": proposal.text_color,
+                "font_preset": proposal.font_preset,
             },
         }
     )
@@ -461,6 +569,7 @@ def test_apply_visual_brand_saves_confirmed_identity_and_handles_invalid_proposa
                 "primary_color": proposal.primary_color,
                 "accent_color": proposal.accent_color,
                 "text_color": proposal.text_color,
+                "font_preset": proposal.font_preset,
             },
         }
     )

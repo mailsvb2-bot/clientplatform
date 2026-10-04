@@ -6,7 +6,18 @@ LABEL org.opencontainers.image.title="ClientPlatform Visual Creative Gateway" \
       org.opencontainers.image.source="https://github.com/mailsvb2-bot/clientplatform"
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 VISUAL_GATEWAY_STATE_DIR=/var/lib/visual-gateway
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core \
+ && apt-get install -y --no-install-recommends \
+      ffmpeg \
+      fonts-dejavu-core \
+      fonts-lato \
+      fonts-liberation2 \
+      fonts-noto-core \
+ && test -f /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf \
+ && test -f /usr/share/fonts/truetype/lato/Lato-Bold.ttf \
+ && test -f /usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf \
+ && test -f /usr/share/fonts/truetype/liberation2/LiberationSerif-Bold.ttf \
+ && test -f /usr/share/fonts/truetype/noto/NotoSans-Regular.ttf \
+ && test -f /usr/share/fonts/truetype/noto/NotoSerif-Bold.ttf \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY visual_gateway/requirements.txt ./visual_gateway/requirements.txt
