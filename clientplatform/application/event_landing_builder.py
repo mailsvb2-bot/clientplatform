@@ -237,11 +237,7 @@ def ensure_event_landing_draft(
         return existing
     template = build_event_landing_template(actor=actor, event_id=event_id)
     with get_db() as conn:
-        repository = EventLandingRepository(conn)
-        concurrent = repository.get(actor=actor, event_id=event_id)
-        if concurrent is not None:
-            return concurrent
-        return repository.save_draft(
+        return EventLandingRepository(conn).ensure_draft(
             actor=actor,
             event_id=event_id,
             content=template,
@@ -359,6 +355,7 @@ async def generate_event_landing_ai(
             event_id=event_id,
             content=generated,
             source="ai",
+            expected_revision=current.revision,
         )
 
 
@@ -367,6 +364,8 @@ def reset_event_landing_template(
     actor: TenantContext,
     event_id: str,
 ) -> EventLandingProfile:
+    current = get_event_landing_profile(actor=actor, event_id=event_id)
+    expected_revision = 0 if current is None else current.revision
     template = build_event_landing_template(actor=actor, event_id=event_id)
     with get_db() as conn:
         return EventLandingRepository(conn).save_draft(
@@ -374,6 +373,7 @@ def reset_event_landing_template(
             event_id=event_id,
             content=template,
             source="template",
+            expected_revision=expected_revision,
         )
 
 
@@ -425,6 +425,7 @@ def update_event_landing_section(
             event_id=event_id,
             content=content,
             source="owner",
+            expected_revision=current.revision,
         )
 
 
@@ -442,6 +443,7 @@ def set_event_landing_theme(
             event_id=event_id,
             content=replace(current.draft, theme=selected),
             source="owner",
+            expected_revision=current.revision,
         )
 
 
