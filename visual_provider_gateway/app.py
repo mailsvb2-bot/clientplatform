@@ -39,7 +39,7 @@ class SceneContractRequest(BaseModel):
 
 class SemanticQAContractRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    version: int = Field(ge=1, le=1)
+    version: int = Field(ge=1, le=2)
     kind: str = Field(pattern="^image$")
     country_code: str = Field(default="", max_length=16, pattern=r"^[A-Za-z0-9_-]*$")
     owner_request: str = Field(min_length=1, max_length=1500)
