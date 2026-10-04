@@ -254,7 +254,7 @@ def test_event_landing_repository_is_tenant_scoped_and_live_authorized() -> None
         repository.get(actor=actor_b, event_id=event_a.id)
 
     conn.execute(
-        "UPDATE business_members SET status='inactive' WHERE id=? AND business_id=?",
+        "UPDATE business_members SET status='revoked' WHERE id=? AND business_id=?",
         (actor_a.membership_id, actor_a.business_id),
     )
     with pytest.raises(Exception):
