@@ -148,6 +148,7 @@ jobs:
             trap 'rm -f "$cleanup_script"' EXIT
             cat > "$cleanup_script" <<'CLEANUP'
           set -Eeuo pipefail
+          repo=/opt/clientplatform
           echo "CLIENTPLATFORM_DISK_CLEANUP_BEGIN"
           # Build cache is rebuildable and the canonical deploy already prunes it.
           # Do not prune images, containers, networks, volumes, backups, or application data here.
