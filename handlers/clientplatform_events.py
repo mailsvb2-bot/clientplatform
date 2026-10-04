@@ -51,12 +51,24 @@ from clientplatform.application.event_followup_settings import (
     set_business_event_followup_segment_enabled,
     set_business_event_followups_enabled,
 )
+from clientplatform.application.event_landing_builder import (
+    EventLandingAIUnavailable,
+    ensure_event_landing_draft,
+    generate_event_landing_ai,
+    issue_event_landing_preview,
+    publish_event_landing,
+    reset_event_landing_template,
+    restore_simple_event_landing,
+    set_event_landing_theme,
+    update_event_landing_section,
+)
 from clientplatform.domain.bookings import parse_local_booking_start
 from clientplatform.domain.event_content import (
     EventContentMode,
     EventContentStage,
     event_content_mode_label,
 )
+from clientplatform.domain.event_landing import EventLandingTheme
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.presentation.event_ui import (
     BACK_TO_EVENTS_LABEL,
@@ -88,6 +100,7 @@ class ClientPlatformEventState(StatesGroup):
     waiting_content_text = State()
     waiting_followup_text = State()
     waiting_visual_upload = State()
+    waiting_landing_section = State()
 
 
 def _cancel_keyboard(business_id: str):
