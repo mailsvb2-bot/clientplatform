@@ -410,6 +410,7 @@ def suggest_brand_from_html(
         primary_color=primary,
         accent_color=accent,
         text_color=text_color,
+        font_preset=base.font_preset,
     ).normalized()
     fields = (
         "display_name",

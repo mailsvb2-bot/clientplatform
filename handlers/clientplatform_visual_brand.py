@@ -3,7 +3,7 @@ from __future__ import annotations
 """Goal-first Brand DNA UX with confirmed website discovery and manual edits."""
 
 import asyncio
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -17,6 +17,11 @@ from clientplatform.application.creative_studio_publication import (
 from clientplatform.application.visual_brand_discovery import (
     VisualBrandDiscoveryError,
     discover_brand_from_website,
+)
+from clientplatform.domain.visual_typography import (
+    VISUAL_TYPOGRAPHY_LABELS_RU,
+    VISUAL_TYPOGRAPHY_PRESETS,
+    normalize_visual_typography_preset,
 )
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.domain.visual_brand import TenantBrandDNA
@@ -37,10 +42,34 @@ def _keyboard(business_token: str):
     return control._keyboard(
         [
             [("🌐 Взять стиль с сайта", f"cpb:site:{business_token}")],
+            [("🔤 Шрифт по умолчанию", f"cpb:font:{business_token}")],
             [("✏️ Изменить вручную", f"cpb:manual:{business_token}")],
             [("🏠 На главную", f"cpj:home:{business_token}")],
         ]
     )
+
+
+def _font_keyboard(business_token: str, current: str):
+    rows: list[list[tuple[str, str]]] = []
+    pairs = (
+        ("auto", "modern"),
+        ("strict", "friendly"),
+        ("premium", "editorial"),
+        ("elegant", "bold_ad"),
+    )
+    for left, right in pairs:
+        row: list[tuple[str, str]] = []
+        for preset in (left, right):
+            marker = "✓ " if preset == current else ""
+            row.append(
+                (
+                    marker + VISUAL_TYPOGRAPHY_LABELS_RU[preset],
+                    f"cpb:fontset:{preset}:{business_token}",
+                )
+            )
+        rows.append(row)
+    rows.append([("⬅️ К фирменному стилю", f"cpb:open:{business_token}")])
+    return control._keyboard(rows)
 
 
 def _proposal_keyboard(business_token: str):
@@ -57,11 +86,16 @@ def _brand_text(brand: TenantBrandDNA) -> str:
     keywords = ", ".join(value.visual_keywords) if value.visual_keywords else "не заданы"
     tone = ", ".join(value.tone) if value.tone else "не задан"
     name = value.display_name or "не задано"
+    font_label = VISUAL_TYPOGRAPHY_LABELS_RU.get(
+        value.font_preset,
+        VISUAL_TYPOGRAPHY_LABELS_RU["auto"],
+    )
     return (
         f"Название: {name}\n"
         f"Тон: {tone}\n"
         f"Визуальный стиль: {keywords}\n"
-        f"Цвета: {value.primary_color} · {value.accent_color} · {value.text_color}"
+        f"Цвета: {value.primary_color} · {value.accent_color} · {value.text_color}\n"
+        f"Шрифт по умолчанию: {font_label}"
     )
 
 
@@ -82,6 +116,7 @@ def _brand_from_state(data: dict, business_id: str) -> TenantBrandDNA:
         primary_color=str(raw.get("primary_color") or ""),
         accent_color=str(raw.get("accent_color") or ""),
         text_color=str(raw.get("text_color") or ""),
+        font_preset=str(raw.get("font_preset") or "auto"),
     ).normalized()
 
 
@@ -99,6 +134,8 @@ def _manual_brand(current: TenantBrandDNA, text: str) -> TenantBrandDNA:
         "цвет текста": "text_color",
         "стиль": "visual_keywords",
         "визуальный стиль": "visual_keywords",
+        "шрифт": "font_preset",
+        "шрифт по умолчанию": "font_preset",
     }
     for line in str(text or "").splitlines():
         if ":" not in line:
@@ -116,6 +153,32 @@ def _manual_brand(current: TenantBrandDNA, text: str) -> TenantBrandDNA:
             for item in values["visual_keywords"].replace(";", ",").split(",")
             if item.strip()
         )
+    font_aliases = {
+        "авто": "auto",
+        "автоматически": "auto",
+        "auto": "auto",
+        "современный": "modern",
+        "modern": "modern",
+        "строгий": "strict",
+        "strict": "strict",
+        "дружелюбный": "friendly",
+        "friendly": "friendly",
+        "премиальный": "premium",
+        "premium": "premium",
+        "редакционный": "editorial",
+        "editorial": "editorial",
+        "элегантный": "elegant",
+        "elegant": "elegant",
+        "жирный рекламный": "bold_ad",
+        "bold ad": "bold_ad",
+        "bold_ad": "bold_ad",
+    }
+    font_preset = current.font_preset
+    if "font_preset" in values:
+        raw_font = " ".join(values["font_preset"].casefold().split())
+        font_preset = normalize_visual_typography_preset(
+            font_aliases.get(raw_font, raw_font)
+        )
     return TenantBrandDNA(
         business_id=current.business_id,
         display_name=values.get("display_name", current.display_name),
@@ -127,6 +190,7 @@ def _manual_brand(current: TenantBrandDNA, text: str) -> TenantBrandDNA:
         primary_color=values.get("primary_color", current.primary_color),
         accent_color=values.get("accent_color", current.accent_color),
         text_color=values.get("text_color", current.text_color),
+        font_preset=font_preset,
     ).normalized()
 
 
@@ -147,6 +211,62 @@ async def open_visual_brand(callback: CallbackQuery, state: FSMContext) -> None:
         f"{_brand_text(brand)}\n\n"
         "Этот профиль используется при подготовке Creative Studio. Можно безопасно "
         "предложить настройки по публичному сайту или изменить основные поля вручную.",
+        reply_markup=_keyboard(token),
+    )
+
+
+@router.callback_query(F.data.startswith("cpb:font:"))
+async def choose_brand_font(callback: CallbackQuery) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    try:
+        business_id = _business_id(token)
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        brand = await asyncio.to_thread(load_goal_visual_brand, actor=actor)
+    except (TypeError, ValueError, TenantPermissionDenied):
+        await callback.answer("Не удалось открыть выбор шрифта", show_alert=True)
+        return
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "Выберите фирменную типографику по умолчанию. Она будет использоваться "
+        "в новых редактируемых визуалах; в конкретном макете шрифт можно поменять "
+        "отдельно без новой AI-генерации.",
+        reply_markup=_font_keyboard(token, brand.font_preset),
+    )
+
+
+@router.callback_query(F.data.startswith("cpb:fontset:"))
+async def set_brand_font(callback: CallbackQuery) -> None:
+    try:
+        _, _, preset, token = str(callback.data).split(":", 3)
+    except ValueError:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    if preset not in VISUAL_TYPOGRAPHY_PRESETS:
+        await callback.answer("Неизвестный шрифт", show_alert=True)
+        return
+    try:
+        business_id = _business_id(token)
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        current = await asyncio.to_thread(load_goal_visual_brand, actor=actor)
+        saved = await asyncio.to_thread(
+            save_goal_visual_brand,
+            actor=actor,
+            brand=replace(current, font_preset=preset).normalized(),
+        )
+    except TenantPermissionDenied:
+        await callback.answer(
+            "Сохранять фирменный стиль может владелец или администратор",
+            show_alert=True,
+        )
+        return
+    except (TypeError, ValueError):
+        await callback.answer("Не удалось сохранить шрифт", show_alert=True)
+        return
+    await callback.answer("Шрифт сохранён")
+    await control._callback_message(callback).answer(
+        "✅ Фирменный шрифт по умолчанию обновлён. "
+        "Новые редактируемые визуалы возьмут его автоматически.\n\n"
+        f"{_brand_text(saved)}",
         reply_markup=_keyboard(token),
     )
 
@@ -240,6 +360,7 @@ async def ask_manual_brand(callback: CallbackQuery, state: FSMContext) -> None:
         "Основной цвет: #172033\n"
         "Акцент: #E9C46A\n"
         "Цвет текста: #FFFFFF\n"
+        "Шрифт: премиальный\n"
         "Стиль: calm, editorial, human\n\n"
         "Сначала покажу результат; сохранение будет отдельной кнопкой."
     )

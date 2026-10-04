@@ -59,7 +59,8 @@ class VisualBrandRepository:
                 bp.brand_forbidden_visuals_json,
                 bp.brand_primary_color,
                 bp.brand_accent_color,
-                bp.brand_text_color
+                bp.brand_text_color,
+                bp.brand_font_preset
             FROM business_profiles bp
             JOIN businesses b ON b.id = bp.business_id
             WHERE bp.business_id=?
@@ -91,6 +92,7 @@ class VisualBrandRepository:
             primary_color=str(_value(row, "brand_primary_color", 6) or defaults.primary_color),
             accent_color=str(_value(row, "brand_accent_color", 7) or defaults.accent_color),
             text_color=str(_value(row, "brand_text_color", 8) or defaults.text_color),
+            font_preset=str(_value(row, "brand_font_preset", 9) or defaults.font_preset),
         ).normalized()
 
     def update(
@@ -124,6 +126,7 @@ class VisualBrandRepository:
                 brand_primary_color=?,
                 brand_accent_color=?,
                 brand_text_color=?,
+                brand_font_preset=?,
                 brand_updated_at=?,
                 updated_at=?
             WHERE business_id=?
@@ -136,6 +139,7 @@ class VisualBrandRepository:
                 value.primary_color,
                 value.accent_color,
                 value.text_color,
+                value.font_preset,
                 timestamp,
                 timestamp,
                 current.business_id,

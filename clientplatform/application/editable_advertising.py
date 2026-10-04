@@ -38,6 +38,7 @@ def create_editable_ad_project(
     brand: dict[str, str],
     cta: str = "Записаться",
     layout: str = "lower_card",
+    font_preset: str = "auto",
 ) -> EditableAdProject:
     with get_db() as conn:
         return EditableAdProjectRepository(conn).create_or_get(
@@ -49,6 +50,7 @@ def create_editable_ad_project(
             cta=cta,
             layout=layout,
             brand=brand,
+            font_preset=font_preset,
         )
 
 
@@ -84,6 +86,7 @@ def update_editable_ad_composition(
     body: str | None = None,
     cta: str | None = None,
     layout: str | None = None,
+    font_preset: str | None = None,
 ) -> EditableAdProject:
     with get_db() as conn:
         return EditableAdProjectRepository(conn).update_composition(
@@ -93,6 +96,7 @@ def update_editable_ad_composition(
             body=body,
             cta=cta,
             layout=layout,
+            font_preset=font_preset,
         )
 
 

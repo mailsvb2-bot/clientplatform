@@ -67,6 +67,7 @@ def test_visual_brand_defaults_to_business_name_and_is_persisted():
     initial = repo.get(actor=owner)
     assert initial.display_name == "Практика Анны"
     assert initial.primary_color == "#172033"
+    assert initial.font_preset == "auto"
     saved = repo.update(
         actor=owner,
         brand=TenantBrandDNA(
@@ -77,17 +78,20 @@ def test_visual_brand_defaults_to_business_name_and_is_persisted():
             primary_color="#123456",
             accent_color="#ABCDEF",
             text_color="#FFFFFF",
+            font_preset="premium",
         ),
         now="2026-08-12T08:00:00+00:00",
     )
     assert saved.display_name == "Анна · спокойная практика"
     assert saved.tone == ("human", "calm")
     assert saved.visual_keywords == ("natural light", "real office")
+    assert saved.font_preset == "premium"
     row = conn.execute(
-        "SELECT brand_tone_json, brand_updated_at FROM business_profiles WHERE business_id=?",
+        "SELECT brand_tone_json, brand_font_preset, brand_updated_at FROM business_profiles WHERE business_id=?",
         (BUSINESS_ID,),
     ).fetchone()
     assert row["brand_tone_json"] == '["human","calm"]'
+    assert row["brand_font_preset"] == "premium"
     assert row["brand_updated_at"] == "2026-08-12T08:00:00+00:00"
 
 
@@ -123,6 +127,15 @@ def test_visual_brand_fingerprint_is_normalized_and_semantic():
     )
     assert first.fingerprint() == same.fingerprint()
     assert first.fingerprint() != changed.fingerprint()
+    # Typography is deterministic post-AI presentation and must not churn the
+    # generated source-image identity or its paid-generation idempotency.
+    assert first.fingerprint() == TenantBrandDNA(
+        business_id=BUSINESS_ID,
+        display_name="Brand Name",
+        tone=("Human", "Clear"),
+        primary_color="#ABCDEF",
+        font_preset="premium",
+    ).fingerprint()
 
 
 def test_activity_schema_adds_brand_columns_to_legacy_profile_table():
@@ -145,5 +158,5 @@ def test_activity_schema_adds_brand_columns_to_legacy_profile_table():
     assert {
         "brand_display_name", "brand_tone_json", "brand_visual_keywords_json",
         "brand_forbidden_visuals_json", "brand_primary_color", "brand_accent_color",
-        "brand_text_color", "brand_updated_at",
+        "brand_text_color", "brand_font_preset", "brand_updated_at",
     }.issubset(columns)
