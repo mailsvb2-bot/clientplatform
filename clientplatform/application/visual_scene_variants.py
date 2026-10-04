@@ -363,6 +363,26 @@ def load_visual_scene_bundle(
     return contract, source, variants
 
 
+def deterministic_visual_scene_bundle(
+    *,
+    request: str,
+    semantic_flags: tuple[str, ...],
+    style_intent: VisualStyleIntent,
+) -> tuple[VisualSceneContract, str, tuple[VisualSceneVariant, ...]]:
+    owner_request = " ".join(
+        str(request or "").replace("\x00", " ").split()
+    ).strip()
+    contract = fallback_scene_contract(
+        request=owner_request,
+        semantic_flags=semantic_flags,
+    )
+    variants = _fallback_variants(
+        contract=contract,
+        style=style_intent,
+    )
+    return contract, "deterministic", variants
+
+
 def build_visual_scene_bundle(
     *,
     request: str,
@@ -373,13 +393,12 @@ def build_visual_scene_bundle(
     """Build grounded semantics plus five directions with at most one AI call."""
 
     owner_request = " ".join(str(request or "").replace("\x00", " ").split()).strip()
-    fallback_contract = fallback_scene_contract(
-        request=owner_request,
-        semantic_flags=semantic_flags,
-    )
-    fallback_variants = _fallback_variants(
-        contract=fallback_contract,
-        style=style_intent,
+    fallback_contract, _fallback_source, fallback_variants = (
+        deterministic_visual_scene_bundle(
+            request=owner_request,
+            semantic_flags=semantic_flags,
+            style_intent=style_intent,
+        )
     )
     enabled = (
         str(os.getenv("VISUAL_SCENE_PLANNER_ENABLED", "1")).strip().lower()
@@ -553,6 +572,7 @@ __all__ = [
     "VisualSceneVariant",
     "build_visual_scene_bundle",
     "build_visual_scene_variants",
+    "deterministic_visual_scene_bundle",
     "freeze_visual_scene_bundle",
     "load_visual_scene_bundle",
     "recommended_scene_variant",
