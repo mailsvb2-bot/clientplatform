@@ -35,6 +35,7 @@ In both cases the workflow:
 - refuses deletion while an open PR exists;
 - re-reads the Git ref immediately before deletion and refuses if the SHA moved;
 - re-checks for an open PR immediately before deletion;
+- deletes with an explicit Git `--force-with-lease=refs/heads/<branch>:<audited SHA>`, so a concurrent push after the re-read makes deletion fail instead of deleting the new commit;
 - verifies that only `main` remains;
 - reports `ops/single-main-topology` failure if any non-`main` ref cannot be proven safe.
 
