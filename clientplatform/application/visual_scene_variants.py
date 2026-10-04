@@ -23,6 +23,7 @@ from clientplatform.domain.visual_style_intent import VisualStyleIntent
 from services.ai.client import OpenAIClient
 
 
+_SCENE_BUNDLE_VERSION = 1
 _VARIANT_COUNT = 5
 _MAX_DIRECTION_CHARS = 700
 _MAX_DESCRIPTION_CHARS = 360
@@ -312,6 +313,56 @@ def _parse_ai_variants(
     )
 
 
+def freeze_visual_scene_bundle(
+    *,
+    scene_contract: VisualSceneContract,
+    planner_source: str,
+    variants: tuple[VisualSceneVariant, ...],
+) -> str:
+    source = str(planner_source or "").strip().lower()
+    if source not in {"ai", "deterministic"} or len(variants) != _VARIANT_COUNT:
+        raise ValueError("visual_scene_bundle_invalid")
+    payload = {
+        "version": _SCENE_BUNDLE_VERSION,
+        "scene_contract": scene_contract.to_mapping(),
+        "planner_source": source,
+        "variants": [item.to_mapping() for item in variants],
+    }
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def load_visual_scene_bundle(
+    raw: str,
+) -> tuple[VisualSceneContract, str, tuple[VisualSceneVariant, ...]]:
+    try:
+        payload: Any = json.loads(str(raw or ""))
+    except json.JSONDecodeError as exc:
+        raise ValueError("visual_scene_bundle_invalid") from exc
+    if not isinstance(payload, dict) or set(payload) != {
+        "version",
+        "scene_contract",
+        "planner_source",
+        "variants",
+    }:
+        raise ValueError("visual_scene_bundle_invalid")
+    if payload.get("version") != _SCENE_BUNDLE_VERSION:
+        raise ValueError("visual_scene_bundle_invalid")
+    contract = VisualSceneContract.from_mapping(payload.get("scene_contract"))
+    source = str(payload.get("planner_source") or "").strip().lower()
+    raw_variants = payload.get("variants")
+    if source not in {"ai", "deterministic"} or not isinstance(raw_variants, list):
+        raise ValueError("visual_scene_bundle_invalid")
+    variants = tuple(VisualSceneVariant.from_mapping(item) for item in raw_variants)
+    if len(variants) != _VARIANT_COUNT:
+        raise ValueError("visual_scene_bundle_invalid")
+    return contract, source, variants
+
+
 def build_visual_scene_bundle(
     *,
     request: str,
@@ -502,6 +553,8 @@ __all__ = [
     "VisualSceneVariant",
     "build_visual_scene_bundle",
     "build_visual_scene_variants",
+    "freeze_visual_scene_bundle",
+    "load_visual_scene_bundle",
     "recommended_scene_variant",
     "supplement_scene_variant",
 ]
