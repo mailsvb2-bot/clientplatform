@@ -105,6 +105,15 @@ jobs:
             echo "--- git worktrees ---"
             privileged find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null \
               | sed 's#/.git$##' | LC_ALL=C sort || true
+            echo "--- git worktree details ---"
+            while IFS= read -r dotgit; do
+              repo_path="${dotgit%/.git}"
+              origin="$(privileged git -C "$repo_path" remote get-url origin 2>/dev/null || true)"
+              branch="$(privileged git -C "$repo_path" branch --show-current 2>/dev/null || true)"
+              dirty="$(privileged git -C "$repo_path" status --porcelain 2>/dev/null | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+              safe_origin="$(printf '%s' "$origin" | sed -E 's#(https?://)[^/@]+@#\\1***@#')"
+              printf 'WORKTREE path=%s branch=%s dirty=%s origin=%s\\n' "$repo_path" "$branch" "${dirty:-0}" "$safe_origin"
+            done < <(privileged find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null | LC_ALL=C sort)
             echo "CLIENTPLATFORM_DISK_SNAPSHOT_END"
           }
           snapshot
@@ -133,6 +142,15 @@ jobs:
           echo "--- git worktrees ---"
           find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null \
             | sed 's#/.git$##' | LC_ALL=C sort || true
+          echo "--- git worktree details ---"
+          while IFS= read -r dotgit; do
+            repo_path="${dotgit%/.git}"
+            origin="$(git -C "$repo_path" remote get-url origin 2>/dev/null || true)"
+            branch="$(git -C "$repo_path" branch --show-current 2>/dev/null || true)"
+            dirty="$(git -C "$repo_path" status --porcelain 2>/dev/null | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+            safe_origin="$(printf '%s' "$origin" | sed -E 's#(https?://)[^/@]+@#\\1***@#')"
+            printf 'WORKTREE path=%s branch=%s dirty=%s origin=%s\\n' "$repo_path" "$branch" "${dirty:-0}" "$safe_origin"
+          done < <(find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null | LC_ALL=C sort)
           echo "CLIENTPLATFORM_DISK_SNAPSHOT_END"
           CLEANUP
             if [ "$(id -u)" -eq 0 ]; then
