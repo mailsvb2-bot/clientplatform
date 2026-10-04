@@ -528,3 +528,53 @@ def test_corrupt_optional_published_landing_falls_back_without_breaking_registra
     )
     assert get_published_event_landing(conn, public_slug=event.public_slug) is None
     conn.close()
+
+
+def test_landing_draft_creation_is_idempotent_and_stale_write_fails_closed() -> None:
+    conn = _conn()
+    actor = _owner(conn, 1301, "Практика")
+    event = _published_event(conn, actor)
+    repository = EventLandingRepository(conn)
+
+    first = repository.ensure_draft(
+        actor=actor,
+        event_id=event.id,
+        content=_landing("Первая автоверсия"),
+        source="template",
+        now="2026-10-05T11:00:00+00:00",
+    )
+    repeated = repository.ensure_draft(
+        actor=actor,
+        event_id=event.id,
+        content=_landing("Не должна затереть первую"),
+        source="template",
+        now="2026-10-05T11:00:01+00:00",
+    )
+    assert first.revision == repeated.revision == 1
+    assert repeated.draft.hero_title == "Первая автоверсия"
+
+    updated = repository.save_draft(
+        actor=actor,
+        event_id=event.id,
+        content=_landing("Свежая ручная правка"),
+        source="owner",
+        expected_revision=1,
+        now="2026-10-05T11:01:00+00:00",
+    )
+    assert updated.revision == 2
+
+    with pytest.raises(RuntimeError, match="changed concurrently"):
+        repository.save_draft(
+            actor=actor,
+            event_id=event.id,
+            content=_landing("Устаревший AI результат"),
+            source="ai",
+            expected_revision=1,
+            now="2026-10-05T11:02:00+00:00",
+        )
+
+    current = repository.get(actor=actor, event_id=event.id)
+    assert current is not None
+    assert current.revision == 2
+    assert current.draft.hero_title == "Свежая ручная правка"
+    conn.close()
