@@ -329,6 +329,21 @@ async def generate_event_landing_ai(
         )
 
 
+def reset_event_landing_template(
+    *,
+    actor: TenantContext,
+    event_id: str,
+) -> EventLandingProfile:
+    template = build_event_landing_template(actor=actor, event_id=event_id)
+    with get_db() as conn:
+        return EventLandingRepository(conn).save_draft(
+            actor=actor,
+            event_id=event_id,
+            content=template,
+            source="template",
+        )
+
+
 def update_event_landing_section(
     *,
     actor: TenantContext,
@@ -478,6 +493,7 @@ __all__ = [
     "get_public_event_landing_preview",
     "issue_event_landing_preview",
     "publish_event_landing",
+    "reset_event_landing_template",
     "restore_simple_event_landing",
     "set_event_landing_theme",
     "update_event_landing_section",
