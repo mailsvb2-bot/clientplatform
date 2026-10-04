@@ -1011,3 +1011,39 @@ def test_yandex_adapter_prioritizes_owner_request_before_style_and_brand_context
     assert "не печатать" in adapted.prompt
     assert len(adapted.prompt) <= 500
     assert "Owner request" not in adapted.prompt
+
+def test_yandex_scene_contract_preserves_exact_requested_visible_text() -> None:
+    request = "красная чашка с надписью СКИДКА"
+    contract = VisualSceneContract(
+        version=1,
+        topology="static",
+        primary_subject="красная чашка",
+        initial_state=(),
+        actions=(),
+        cause="",
+        transition=(),
+        final_state=(),
+        explicit_text=("СКИДКА",),
+        required_evidence=("requested visible text present exactly: СКИДКА",),
+        forbidden=("readable text other than owner-requested wording",),
+    )
+    compiled = compile_visual_prompt(
+        request=request,
+        kind="image",
+        scene_contract=contract,
+    )
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="1:1",
+        negative_prompt=compiled.negative_prompt,
+        scene_contract=contract.to_mapping(),
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
+
+    assert len(adapted.prompt) <= 500
+    assert adapted.prompt.startswith("красная чашка")
+    assert "Точный запрошенный текст в кадре" in adapted.prompt
+    assert "СКИДКА" in adapted.prompt
