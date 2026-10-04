@@ -133,7 +133,32 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
         self.assertNotIn('core.hooksPath=/dev/null', text)
 
         # Discovery itself is critical and must not disappear inside process
-        # substitution or a best-effort     def test_branch_cleanup_deletes_only_exact_merged_pr_heads(self) -> None:
+        # substitution or a best-effort `|| true`.
+        self.assertGreaterEqual(text.count("WORKTREE_DISCOVERY_ERROR"), 2)
+        self.assertIn("phase=pre_cleanup", text)
+        self.assertIn("phase=post_cleanup", text)
+        self.assertGreaterEqual(
+            text.count('worktree_list="$(mktemp /tmp/clientplatform-worktrees.XXXXXX)"'),
+            2,
+        )
+        self.assertGreaterEqual(text.count('done < "$worktree_list"'), 2)
+        self.assertNotIn(
+            'done < <(privileged find /root /home /opt /srv /tmp',
+            text,
+        )
+        self.assertNotIn(
+            'done < <(find /root /home /opt /srv /tmp',
+            text,
+        )
+        self.assertGreaterEqual(text.count("worktree_audit_errors=0"), 2)
+        self.assertGreaterEqual(
+            text.count('if [ "$worktree_audit_errors" -ne 0 ]; then'),
+            2,
+        )
+        self.assertIn("return 24", text)
+        self.assertIn("exit 24", text)
+
+    def test_branch_cleanup_deletes_only_exact_merged_pr_heads(self) -> None:
         text = self._text(BRANCH_CLEANUP)
         for required in (
             "pull-requests: read",
