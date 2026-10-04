@@ -45,6 +45,7 @@ from clientplatform.application.visual_scene_variants import (
     load_visual_scene_bundle,
     recommended_scene_variant,
     supplement_scene_variant,
+    visual_scene_ai_planning_available,
 )
 from clientplatform.application.visual_style_preferences import (
     clear_visual_style_preference,
@@ -187,6 +188,20 @@ async def _ensure_scene_variants(
     request = normalize_business_image_request(str(data["creative_pending_prompt"]))
     style = _style_intent_from_state(data)
     flags = semantic_flags_for_request(request)
+
+    if not visual_scene_ai_planning_available():
+        contract, source, variants = deterministic_visual_scene_bundle(
+            request=request,
+            semantic_flags=flags,
+            style_intent=style,
+        )
+        await state.update_data(
+            creative_scene_contract=contract.to_mapping(),
+            creative_scene_planner_source=source,
+            creative_scene_variants=[item.to_mapping() for item in variants],
+        )
+        return contract, source, variants
+
     receipt, claimed = await asyncio.to_thread(
         claim_visual_scene_plan,
         actor=actor,
