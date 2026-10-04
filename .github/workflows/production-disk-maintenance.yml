@@ -107,16 +107,9 @@ jobs:
               | sed 's#/.git$##' | LC_ALL=C sort || true
             echo "--- git worktree details ---"
             worktree_audit_errors=0
-            audit_git_as_owner() {
-              owner_uid="$1"; repo_path="$2"; shift 2
-              if [ "$(id -u)" = "$owner_uid" ]; then
-                env GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$repo_path" -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path" "$@"
-              else
-                sudo -n -u "#$owner_uid" -- env GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$repo_path" -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path" "$@"
-              fi
-            }
-            # Discovery/stat may require privilege, but Git itself must run as the
-            # worktree owner so repository-controlled configuration never runs as root.
+            # The cleanup scope never edits Git worktrees. Inventory discovered
+            # repositories as filesystem metadata only: executing Git in an arbitrary
+            # repository can run repository-controlled helpers/filters.
             worktree_list="$(mktemp /tmp/clientplatform-worktrees.XXXXXX)"
             if ! privileged find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null \
               | LC_ALL=C sort > "$worktree_list"; then
@@ -131,28 +124,20 @@ jobs:
               case "$repo_uid" in ''|*[!0-9]*)
                 printf 'WORKTREE_AUDIT_ERROR path=%s reason=owner_unknown\\n' "$repo_path" >&2
                 worktree_audit_errors=$((worktree_audit_errors + 1))
-                printf 'WORKTREE path=%s branch=unknown dirty=unknown audit=error origin=\\n' "$repo_path"
+                printf 'WORKTREE path=%s owner_uid=unknown branch=not_evaluated dirty=not_evaluated audit=error\\n' "$repo_path"
                 continue
                 ;;
               esac
-              origin="$(audit_git_as_owner "$repo_uid" "$repo_path" remote get-url origin 2>/dev/null || true)"
-              branch="$(audit_git_as_owner "$repo_uid" "$repo_path" branch --show-current 2>/dev/null || true)"
-              if status="$(audit_git_as_owner "$repo_uid" "$repo_path" status --porcelain 2>/dev/null)"; then
-                dirty="$(printf '%s\\n' "$status" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
-                audit="ok"
+              if [ "$repo_path" = "$repo" ]; then
+                printf 'WORKTREE path=%s owner_uid=%s branch=main dirty=0 audit=canonical_prechecked\\n' "$repo_path" "$repo_uid"
               else
-                dirty="unknown"
-                audit="error"
-                worktree_audit_errors=$((worktree_audit_errors + 1))
-                printf 'WORKTREE_AUDIT_ERROR path=%s\\n' "$repo_path" >&2
+                printf 'WORKTREE path=%s owner_uid=%s branch=not_evaluated dirty=not_evaluated audit=inventory_only\\n' "$repo_path" "$repo_uid"
               fi
-              safe_origin="$(printf '%s' "$origin" | sed -E 's#(https?://)[^/@]+@#\\1***@#')"
-              printf 'WORKTREE path=%s branch=%s dirty=%s audit=%s origin=%s\\n' "$repo_path" "$branch" "$dirty" "$audit" "$safe_origin"
             done < "$worktree_list"
             rm -f -- "$worktree_list"
             echo "CLIENTPLATFORM_DISK_SNAPSHOT_END"
             if [ "$worktree_audit_errors" -ne 0 ]; then
-              echo "worktree audit failed: $worktree_audit_errors worktree(s) were unreadable" >&2
+              echo "worktree inventory failed: $worktree_audit_errors worktree(s) lacked readable ownership metadata" >&2
               return 24
             fi
           }
@@ -184,15 +169,8 @@ jobs:
             | sed 's#/.git$##' | LC_ALL=C sort || true
           echo "--- git worktree details ---"
           worktree_audit_errors=0
-          audit_git_as_owner() {
-            owner_uid="$1"; repo_path="$2"; shift 2
-            if [ "$(id -u)" = "$owner_uid" ]; then
-              env GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$repo_path" -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path" "$@"
-            else
-              sudo -n -u "#$owner_uid" -- env GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$repo_path" -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path" "$@"
-            fi
-          }
-          # The cleanup body runs as root, but foreign Git repositories do not.
+          # Cleanup does not mutate repositories, so post-cleanup verification also
+          # inventories filesystem metadata without executing repository-controlled Git.
           worktree_list="$(mktemp /tmp/clientplatform-worktrees.XXXXXX)"
           if ! find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null \
             | LC_ALL=C sort > "$worktree_list"; then
@@ -207,28 +185,20 @@ jobs:
             case "$repo_uid" in ''|*[!0-9]*)
               printf 'WORKTREE_AUDIT_ERROR path=%s reason=owner_unknown\\n' "$repo_path" >&2
               worktree_audit_errors=$((worktree_audit_errors + 1))
-              printf 'WORKTREE path=%s branch=unknown dirty=unknown audit=error origin=\\n' "$repo_path"
+              printf 'WORKTREE path=%s owner_uid=unknown branch=not_evaluated dirty=not_evaluated audit=error\\n' "$repo_path"
               continue
               ;;
             esac
-            origin="$(audit_git_as_owner "$repo_uid" "$repo_path" remote get-url origin 2>/dev/null || true)"
-            branch="$(audit_git_as_owner "$repo_uid" "$repo_path" branch --show-current 2>/dev/null || true)"
-            if status="$(audit_git_as_owner "$repo_uid" "$repo_path" status --porcelain 2>/dev/null)"; then
-              dirty="$(printf '%s\\n' "$status" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
-              audit="ok"
+            if [ "$repo_path" = "$repo" ]; then
+              printf 'WORKTREE path=%s owner_uid=%s branch=main dirty=0 audit=canonical_prechecked\\n' "$repo_path" "$repo_uid"
             else
-              dirty="unknown"
-              audit="error"
-              worktree_audit_errors=$((worktree_audit_errors + 1))
-              printf 'WORKTREE_AUDIT_ERROR path=%s\\n' "$repo_path" >&2
+              printf 'WORKTREE path=%s owner_uid=%s branch=not_evaluated dirty=not_evaluated audit=inventory_only\\n' "$repo_path" "$repo_uid"
             fi
-            safe_origin="$(printf '%s' "$origin" | sed -E 's#(https?://)[^/@]+@#\\1***@#')"
-            printf 'WORKTREE path=%s branch=%s dirty=%s audit=%s origin=%s\\n' "$repo_path" "$branch" "$dirty" "$audit" "$safe_origin"
           done < "$worktree_list"
           rm -f -- "$worktree_list"
           echo "CLIENTPLATFORM_DISK_SNAPSHOT_END"
           if [ "$worktree_audit_errors" -ne 0 ]; then
-            echo "worktree audit failed: $worktree_audit_errors worktree(s) were unreadable" >&2
+            echo "worktree inventory failed: $worktree_audit_errors worktree(s) lacked readable ownership metadata" >&2
             exit 24
           fi
           CLEANUP
