@@ -145,6 +145,11 @@ def test_auto_scene_variant_uses_recommended_variant(monkeypatch) -> None:
     callback = _callback("cpc:sv:auto:business-token", target)
     prepared = AsyncMock()
     monkeypatch.setattr(studio.control, "_callback_message", lambda _callback: target)
+    monkeypatch.setattr(
+        studio.control,
+        "_actor",
+        AsyncMock(return_value=SimpleNamespace(assert_can_manage_promotions=lambda: None)),
+    )
     monkeypatch.setattr(studio, "_prepare_styled_generation", prepared)
 
     asyncio.run(studio.auto_scene_variant(callback, state))
@@ -165,7 +170,13 @@ def test_scene_variant_helpers_roundtrip_cached_state_and_reject_corruption(monk
     assert "1. Ясная сюжетная сцена" in text
     assert "5." in text
 
-    contract, source, cached = asyncio.run(studio._ensure_scene_variants(state, data))
+    contract, source, cached = asyncio.run(
+        studio._ensure_scene_variants(
+            state,
+            data,
+            actor=SimpleNamespace(),
+        )
+    )
     assert source == "deterministic"
     assert contract == studio._scene_contract_from_state(data)
     assert cached == variants
@@ -202,6 +213,12 @@ def test_show_scene_variant_choices_handles_stale_success_and_planner_failure(
 ) -> None:
     monkeypatch.setenv("VISUAL_SCENE_VARIANTS_ENABLED", "0")
 
+    monkeypatch.setattr(
+        studio.control,
+        "_actor",
+        AsyncMock(return_value=SimpleNamespace(assert_can_manage_promotions=lambda: None)),
+    )
+
     stale_state = FakeState(_data())
     stale_state.data["creative_business_token"] = "other-token"
     stale_target = _target()
@@ -210,6 +227,7 @@ def test_show_scene_variant_choices_handles_stale_success_and_planner_failure(
             stale_target,
             stale_state,
             token="business-token",
+            user_id=101,
         )
     )
     assert "устарела" in stale_target.answer.await_args.args[0]
