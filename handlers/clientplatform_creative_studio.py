@@ -990,17 +990,18 @@ async def _prepare_styled_generation(
         brand_context = str(data.get("creative_brand_context") or "")
         country_code = str(data.get("creative_country_code") or "")
         style = _style_intent_from_state(data)
+        actor = await control._actor(int(user_id), business_id)
+        actor.assert_can_manage_promotions()
         scene_contract, planner_source, scene_variants = await _ensure_scene_variants(
             state,
             data,
+            actor=actor,
         )
         selected_scene_variant = (
             scene_variant
             if scene_variant is not None
             else recommended_scene_variant(scene_variants)
         )
-        actor = await control._actor(int(user_id), business_id)
-        actor.assert_can_manage_promotions()
         freezer = (
             freeze_business_video_payload
             if kind == "video"
@@ -1311,6 +1312,7 @@ async def _show_scene_variant_choices(
     state: FSMContext,
     *,
     token: str,
+    user_id: int,
 ) -> None:
     data = await state.get_data()
     if not _style_session_matches(data, token):
@@ -1319,7 +1321,19 @@ async def _show_scene_variant_choices(
         )
         return
     try:
-        _contract, _source, variants = await _ensure_scene_variants(state, data)
+        actor = await control._actor(
+            int(user_id),
+            str(data["creative_business_id"]),
+        )
+        actor.assert_can_manage_promotions()
+        _contract, _source, variants = await _ensure_scene_variants(
+            state,
+            data,
+            actor=actor,
+        )
+    except TenantPermissionDenied:
+        await target.answer("Создание визуалов недоступно для Вашей роли.")
+        return
     except OSError:
         await target.answer(
             "Не удалось подготовить варианты постановки. Можно оставить "
@@ -1352,6 +1366,7 @@ async def show_scene_variants(callback: CallbackQuery, state: FSMContext) -> Non
         control._callback_message(callback),
         state,
         token=token,
+        user_id=int(callback.from_user.id),
     )
 
 
@@ -1363,8 +1378,23 @@ async def auto_scene_variant(callback: CallbackQuery, state: FSMContext) -> None
         await callback.answer("Эта настройка уже устарела", show_alert=True)
         return
     try:
-        _contract, _source, variants = await _ensure_scene_variants(state, data)
+        actor = await control._actor(
+            int(callback.from_user.id),
+            str(data["creative_business_id"]),
+        )
+        actor.assert_can_manage_promotions()
+        _contract, _source, variants = await _ensure_scene_variants(
+            state,
+            data,
+            actor=actor,
+        )
         selected = recommended_scene_variant(variants)
+    except TenantPermissionDenied:
+        await callback.answer(
+            "Создание визуалов недоступно для Вашей роли",
+            show_alert=True,
+        )
+        return
     except OSError:
         await callback.answer("Не удалось выбрать вариант", show_alert=True)
         return
