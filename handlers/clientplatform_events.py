@@ -277,30 +277,30 @@ def _landing_editor_rows(*, event_id: str, business_id: str, published: bool):
     event_token = control._uuid_token(event_id)
     business_token = control._uuid_token(business_id)
     rows = [
-        [("✨ Создать AI-версию", f"cpev:lai:{event_token}:{business_token}")],
-        [("✏️ Заголовок и оффер", f"cpev:led:hero:{event_token}:{business_token}")],
+        [("✨ Создать AI-версию", f"cpev:la:{event_token}:{business_token}")],
+        [("✏️ Заголовок и оффер", f"cpev:le:h:{event_token}:{business_token}")],
         [
-            ("👥 Для кого", f"cpev:led:audience:{event_token}:{business_token}"),
-            ("🎯 Польза", f"cpev:led:outcomes:{event_token}:{business_token}"),
+            ("👥 Для кого", f"cpev:le:a:{event_token}:{business_token}"),
+            ("🎯 Польза", f"cpev:le:o:{event_token}:{business_token}"),
         ],
-        [("🗓 Программа", f"cpev:led:agenda:{event_token}:{business_token}")],
+        [("🗓 Программа", f"cpev:le:g:{event_token}:{business_token}")],
         [
-            ("👤 Организатор", f"cpev:led:speaker:{event_token}:{business_token}"),
-            ("❓ FAQ", f"cpev:led:faq:{event_token}:{business_token}"),
+            ("👤 Организатор", f"cpev:le:s:{event_token}:{business_token}"),
+            ("❓ FAQ", f"cpev:le:f:{event_token}:{business_token}"),
         ],
-        [("📣 Призыв", f"cpev:led:cta:{event_token}:{business_token}")],
+        [("📣 Призыв", f"cpev:le:c:{event_token}:{business_token}")],
         [
-            ("🌿 Спокойный", f"cpev:ltheme:calm:{event_token}:{business_token}"),
-            ("🔥 Яркий", f"cpev:ltheme:bold:{event_token}:{business_token}"),
-            ("◻️ Минимал", f"cpev:ltheme:minimal:{event_token}:{business_token}"),
+            ("🌿 Спокойный", f"cpev:lt:c:{event_token}:{business_token}"),
+            ("🔥 Яркий", f"cpev:lt:b:{event_token}:{business_token}"),
+            ("◻️ Минимал", f"cpev:lt:m:{event_token}:{business_token}"),
         ],
-        [("♻️ Вернуть автоверсию", f"cpev:lreset:{event_token}:{business_token}")],
-        [("👁 Предпросмотр", f"cpev:lpreview:{event_token}:{business_token}")],
-        [("🚀 Опубликовать", f"cpev:lpublish:{event_token}:{business_token}")],
+        [("♻️ Вернуть автоверсию", f"cpev:lr:{event_token}:{business_token}")],
+        [("👁 Предпросмотр", f"cpev:lp:{event_token}:{business_token}")],
+        [("🚀 Опубликовать", f"cpev:lx:{event_token}:{business_token}")],
     ]
     if published:
         rows.append(
-            [("↩️ Вернуть простой лендинг", f"cpev:lsimple:{event_token}:{business_token}")]
+            [("↩️ Вернуть простой лендинг", f"cpev:ls:{event_token}:{business_token}")]
         )
     rows.append([(BACK_TO_EVENTS_LABEL, f"cpev:home:{business_token}")])
     return rows
