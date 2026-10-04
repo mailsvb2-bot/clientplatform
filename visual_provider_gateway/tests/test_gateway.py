@@ -982,3 +982,60 @@ def test_store_rearm_failed_is_atomic_and_error_allowlisted(tmp_path):
     refreshed = store.get(job.id, client_id="client-a", scope_id="tenant-a")
     assert refreshed.status == "running"
     assert refreshed.error_code == ""
+
+def test_api_semantic_qa_accepts_v2_scene_contract(monkeypatch):
+    TestClient, app_module, GatewayPrincipal, app, require_auth = _api_surface()
+
+    class SemanticQAStub:
+        def semantic_qa(self, gateway_id, *, client_id, scope_id, contract):
+            assert gateway_id == "job-v2"
+            assert client_id == "test-client"
+            assert scope_id == "tenant-a"
+            assert contract["version"] == 2
+            assert contract["scene_contract"]["primary_subject"] == "ёж"
+            return {"status": "passed", "issues": []}
+
+    monkeypatch.setattr(app_module, "service", lambda: SemanticQAStub())
+    app.dependency_overrides[require_auth] = lambda: GatewayPrincipal(
+        client_id="test-client"
+    )
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/v1/creative/generations/job-v2/semantic-qa",
+            json={
+                "scope_id": "tenant-a",
+                "contract": {
+                    "version": 2,
+                    "kind": "image",
+                    "country_code": "RU",
+                    "owner_request": (
+                        "ёж слушает аудио и становится добрым и пушистым"
+                    ),
+                    "semantic_flags": [
+                        "transformation",
+                        "listening",
+                        "visible_state",
+                    ],
+                    "scene_contract": {
+                        "version": 1,
+                        "topology": "transformation",
+                        "primary_subject": "ёж",
+                        "initial_state": [],
+                        "actions": ["слушает аудио"],
+                        "cause": "слушает аудио",
+                        "transition": ["становится"],
+                        "final_state": ["добрым", "пушистым"],
+                        "explicit_text": [],
+                        "required_evidence": [
+                            "same subject identity across stages"
+                        ],
+                        "forbidden": ["stage labels"],
+                    },
+                },
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == "passed"
+    finally:
+        app.dependency_overrides.clear()
