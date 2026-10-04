@@ -117,6 +117,14 @@ jobs:
             }
             # Discovery/stat may require privilege, but Git itself must run as the
             # worktree owner so repository-controlled configuration never runs as root.
+            worktree_list="$(mktemp /tmp/clientplatform-worktrees.XXXXXX)"
+            if ! privileged find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null \
+              | LC_ALL=C sort > "$worktree_list"; then
+              printf 'WORKTREE_DISCOVERY_ERROR phase=pre_cleanup\\n' >&2
+              rm -f -- "$worktree_list"
+              echo "CLIENTPLATFORM_DISK_SNAPSHOT_END"
+              return 24
+            fi
             while IFS= read -r dotgit; do
               repo_path="${dotgit%/.git}"
               repo_uid="$(privileged stat -c '%u' "$dotgit" 2>/dev/null || true)"
@@ -140,7 +148,8 @@ jobs:
               fi
               safe_origin="$(printf '%s' "$origin" | sed -E 's#(https?://)[^/@]+@#\\1***@#')"
               printf 'WORKTREE path=%s branch=%s dirty=%s audit=%s origin=%s\\n' "$repo_path" "$branch" "$dirty" "$audit" "$safe_origin"
-            done < <(privileged find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null | LC_ALL=C sort)
+            done < "$worktree_list"
+            rm -f -- "$worktree_list"
             echo "CLIENTPLATFORM_DISK_SNAPSHOT_END"
             if [ "$worktree_audit_errors" -ne 0 ]; then
               echo "worktree audit failed: $worktree_audit_errors worktree(s) were unreadable" >&2
@@ -184,6 +193,14 @@ jobs:
             fi
           }
           # The cleanup body runs as root, but foreign Git repositories do not.
+          worktree_list="$(mktemp /tmp/clientplatform-worktrees.XXXXXX)"
+          if ! find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null \
+            | LC_ALL=C sort > "$worktree_list"; then
+            printf 'WORKTREE_DISCOVERY_ERROR phase=post_cleanup\\n' >&2
+            rm -f -- "$worktree_list"
+            echo "CLIENTPLATFORM_DISK_SNAPSHOT_END"
+            exit 24
+          fi
           while IFS= read -r dotgit; do
             repo_path="${dotgit%/.git}"
             repo_uid="$(stat -c '%u' "$dotgit" 2>/dev/null || true)"
@@ -207,7 +224,8 @@ jobs:
             fi
             safe_origin="$(printf '%s' "$origin" | sed -E 's#(https?://)[^/@]+@#\\1***@#')"
             printf 'WORKTREE path=%s branch=%s dirty=%s audit=%s origin=%s\\n' "$repo_path" "$branch" "$dirty" "$audit" "$safe_origin"
-          done < <(find /root /home /opt /srv /tmp -xdev -maxdepth 5 -type d -name .git -print 2>/dev/null | LC_ALL=C sort)
+          done < "$worktree_list"
+          rm -f -- "$worktree_list"
           echo "CLIENTPLATFORM_DISK_SNAPSHOT_END"
           if [ "$worktree_audit_errors" -ne 0 ]; then
             echo "worktree audit failed: $worktree_audit_errors worktree(s) were unreadable" >&2
