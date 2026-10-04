@@ -55,6 +55,7 @@ from clientplatform.application.event_landing_builder import (
     EventLandingAIUnavailable,
     ensure_event_landing_draft,
     generate_event_landing_ai,
+    get_event_landing_editor_state,
     issue_event_landing_preview,
     publish_event_landing,
     reset_event_landing_template,
@@ -323,7 +324,7 @@ async def _send_event_landing_editor(
     )
     item = _event_item(snapshot, event_id)
     profile = await asyncio.to_thread(
-        ensure_event_landing_draft,
+        get_event_landing_editor_state,
         actor=actor,
         event_id=event_id,
     )
