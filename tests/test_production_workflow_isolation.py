@@ -118,7 +118,16 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
     def test_disk_maintenance_foreign_worktree_audit_is_ownership_safe_and_fail_closed(self) -> None:
         text = self._text(DISK_MAINTENANCE)
 
-        self.assertGreaterEqual(text.count('git -c safe.directory="$repo_path" -C "$repo_path"'), 6)
+        hardened_git = (
+            'git -c safe.directory="$repo_path" '
+            '-c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path"'
+        )
+        self.assertGreaterEqual(text.count(hardened_git), 6)
+        self.assertGreaterEqual(text.count("GIT_OPTIONAL_LOCKS=0"), 6)
+        self.assertNotIn(
+            'git -c safe.directory="$repo_path" -C "$repo_path"',
+            text,
+        )
         self.assertGreaterEqual(text.count("worktree_audit_errors=0"), 2)
         self.assertGreaterEqual(text.count('dirty="unknown"'), 2)
         self.assertGreaterEqual(text.count('audit="error"'), 2)
