@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 from clientplatform.application.visual_scene_variants import (
     build_visual_scene_variants,
+    freeze_visual_scene_bundle,
 )
 from clientplatform.domain.visual_prompt_compiler import semantic_flags_for_request
 from clientplatform.domain.visual_scene_contract import fallback_scene_contract
+from clientplatform.domain.visual_scene_plan import VisualScenePlanStatus
 from clientplatform.domain.visual_style_intent import VisualStyleIntent
 from handlers import clientplatform_creative_studio as studio
 
@@ -312,4 +314,82 @@ def test_scene_variant_supplement_missing_selection_keeps_user_in_recovery_flow(
     assert "Дополнение не удалось сохранить" in message.answer.await_args.args[0]
     markup = message.answer.await_args.kwargs["reply_markup"]
     assert markup.inline_keyboard[0][0].text == "⬅️ К вариантам"
+
+
+def test_durable_ready_scene_plan_is_reused_without_second_ai_call(monkeypatch) -> None:
+    data = _data()
+    contract = studio._scene_contract_from_state(data)
+    variants = studio._scene_variants_from_state(data)
+    frozen = freeze_visual_scene_bundle(
+        scene_contract=contract,
+        planner_source="ai",
+        variants=variants,
+    )
+    for key in (
+        "creative_scene_contract",
+        "creative_scene_planner_source",
+        "creative_scene_variants",
+    ):
+        data.pop(key, None)
+    state = FakeState(data)
+    actor = SimpleNamespace()
+    receipt = SimpleNamespace(
+        id="11111111-1111-4111-8111-111111111111",
+        status=VisualScenePlanStatus.READY,
+        result_json=frozen,
+    )
+    build = Mock(side_effect=AssertionError("paid planner must not run twice"))
+    monkeypatch.setattr(
+        studio,
+        "claim_visual_scene_plan",
+        Mock(return_value=(receipt, False)),
+    )
+    monkeypatch.setattr(studio, "build_visual_scene_bundle", build)
+
+    restored_contract, source, restored_variants = asyncio.run(
+        studio._ensure_scene_variants(state, data, actor=actor)
+    )
+
+    assert restored_contract == contract
+    assert source == "ai"
+    assert restored_variants == variants
+    build.assert_not_called()
+
+
+def test_durable_uncertain_scene_plan_fails_closed_to_deterministic_bundle(
+    monkeypatch,
+) -> None:
+    data = _data()
+    for key in (
+        "creative_scene_contract",
+        "creative_scene_planner_source",
+        "creative_scene_variants",
+    ):
+        data.pop(key, None)
+    state = FakeState(data)
+    receipt = SimpleNamespace(
+        id="22222222-2222-4222-8222-222222222222",
+        status=VisualScenePlanStatus.AMBIGUOUS,
+        result_json="",
+    )
+    build = Mock(side_effect=AssertionError("ambiguous paid planner must not retry"))
+    monkeypatch.setattr(
+        studio,
+        "claim_visual_scene_plan",
+        Mock(return_value=(receipt, False)),
+    )
+    monkeypatch.setattr(studio, "build_visual_scene_bundle", build)
+
+    contract, source, variants = asyncio.run(
+        studio._ensure_scene_variants(
+            state,
+            data,
+            actor=SimpleNamespace(),
+        )
+    )
+
+    assert source == "deterministic"
+    assert contract.primary_subject
+    assert len(variants) == 5
+    build.assert_not_called()
 
