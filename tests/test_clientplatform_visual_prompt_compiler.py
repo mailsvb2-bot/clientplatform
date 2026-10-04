@@ -393,9 +393,12 @@ class VisualPromptCompilerTests(unittest.TestCase):
             country_code="RU",
         )
         payload = json.loads(frozen)
-        self.assertEqual(payload["version"], 3)
-        self.assertEqual(payload["intent"]["prompt_compiler_version"], 5)
-        self.assertEqual(payload["semantic_qa"]["version"], 1)
+        self.assertEqual(payload["version"], 4)
+        self.assertEqual(payload["intent"]["prompt_compiler_version"], 6)
+        self.assertEqual(payload["semantic_qa"]["version"], 2)
+        self.assertIn("scene_contract", payload["brief"])
+        self.assertIsInstance(payload["brief"]["scene_contract"], dict)
+        self.assertIsInstance(payload["semantic_qa"]["scene_contract"], dict)
         self.assertEqual(payload["semantic_qa"]["kind"], "image")
         self.assertEqual(payload["semantic_qa"]["country_code"], "RU")
         self.assertEqual(payload["brief"]["country_code"], "RU")
@@ -426,6 +429,10 @@ class VisualPromptCompilerTests(unittest.TestCase):
         payload = json.loads(frozen)
         payload["version"] = 2
         payload.pop("semantic_qa")
+        payload["brief"].pop("scene_contract", None)
+        payload["intent"].pop("scene_planner_version", None)
+        payload["intent"].pop("scene_planner_source", None)
+        payload["intent"].pop("scene_variant", None)
         legacy = json.dumps(
             payload,
             ensure_ascii=False,
@@ -448,8 +455,9 @@ class VisualPromptCompilerTests(unittest.TestCase):
         )
         payload = json.loads(frozen)
 
-        self.assertEqual(payload["version"], 3)
+        self.assertEqual(payload["version"], 4)
         self.assertIsNone(payload["semantic_qa"])
+        self.assertIsInstance(payload["brief"]["scene_contract"], dict)
         self.assertIsNone(
             visual_creatives.frozen_business_visual_semantic_qa(frozen)
         )

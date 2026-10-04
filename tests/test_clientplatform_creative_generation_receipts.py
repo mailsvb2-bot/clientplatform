@@ -38,12 +38,21 @@ class FrozenBusinessImagePayloadTests(unittest.TestCase):
         )
         self.assertEqual(first, second)
         value = json.loads(first)
-        self.assertEqual(value["version"], 3)
+        self.assertEqual(value["version"], 4)
         self.assertEqual(value["wait_seconds"], 20)
         self.assertEqual(value["brief"]["kind"], "image")
         self.assertEqual(value["intent"]["style_schema_version"], 2)
-        self.assertEqual(value["semantic_qa"]["version"], 1)
+        self.assertEqual(value["intent"]["prompt_compiler_version"], 6)
+        self.assertEqual(value["intent"]["scene_planner_version"], 1)
+        self.assertEqual(value["intent"]["scene_planner_source"], "deterministic")
+        self.assertIsNone(value["intent"]["scene_variant"])
+        self.assertEqual(value["brief"]["scene_contract"]["version"], 1)
+        self.assertEqual(value["semantic_qa"]["version"], 2)
         self.assertEqual(value["semantic_qa"]["owner_request"], "calm office")
+        self.assertEqual(
+            value["semantic_qa"]["scene_contract"],
+            value["brief"]["scene_contract"],
+        )
         self.assertIn('Owner request, preserve its meaning exactly: "calm office"', value["brief"]["prompt"])
 
     def test_video_payload_preserves_event_binding_and_vertical_brief(self) -> None:
@@ -109,6 +118,8 @@ class FrozenBusinessImagePayloadTests(unittest.TestCase):
         brief = submit.call_args.args[0]
         self.assertIn('Owner request, preserve its meaning exactly: "original request"', brief.prompt)
         self.assertEqual(brief.brand_context, "Tone: calm")
+        self.assertIsInstance(brief.scene_contract, dict)
+        self.assertEqual(brief.scene_contract["version"], 1)
         self.assertEqual(submit.call_args.kwargs["wait_seconds"], 20)
 
     def test_frozen_payload_rejects_version_or_shape_drift(self) -> None:

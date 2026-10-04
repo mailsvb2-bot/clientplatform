@@ -548,8 +548,17 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
             for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
             for b in row
         ]
-        self.assertIn("🤖 Сделать всё автоматически", labels_)
+        self.assertIn("🤖 AI-авто — подготовить постановку", labels_)
+        self.assertIn("🎬 Сгенерировать 5 AI-вариантов", labels_)
         self.assertIn("🎨 Уточнить стиль", labels_)
+        self.assertIn(
+            "явно разрешает один текстовый AI-вызов",
+            target.answer.await_args.args[0],
+        )
+        self.assertIn(
+            "не запускает второй AI-вызов",
+            target.answer.await_args.args[0],
+        )
 
         target.answer.reset_mock()
         with (

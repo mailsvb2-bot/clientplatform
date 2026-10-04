@@ -32,6 +32,21 @@ from clientplatform.application.event_content_assets import (
     EventContentAssetError,
     store_generated_event_content_asset,
 )
+from clientplatform.application.visual_scene_plan_receipts import (
+    claim_visual_scene_plan,
+    complete_visual_scene_plan,
+    mark_visual_scene_plan_ambiguous,
+)
+from clientplatform.application.visual_scene_variants import (
+    VisualSceneVariant,
+    build_visual_scene_bundle,
+    deterministic_visual_scene_bundle,
+    freeze_visual_scene_bundle,
+    load_visual_scene_bundle,
+    recommended_scene_variant,
+    supplement_scene_variant,
+    visual_scene_ai_planning_available,
+)
 from clientplatform.application.visual_style_preferences import (
     clear_visual_style_preference,
     load_visual_style_preference,
@@ -62,6 +77,9 @@ from clientplatform.domain.creative_generation import (
 from clientplatform.domain.event_content import EventContentStage
 from clientplatform.domain.programs import ContentKind
 from clientplatform.domain.tenancy import TenantPermissionDenied
+from clientplatform.domain.visual_prompt_compiler import semantic_flags_for_request
+from clientplatform.domain.visual_scene_contract import VisualSceneContract
+from clientplatform.domain.visual_scene_plan import VisualScenePlanStatus
 from clientplatform.domain.visual_style_intent import (
     VisualStyleIntent,
     infer_visual_style_intent,
@@ -95,6 +113,182 @@ router.callback_query.filter(control.ClientPlatformControlEnabled())
 class ClientPlatformCreativeStudioState(StatesGroup):
     waiting_prompt = State()
     choosing_style = State()
+    waiting_scene_supplement = State()
+
+
+def _scene_variant_text(variants: tuple[VisualSceneVariant, ...]) -> str:
+    chunks = [
+        "🎬 Варианты постановки\n\n"
+        "Смысл исходного запроса у всех вариантов одинаковый — меняется только "
+        "способ его визуально показать. Можно выбрать готовый вариант или "
+        "дополнить понравившийся своим уточнением."
+    ]
+    for index, variant in enumerate(variants, start=1):
+        chunks.append(
+            f"\n{index}. {variant.title}\n{variant.description}"
+        )
+    return "\n".join(chunks)
+
+
+def _scene_variant_rows(
+    token: str,
+    variants: tuple[VisualSceneVariant, ...],
+) -> list[list[tuple[str, str]]]:
+    rows: list[list[tuple[str, str]]] = []
+    for index, variant in enumerate(variants, start=1):
+        rows.append(
+            [
+                (f"✅ {index}. {variant.title}", f"cpc:sv:pick:{variant.id}:{token}"),
+                ("✍️ Дополнить своим", f"cpc:sv:add:{variant.id}:{token}"),
+            ]
+        )
+    rows.extend(
+        [
+            [("🤖 Выбрать лучший автоматически", f"cpc:sv:auto:{token}")],
+            [("🎨 К настройкам стиля", f"cpc:st:open:{token}")],
+        ]
+    )
+    return rows
+
+
+def _scene_contract_from_state(data: dict) -> VisualSceneContract:
+    return VisualSceneContract.from_mapping(data.get("creative_scene_contract"))
+
+
+def _scene_variants_from_state(data: dict) -> tuple[VisualSceneVariant, ...]:
+    raw = data.get("creative_scene_variants")
+    if not isinstance(raw, list):
+        raise ValueError("visual scene variants are unavailable")
+    variants = tuple(VisualSceneVariant.from_mapping(item) for item in raw)
+    if len(variants) != 5:
+        raise ValueError("visual scene variants are unavailable")
+    return variants
+
+
+async def _ensure_scene_variants(
+    state: FSMContext,
+    data: dict,
+    *,
+    actor,
+) -> tuple[VisualSceneContract, str, tuple[VisualSceneVariant, ...]]:
+    cached_contract = data.get("creative_scene_contract")
+    cached_variants = data.get("creative_scene_variants")
+    cached_source = str(
+        data.get("creative_scene_planner_source") or ""
+    ).strip().lower()
+    if (
+        isinstance(cached_contract, dict)
+        and isinstance(cached_variants, list)
+        and cached_source in {"ai", "deterministic"}
+    ):
+        contract = _scene_contract_from_state(data)
+        variants = _scene_variants_from_state(data)
+        return contract, cached_source, variants
+
+    request = normalize_business_image_request(str(data["creative_pending_prompt"]))
+    style = _style_intent_from_state(data)
+    flags = semantic_flags_for_request(request)
+
+    if not visual_scene_ai_planning_available():
+        contract, source, variants = deterministic_visual_scene_bundle(
+            request=request,
+            semantic_flags=flags,
+            style_intent=style,
+        )
+        await state.update_data(
+            creative_scene_contract=contract.to_mapping(),
+            creative_scene_planner_source=source,
+            creative_scene_variants=[item.to_mapping() for item in variants],
+        )
+        return contract, source, variants
+
+    receipt, claimed = await asyncio.to_thread(
+        claim_visual_scene_plan,
+        actor=actor,
+        request=request,
+        style_intent=style,
+    )
+
+    if not claimed and receipt.status == VisualScenePlanStatus.READY:
+        contract, source, variants = load_visual_scene_bundle(receipt.result_json)
+    elif not claimed:
+        # Another callback/restart may already have caused a paid provider egress.
+        # Never issue a second automatic text-AI call from an uncertain receipt.
+        contract, source, variants = deterministic_visual_scene_bundle(
+            request=request,
+            semantic_flags=flags,
+            style_intent=style,
+        )
+    else:
+        planning_error_type = ""
+        try:
+            contract, source, variants = await asyncio.to_thread(
+                build_visual_scene_bundle,
+                request=request,
+                semantic_flags=flags,
+                style_intent=style,
+            )
+            frozen_bundle = freeze_visual_scene_bundle(
+                scene_contract=contract,
+                planner_source=source,
+                variants=variants,
+            )
+            await asyncio.to_thread(
+                complete_visual_scene_plan,
+                actor=actor,
+                receipt_id=receipt.id,
+                result_json=frozen_bundle,
+            )
+        except OSError as exc:
+            planning_error_type = type(exc).__name__
+        except RuntimeError as exc:
+            planning_error_type = type(exc).__name__
+        except ValueError as exc:
+            planning_error_type = type(exc).__name__
+
+        if planning_error_type:
+            logger.warning(
+                "Visual scene planning became ambiguous; refusing automatic retry",
+                extra={"error_type": planning_error_type},
+            )
+            try:
+                await asyncio.to_thread(
+                    mark_visual_scene_plan_ambiguous,
+                    actor=actor,
+                    receipt_id=receipt.id,
+                )
+            except LookupError as exc:
+                logger.warning(
+                    "Could not mark visual scene plan ambiguous after planning failure",
+                    extra={"error_type": type(exc).__name__},
+                )
+            except ValueError as exc:
+                logger.warning(
+                    "Could not mark visual scene plan ambiguous after planning failure",
+                    extra={"error_type": type(exc).__name__},
+                )
+            contract, source, variants = deterministic_visual_scene_bundle(
+                request=request,
+                semantic_flags=flags,
+                style_intent=style,
+            )
+
+    await state.update_data(
+        creative_scene_contract=contract.to_mapping(),
+        creative_scene_planner_source=source,
+        creative_scene_variants=[item.to_mapping() for item in variants],
+    )
+    return contract, source, variants
+
+
+def _variant_by_id(
+    variants: tuple[VisualSceneVariant, ...],
+    variant_id: str,
+) -> VisualSceneVariant:
+    for variant in variants:
+        if variant.id == variant_id:
+            return variant
+    raise ValueError("visual scene variant is unavailable")
 
 
 def _receipt_kind(receipt: CreativeGenerationReceipt | None) -> str:
@@ -434,11 +628,18 @@ async def send_creative_studio_menu(
             "У Вас уже подготовлен запрос:\n"
             f"{active.request_text}\n\n"
             + (
-                "Платные AI-вызовы ещё не начинались. Кнопка «Продолжить создание» "
-                "подтверждает генерацию и один отдельный QA-вызов."
+                "Платный AI-вызов ещё не начинался. Текстовый AI-планировщик уже мог "
+                "использоваться при подготовке варианта; медиагенерация ещё не "
+                "начиналась. Кнопка "
+                "«Продолжить создание» подтверждает генерацию картинки и один "
+                "отдельный QA-вызов."
                 if _receipt_kind(active) == "image"
                 and _receipt_semantic_qa_enabled(active)
-                else "Платный AI-вызов ещё не начинался."
+                else (
+                    "Платный AI-вызов ещё не начинался. Текстовый AI-планировщик уже мог "
+                    "использоваться при подготовке варианта; платная "
+                    "медиагенерация ещё не начиналась."
+                )
             )
             + qa_disclosure
             + "\n\nМожно продолжить или изменить описание."
@@ -745,14 +946,12 @@ async def _show_paid_generation_confirmation(
         "✨ Всё готово к генерации\n\n"
         f"Задача: {receipt.request_text}\n\n"
         "ClientPlatform уже развернула короткое описание в подробное визуальное "
-        "задание и зафиксировала выбранный стиль. Генерация может расходовать "
-        "платную AI-квоту. "
-        + (
-            "Платные AI-вызовы начнутся только после кнопки ниже. "
-            if qa_enabled
-            else "Платный вызов начнётся только после кнопки ниже. "
-        )
-        + "Повторный запуск этого же задания использует тот же frozen brief и "
+        "задание и зафиксировала выбранную постановку и стиль. Текстовый AI для "
+        "разбора смысла/вариантов уже мог использоваться на предыдущем шаге; он не "
+        "создавал медиарезультат. Платная генерация картинки/видео начнётся "
+        "только после кнопки ниже. Платный вызов начнётся только после этого "
+        "явного подтверждения. Повторный запуск этого же задания использует тот же "
+        "frozen brief и "
         "idempotency key."
         + (
             "\n\nПосле готовой картинки ClientPlatform может один раз выполнить "
@@ -804,6 +1003,7 @@ async def _prepare_styled_generation(
     *,
     user_id: int,
     token: str,
+    scene_variant: VisualSceneVariant | None = None,
 ) -> None:
     data = await state.get_data()
     if not _style_session_matches(data, token):
@@ -820,6 +1020,16 @@ async def _prepare_styled_generation(
         style = _style_intent_from_state(data)
         actor = await control._actor(int(user_id), business_id)
         actor.assert_can_manage_promotions()
+        scene_contract, planner_source, scene_variants = await _ensure_scene_variants(
+            state,
+            data,
+            actor=actor,
+        )
+        selected_scene_variant = (
+            scene_variant
+            if scene_variant is not None
+            else recommended_scene_variant(scene_variants)
+        )
         freezer = (
             freeze_business_video_payload
             if kind == "video"
@@ -830,6 +1040,9 @@ async def _prepare_styled_generation(
             brand_context=brand_context,
             country_code=country_code,
             style_intent=style,
+            scene_contract=scene_contract,
+            scene_planner_source=planner_source,
+            scene_variant=selected_scene_variant,
         )
         receipt = await asyncio.to_thread(
             prepare_creative_generation,
@@ -943,11 +1156,16 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
     await message.answer(
         "Идею понял. Технический промпт писать не нужно — ClientPlatform сама "
         "разложит запрос на сцену, действия, взаимодействия, видимый результат, "
-        "композицию, свет, детали и ограничения для генератора. Можно сразу отдать "
-        "всё автоматике или при желании уточнить стиль кнопками.",
+        "композицию, свет, детали и ограничения для генератора. Для режима "
+        "Нажатие «AI-авто» или «Сгенерировать 5 AI-вариантов» явно "
+        "разрешает один текстовый AI-вызов: он только планирует постановку и ещё "
+        "не генерирует картинку/видео. Повторное нажатие использует тот же durable "
+        "план и не запускает второй AI-вызов. Саму медиагенерацию ClientPlatform "
+        "запустит только после отдельного подтверждения.",
         reply_markup=control._keyboard(
             [
-                [("🤖 Сделать всё автоматически", f"cpc:st:go:{token}")],
+                [("🤖 AI-авто — подготовить постановку", f"cpc:st:go:{token}")],
+                [("🎬 Сгенерировать 5 AI-вариантов", f"cpc:sv:show:{token}")],
                 [("🎨 Уточнить стиль", f"cpc:st:open:{token}")],
                 [
                     (
@@ -1119,6 +1337,215 @@ async def clear_current_visual_style(callback: CallbackQuery, state: FSMContext)
     await callback.answer("Сохранённый стиль сброшен")
 
 
+async def _show_scene_variant_choices(
+    target: Message,
+    state: FSMContext,
+    *,
+    token: str,
+    user_id: int,
+) -> None:
+    data = await state.get_data()
+    if not _style_session_matches(data, token):
+        await target.answer(
+            "Эта настройка уже устарела. Откройте «Картинки и креативы» ещё раз."
+        )
+        return
+    try:
+        actor = await control._actor(
+            int(user_id),
+            str(data["creative_business_id"]),
+        )
+        actor.assert_can_manage_promotions()
+        _contract, _source, variants = await _ensure_scene_variants(
+            state,
+            data,
+            actor=actor,
+        )
+    except TenantPermissionDenied:
+        await target.answer("Создание визуалов недоступно для Вашей роли.")
+        return
+    except OSError:
+        await target.answer(
+            "Не удалось подготовить варианты постановки. Можно оставить "
+            "«Автоматически» — исходный смысл всё равно останется обязательным."
+        )
+        return
+    except (KeyError, TypeError, ValueError):
+        await target.answer(
+            "Не удалось подготовить варианты постановки. Можно оставить "
+            "«Автоматически» — исходный смысл всё равно останется обязательным."
+        )
+        return
+    await state.set_state(ClientPlatformCreativeStudioState.choosing_style)
+    await _replace_or_answer(
+        target,
+        _scene_variant_text(variants),
+        reply_markup=control._keyboard(_scene_variant_rows(token, variants)),
+    )
+
+
+@router.callback_query(F.data.startswith("cpc:sv:show:"))
+async def show_scene_variants(callback: CallbackQuery, state: FSMContext) -> None:
+    token = str(callback.data).rsplit(":", 1)[-1]
+    data = await state.get_data()
+    if not _style_session_matches(data, token):
+        await callback.answer("Эта настройка уже устарела", show_alert=True)
+        return
+    await callback.answer("Готовлю варианты постановки…")
+    await _show_scene_variant_choices(
+        control._callback_message(callback),
+        state,
+        token=token,
+        user_id=int(callback.from_user.id),
+    )
+
+
+@router.callback_query(F.data.startswith("cpc:sv:auto:"))
+async def auto_scene_variant(callback: CallbackQuery, state: FSMContext) -> None:
+    token = str(callback.data).rsplit(":", 1)[-1]
+    data = await state.get_data()
+    if not _style_session_matches(data, token):
+        await callback.answer("Эта настройка уже устарела", show_alert=True)
+        return
+    try:
+        actor = await control._actor(
+            int(callback.from_user.id),
+            str(data["creative_business_id"]),
+        )
+        actor.assert_can_manage_promotions()
+        _contract, _source, variants = await _ensure_scene_variants(
+            state,
+            data,
+            actor=actor,
+        )
+        selected = recommended_scene_variant(variants)
+    except TenantPermissionDenied:
+        await callback.answer(
+            "Создание визуалов недоступно для Вашей роли",
+            show_alert=True,
+        )
+        return
+    except OSError:
+        await callback.answer("Не удалось выбрать вариант", show_alert=True)
+        return
+    except (KeyError, TypeError, ValueError):
+        await callback.answer("Не удалось выбрать вариант", show_alert=True)
+        return
+    await callback.answer("Выбран лучший вариант")
+    await _prepare_styled_generation(
+        control._callback_message(callback),
+        state,
+        user_id=int(callback.from_user.id),
+        token=token,
+        scene_variant=selected,
+    )
+
+
+@router.callback_query(F.data.startswith("cpc:sv:pick:"))
+async def pick_scene_variant(callback: CallbackQuery, state: FSMContext) -> None:
+    try:
+        _, _, _, variant_id, token = str(callback.data).split(":", 4)
+    except ValueError:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    data = await state.get_data()
+    if not _style_session_matches(data, token):
+        await callback.answer("Эта настройка уже устарела", show_alert=True)
+        return
+    try:
+        selected = _variant_by_id(_scene_variants_from_state(data), variant_id)
+    except (TypeError, ValueError):
+        await callback.answer("Варианты устарели", show_alert=True)
+        return
+    await callback.answer("Вариант выбран")
+    await _prepare_styled_generation(
+        control._callback_message(callback),
+        state,
+        user_id=int(callback.from_user.id),
+        token=token,
+        scene_variant=selected,
+    )
+
+
+@router.callback_query(F.data.startswith("cpc:sv:add:"))
+async def ask_scene_variant_supplement(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    try:
+        _, _, _, variant_id, token = str(callback.data).split(":", 4)
+    except ValueError:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    data = await state.get_data()
+    if not _style_session_matches(data, token):
+        await callback.answer("Эта настройка уже устарела", show_alert=True)
+        return
+    try:
+        variant = _variant_by_id(_scene_variants_from_state(data), variant_id)
+    except (TypeError, ValueError):
+        await callback.answer("Варианты устарели", show_alert=True)
+        return
+    await state.update_data(creative_scene_selected_variant_id=variant.id)
+    await state.set_state(ClientPlatformCreativeStudioState.waiting_scene_supplement)
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "✍️ Дополнить своим\n\n"
+        f"Вы выбрали: {variant.title}.\n"
+        f"{variant.description}\n\n"
+        "Напишите одним сообщением, что хотите добавить к этой постановке — "
+        "например ракурс, освещение, окружение, настроение или важную визуальную "
+        "деталь. Исходный смысл запроса останется обязательным. До 600 символов.",
+        reply_markup=control._keyboard(
+            [[("⬅️ К вариантам", f"cpc:sv:show:{token}")]]
+        ),
+    )
+
+
+@router.message(ClientPlatformCreativeStudioState.waiting_scene_supplement)
+async def receive_scene_variant_supplement(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = str(data.get("creative_business_token") or "").strip()
+    try:
+        variant_id = str(data["creative_scene_selected_variant_id"])
+        variants = list(_scene_variants_from_state(data))
+        base = _variant_by_id(tuple(variants), variant_id)
+        updated = supplement_scene_variant(base, str(message.text or ""))
+    except (KeyError, TypeError, ValueError):
+        await message.answer(
+            "Дополнение не удалось сохранить. Напишите уточнение одним сообщением "
+            "до 600 символов или вернитесь к вариантам.",
+            reply_markup=(
+                control._keyboard([[("⬅️ К вариантам", f"cpc:sv:show:{token}")]])
+                if token
+                else None
+            ),
+        )
+        return
+
+    variants = [updated if item.id == updated.id else item for item in variants]
+    await state.update_data(
+        creative_scene_variants=[item.to_mapping() for item in variants],
+        creative_scene_selected_variant_id=updated.id,
+    )
+    await state.set_state(ClientPlatformCreativeStudioState.choosing_style)
+    await message.answer(
+        "✅ Вариант дополнен\n\n"
+        f"{updated.title}\n{updated.description}\n\n"
+        "Можно использовать его сейчас, дополнить ещё или вернуться к пяти вариантам.",
+        reply_markup=control._keyboard(
+            [
+                [("✅ Использовать этот вариант", f"cpc:sv:pick:{updated.id}:{token}")],
+                [("✍️ Дополнить своим ещё", f"cpc:sv:add:{updated.id}:{token}")],
+                [("🎬 Все 5 вариантов", f"cpc:sv:show:{token}")],
+            ]
+        ),
+    )
+
+
 @router.callback_query(F.data.startswith("cpc:st:go:"))
 async def confirm_visual_style(callback: CallbackQuery, state: FSMContext) -> None:
     token = str(callback.data).rsplit(":", 1)[-1]
@@ -1126,7 +1553,7 @@ async def confirm_visual_style(callback: CallbackQuery, state: FSMContext) -> No
     if not _style_session_matches(data, token):
         await callback.answer("Эта настройка уже устарела", show_alert=True)
         return
-    await callback.answer()
+    await callback.answer("ClientPlatform выбирает лучший вариант…")
     await _prepare_styled_generation(
         control._callback_message(callback),
         state,

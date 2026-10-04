@@ -23,6 +23,7 @@ class CreativeBrief:
     preferred_provider: str = ""
     brand_context: str = ""
     seed: int | None = None
+    scene_contract: dict[str, object] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def normalized(self) -> "CreativeBrief":
@@ -47,6 +48,9 @@ class CreativeBrief:
             reference_url=str(self.reference_url or "").strip(),
             preferred_provider=preferred,
             brand_context=str(self.brand_context or "").strip(),
+            scene_contract=(
+                None if self.scene_contract is None else dict(self.scene_contract)
+            ),
             metadata=dict(self.metadata or {}),
         )
 

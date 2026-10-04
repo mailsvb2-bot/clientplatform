@@ -71,7 +71,8 @@ def test_new_image_consent_discloses_one_extra_non_rendering_qa_call(
     )
 
     message = target.answer.await_args.args[0]
-    assert "Платные AI-вызовы начнутся только после кнопки ниже" in message
+    assert "Текстовый AI для разбора смысла/вариантов уже мог использоваться" in message
+    assert "Платная генерация картинки/видео начнётся только после кнопки ниже" in message
     assert "один раз выполнить отдельную AI-проверку смысла" in message
     assert "не создаёт новую картинку" in message
     assert "не повторяется" in message
@@ -123,7 +124,8 @@ def test_prepared_image_menu_discloses_semantic_qa_before_continue(
     )
 
     body = message.answer.await_args.args[0]
-    assert "Платные AI-вызовы ещё не начинались" in body
+    assert "Текстовый AI-планировщик уже мог использоваться" in body
+    assert "медиагенерация ещё не начиналась" in body
     assert "Кнопка «Продолжить создание» подтверждает генерацию" in body
     assert "один раз выполнит отдельную AI-проверку смысла" in body
     assert "не создаёт новую картинку" in body

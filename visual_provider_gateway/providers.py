@@ -916,6 +916,7 @@ class GigaChatImageProvider:
         image_path: Path,
         owner_request: str,
         semantic_flags: tuple[str, ...],
+        scene_contract: dict[str, object] | None = None,
     ) -> dict[str, object]:
         """Advisory vision review only; this path is forbidden from generating media."""
 
@@ -988,6 +989,21 @@ class GigaChatImageProvider:
             ),
         ]
         flag_set = set(flags)
+        if scene_contract is not None:
+            if not isinstance(scene_contract, dict):
+                raise ValueError("semantic_qa_scene_contract_invalid")
+            required = scene_contract.get("required_evidence")
+            forbidden = scene_contract.get("forbidden")
+            if not isinstance(required, list) or not isinstance(forbidden, list):
+                raise ValueError("semantic_qa_scene_contract_invalid")
+            for item in required[:8]:
+                token = " ".join(str(item or "").split()).strip()
+                if token:
+                    criteria.append("Обязательное визуальное свидетельство: " + token + ".")
+            for item in forbidden[:8]:
+                token = " ".join(str(item or "").split()).strip()
+                if token:
+                    criteria.append("Недопустимо в результате: " + token + ".")
         if flag_set.intersection(
             {
                 "listening",
@@ -1022,10 +1038,25 @@ class GigaChatImageProvider:
                 "логотипов или брендов в пикселях."
             )
 
+        scene_contract_text = (
+            ""
+            if scene_contract is None
+            else (
+                " Канонический scene contract: "
+                + json.dumps(
+                    scene_contract,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "."
+            )
+        )
         prompt = (
             "Ты выполняешь только контроль качества уже готовой картинки. "
             "Ничего не генерируй и не редактируй. Исходный запрос владельца: "
             + json.dumps(request_text, ensure_ascii=False)
+            + scene_contract_text
             + ". Проверь картинку по критериям: "
             + " ".join(criteria)
             + " Ответь только JSON-объектом без markdown: "

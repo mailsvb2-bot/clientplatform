@@ -11,6 +11,7 @@ same request into the same provider prompt and never require a second LLM call.
 from dataclasses import dataclass
 import re
 
+from clientplatform.domain.visual_scene_contract import VisualSceneContract
 from clientplatform.domain.visual_style_intent import (
     VisualStyleIntent,
     resolve_visual_style_intent,
@@ -142,9 +143,11 @@ class CompiledVisualPrompt:
     negative_prompt: str
     semantic_flags: tuple[str, ...]
     style_intent: VisualStyleIntent
+    scene_contract: VisualSceneContract | None = None
 
 
-_SEMANTIC_QA_CONTRACT_VERSION = 1
+_SEMANTIC_QA_CONTRACT_VERSION = 2
+_SUPPORTED_SEMANTIC_QA_CONTRACT_VERSIONS = frozenset({1, 2})
 _SEMANTIC_QA_FLAGS = frozenset(
     {
         "transformation",
@@ -167,34 +170,45 @@ _SEMANTIC_QA_FLAGS = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class VisualSemanticQAContract:
-    """Immutable meaning contract for advisory post-generation image review."""
+    """Immutable meaning contract for post-generation image review."""
 
     version: int
     kind: str
     country_code: str
     owner_request: str
     semantic_flags: tuple[str, ...]
+    scene_contract: VisualSceneContract | None = None
 
     def to_mapping(self) -> dict[str, object]:
-        return {
+        value: dict[str, object] = {
             "version": self.version,
             "kind": self.kind,
             "country_code": self.country_code,
             "owner_request": self.owner_request,
             "semantic_flags": list(self.semantic_flags),
         }
+        if self.version >= 2:
+            value["scene_contract"] = (
+                None if self.scene_contract is None else self.scene_contract.to_mapping()
+            )
+        return value
 
     @classmethod
     def from_mapping(cls, value: object) -> "VisualSemanticQAContract":
-        if not isinstance(value, dict) or set(value) != {
+        if not isinstance(value, dict):
+            raise ValueError("visual semantic QA contract is invalid")
+        version = value.get("version")
+        expected = {
             "version",
             "kind",
             "country_code",
             "owner_request",
             "semantic_flags",
-        }:
+        }
+        if version == 2:
+            expected.add("scene_contract")
+        if version not in _SUPPORTED_SEMANTIC_QA_CONTRACT_VERSIONS or set(value) != expected:
             raise ValueError("visual semantic QA contract is invalid")
-        version = value.get("version")
         kind = str(value.get("kind") or "").strip().lower()
         country_code = str(value.get("country_code") or "").strip().upper()
         if (
@@ -209,8 +223,7 @@ class VisualSemanticQAContract:
         )
         raw_flags = value.get("semantic_flags")
         if (
-            version != _SEMANTIC_QA_CONTRACT_VERSION
-            or kind != "image"
+            kind != "image"
             or not isinstance(raw_flags, list)
             or len(raw_flags) > len(_SEMANTIC_QA_FLAGS)
         ):
@@ -221,12 +234,16 @@ class VisualSemanticQAContract:
             or any(not item or item not in _SEMANTIC_QA_FLAGS for item in flags)
         ):
             raise ValueError("visual semantic QA contract is invalid")
+        scene_contract = None
+        if version == 2 and value.get("scene_contract") is not None:
+            scene_contract = VisualSceneContract.from_mapping(value["scene_contract"])
         return cls(
-            version=_SEMANTIC_QA_CONTRACT_VERSION,
+            version=int(version),
             kind="image",
             country_code=country_code,
             owner_request=owner_request,
             semantic_flags=flags,
+            scene_contract=scene_contract,
         )
 
 
@@ -286,6 +303,7 @@ def build_visual_semantic_qa_contract(
     request: str,
     kind: str,
     country_code: str = "",
+    scene_contract: VisualSceneContract | None = None,
 ) -> VisualSemanticQAContract | None:
     """Freeze the same semantic flags used by the prompt compiler for image QA.
 
@@ -305,12 +323,54 @@ def build_visual_semantic_qa_contract(
         limit=_MAX_REQUEST_CHARS,
     )
     return VisualSemanticQAContract(
-        version=_SEMANTIC_QA_CONTRACT_VERSION,
+        version=(2 if scene_contract is not None else 1),
         kind="image",
         country_code=str(country_code or "").strip().upper(),
         owner_request=owner_request,
         semantic_flags=_semantic_flags(owner_request),
+        scene_contract=scene_contract,
     )
+
+
+def semantic_flags_for_request(request: str) -> tuple[str, ...]:
+    owner_request = _clean(request, field="request", limit=_MAX_REQUEST_CHARS)
+    return _semantic_flags(owner_request)
+
+
+def _scene_contract_directives(
+    scene_contract: VisualSceneContract | None,
+) -> list[str]:
+    if scene_contract is None:
+        return []
+    fields: list[str] = [
+        f"topology={scene_contract.topology}",
+        f"primary subject={scene_contract.primary_subject}",
+    ]
+    if scene_contract.initial_state:
+        fields.append("opening state=" + " | ".join(scene_contract.initial_state))
+    if scene_contract.actions:
+        fields.append("actions=" + " | ".join(scene_contract.actions))
+    if scene_contract.cause:
+        fields.append("cause=" + scene_contract.cause)
+    if scene_contract.transition:
+        fields.append("transition=" + " | ".join(scene_contract.transition))
+    if scene_contract.final_state:
+        fields.append("final state=" + " | ".join(scene_contract.final_state))
+    directives = [
+        "Canonical scene contract; field names are instructions only and must never "
+        "appear as visible text: " + "; ".join(fields) + "."
+    ]
+    if scene_contract.required_evidence:
+        directives.append(
+            "Required visual evidence: "
+            + "; ".join(scene_contract.required_evidence)
+            + "."
+        )
+    if scene_contract.forbidden:
+        directives.append(
+            "Scene-contract exclusions: " + "; ".join(scene_contract.forbidden) + "."
+        )
+    return directives
 
 
 def _interaction_directives(flags: tuple[str, ...]) -> list[str]:
@@ -583,6 +643,8 @@ def compile_visual_prompt(
     brand_context: str = "",
     purpose: str = "owner_visual",
     style_intent: VisualStyleIntent | None = None,
+    scene_contract: VisualSceneContract | None = None,
+    scene_direction: str = "",
 ) -> CompiledVisualPrompt:
     owner_request = _clean(
         request,
@@ -606,6 +668,15 @@ def compile_visual_prompt(
         raise ValueError("visual purpose is invalid")
 
     flags = _semantic_flags(owner_request)
+    selected_scene_direction = (
+        _clean(
+            scene_direction,
+            field="scene_direction",
+            limit=1400,
+        )
+        if str(scene_direction or "").strip()
+        else ""
+    )
     resolved_style = resolve_visual_style_intent(
         request=owner_request,
         selected=style_intent,
@@ -631,6 +702,16 @@ def compile_visual_prompt(
         medium,
         purpose_line,
         f'Owner request, preserve its meaning exactly: "{owner_request}"',
+        *_scene_contract_directives(scene_contract),
+        *(
+            [
+                "Selected presentation direction (secondary to the canonical semantic "
+                "contract; never remove or contradict required meaning): "
+                + selected_scene_direction
+            ]
+            if selected_scene_direction
+            else []
+        ),
         "Interpret the request as a scene contract, not as a bag of keywords. Every "
         "explicit subject, action, relationship, state and state change is mandatory "
         "unless it is impossible to depict visually.",
@@ -776,6 +857,7 @@ def compile_visual_prompt(
         negative_prompt=negative_prompt,
         semantic_flags=flags,
         style_intent=resolved_style,
+        scene_contract=scene_contract,
     )
 
 
@@ -784,4 +866,5 @@ __all__ = [
     "VisualSemanticQAContract",
     "build_visual_semantic_qa_contract",
     "compile_visual_prompt",
+    "semantic_flags_for_request",
 ]

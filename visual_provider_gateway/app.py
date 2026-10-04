@@ -20,13 +20,31 @@ class GatewayPrincipal:
     client_id: str
 
 
+class SceneContractRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: int = Field(ge=1, le=2)
+    topology: str = Field(
+        pattern="^(static|action|transformation|sequence|comparison|replacement)$"
+    )
+    primary_subject: str = Field(default="", max_length=160)
+    initial_state: list[str] = Field(default_factory=list, max_length=8)
+    actions: list[str] = Field(default_factory=list, max_length=8)
+    cause: str = Field(default="", max_length=240)
+    transition: list[str] = Field(default_factory=list, max_length=8)
+    final_state: list[str] = Field(default_factory=list, max_length=8)
+    explicit_text: list[str] = Field(default_factory=list, max_length=8)
+    required_evidence: list[str] = Field(default_factory=list, max_length=8)
+    forbidden: list[str] = Field(default_factory=list, max_length=8)
+
+
 class SemanticQAContractRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    version: int = Field(ge=1, le=1)
+    version: int = Field(ge=1, le=2)
     kind: str = Field(pattern="^image$")
     country_code: str = Field(default="", max_length=16, pattern=r"^[A-Za-z0-9_-]*$")
     owner_request: str = Field(min_length=1, max_length=1500)
     semantic_flags: list[str] = Field(default_factory=list, max_length=16)
+    scene_contract: SceneContractRequest | None = None
 
 
 class SemanticQARequest(BaseModel):
@@ -52,6 +70,7 @@ class GenerateRequest(BaseModel):
     brand_context: str = Field(default="", max_length=4000)
     wait_seconds: int = Field(default=0, ge=0, le=60)
     seed: int | None = Field(default=None, ge=0, le=4294967295)
+    scene_contract: SceneContractRequest | None = None
     scope_id: str = Field(default="global", min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:@/-]+$")
     idempotency_key: str = Field(min_length=8, max_length=200, pattern=r"^[A-Za-z0-9_.:@/-]+$")
 
