@@ -501,3 +501,30 @@ def test_preview_render_disables_registration_submission() -> None:
     assert "<form" not in body
     assert "disabled>Зарегистрироваться" in body
     assert f"/e/{event.public_slug}/register" not in body
+
+
+def test_corrupt_optional_published_landing_falls_back_without_breaking_registration() -> None:
+    conn = _conn()
+    actor = _owner(conn, 1201, "Практика")
+    event = _published_event(conn, actor)
+    repository = EventLandingRepository(conn)
+    repository.save_draft(
+        actor=actor,
+        event_id=event.id,
+        content=_landing(),
+        source="owner",
+        now="2026-10-05T10:00:00+00:00",
+    )
+    repository.publish(
+        actor=actor,
+        event_id=event.id,
+        expected_revision=1,
+        now="2026-10-05T10:01:00+00:00",
+    )
+    conn.execute(
+        "UPDATE clientplatform_event_landing_profiles SET published_json=? "
+        "WHERE business_id=? AND event_id=?",
+        ("{broken-json", actor.business_id, event.id),
+    )
+    assert get_published_event_landing(conn, public_slug=event.public_slug) is None
+    conn.close()
