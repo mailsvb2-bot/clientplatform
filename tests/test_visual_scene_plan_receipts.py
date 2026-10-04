@@ -7,6 +7,7 @@ from clientplatform.application.visual_scene_plan_receipts import visual_scene_p
 from clientplatform.domain.visual_scene_plan import VisualScenePlanStatus
 from clientplatform.domain.visual_style_intent import VisualStyleIntent
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
+from clientplatform.privacy_manifest import TENANT_POLICIES, validate_clientplatform_privacy_manifest
 from clientplatform.infrastructure.visual_scene_plan_receipt_repository import (
     VisualScenePlanReceiptRepository,
 )
@@ -86,6 +87,15 @@ class VisualScenePlanReceiptRepositoryTests(unittest.TestCase):
         self.assertFalse(repeated_created)
         self.assertEqual(repeated.id, receipt.id)
         self.assertEqual(repeated.status, VisualScenePlanStatus.AMBIGUOUS)
+
+    def test_scene_plan_table_is_registered_as_erasable_tenant_data(self) -> None:
+        report = validate_clientplatform_privacy_manifest(self.conn, strict=True)
+        self.assertTrue(report.ok)
+        self.assertIn("visual_scene_plan_receipts", TENANT_POLICIES)
+        self.assertEqual(
+            TENANT_POLICIES["visual_scene_plan_receipts"].disposition,
+            "erase",
+        )
 
     def test_plan_key_changes_when_style_changes_but_is_stable_for_same_input(self) -> None:
         first, request, style_json = visual_scene_plan_key(
