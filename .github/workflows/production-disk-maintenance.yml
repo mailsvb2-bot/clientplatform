@@ -107,11 +107,13 @@ jobs:
               | sed 's#/.git$##' | LC_ALL=C sort || true
             echo "--- git worktree details ---"
             worktree_audit_errors=0
+            # Discovered worktrees may be owned by another account. Never allow
+            # repository-controlled fsmonitor/hooks to execute under privileged audit.
             while IFS= read -r dotgit; do
               repo_path="${dotgit%/.git}"
-              origin="$(privileged git -c safe.directory="$repo_path" -C "$repo_path" remote get-url origin 2>/dev/null || true)"
-              branch="$(privileged git -c safe.directory="$repo_path" -C "$repo_path" branch --show-current 2>/dev/null || true)"
-              if status="$(privileged git -c safe.directory="$repo_path" -C "$repo_path" status --porcelain 2>/dev/null)"; then
+              origin="$(privileged env GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$repo_path" -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path" remote get-url origin 2>/dev/null || true)"
+              branch="$(privileged env GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$repo_path" -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path" branch --show-current 2>/dev/null || true)"
+              if status="$(privileged env GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$repo_path" -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path" status --porcelain 2>/dev/null)"; then
                 dirty="$(printf '%s\\n' "$status" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
                 audit="ok"
               else
@@ -157,11 +159,13 @@ jobs:
             | sed 's#/.git$##' | LC_ALL=C sort || true
           echo "--- git worktree details ---"
           worktree_audit_errors=0
+          # Keep the post-cleanup audit read-only even for foreign repositories.
+          # Command-line config overrides repository-local execution hooks.
           while IFS= read -r dotgit; do
             repo_path="${dotgit%/.git}"
-            origin="$(git -c safe.directory="$repo_path" -C "$repo_path" remote get-url origin 2>/dev/null || true)"
-            branch="$(git -c safe.directory="$repo_path" -C "$repo_path" branch --show-current 2>/dev/null || true)"
-            if status="$(git -c safe.directory="$repo_path" -C "$repo_path" status --porcelain 2>/dev/null)"; then
+            origin="$(env GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$repo_path" -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path" remote get-url origin 2>/dev/null || true)"
+            branch="$(env GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$repo_path" -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path" branch --show-current 2>/dev/null || true)"
+            if status="$(env GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$repo_path" -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "$repo_path" status --porcelain 2>/dev/null)"; then
               dirty="$(printf '%s\\n' "$status" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
               audit="ok"
             else
