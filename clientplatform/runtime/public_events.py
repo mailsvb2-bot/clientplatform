@@ -19,6 +19,10 @@ from clientplatform.application.event_public_surface import (
     SECURITY_HEADERS,
     render_event_landing_body,
 )
+from clientplatform.application.event_landing_builder import (
+    get_public_event_landing,
+    get_public_event_landing_preview,
+)
 from clientplatform.application.event_registration_channels import (
     issue_event_registration_channel_links_in_transaction,
 )
@@ -47,27 +51,62 @@ EVENT_REGISTRATION_MAX_BODY_BYTES = 32 * 1024
 
 
 
-def _page(title: str, body: str, *, status: int = 200) -> web.Response:
+def _page(
+    title: str,
+    body: str,
+    *,
+    status: int = 200,
+    extra_headers: dict[str, str] | None = None,
+) -> web.Response:
     html = (
         "<!doctype html><html lang=ru><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
         f"<title>{escape(title)}</title>"
-        "<style>body{font-family:system-ui,sans-serif;max-width:760px;margin:40px auto;"
-        "padding:0 18px;line-height:1.5}.card{border:1px solid #ddd;border-radius:18px;"
-        "padding:28px}input,button{width:100%;box-sizing:border-box;padding:13px;"
-        "margin:7px 0;font-size:16px}button{font-weight:700;cursor:pointer}"
-        ".channel-link{display:block;padding:12px 14px;margin:8px 0;border:1px solid #ccc;"
-        "border-radius:12px;text-decoration:none;color:inherit;font-weight:700}.hp{position:absolute;"
-        "left:-10000px}</style></head><body><main class=card>"
+        "<style>"
+        "*{box-sizing:border-box}html{scroll-behavior:smooth}"
+        "body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"
+        "margin:0;background:#f6f7fb;color:#172033;line-height:1.55}"
+        ".card{max-width:1040px;margin:0 auto;padding:32px 20px 64px}"
+        "input,button{width:100%;box-sizing:border-box;padding:13px 14px;margin:7px 0;font-size:16px;"
+        "border-radius:12px;border:1px solid #ccd2df;background:white;color:inherit}"
+        "button{font-weight:750;cursor:pointer;background:#1f55e5;color:white;border-color:#1f55e5}"
+        "fieldset{border:0;padding:0;margin:0 0 16px}legend{font-size:20px;font-weight:800;margin-bottom:10px}"
+        "label{display:block;margin-top:8px}.channel-link{display:block;padding:12px 14px;margin:8px 0;"
+        "border:1px solid #ccd2df;border-radius:12px;text-decoration:none;color:inherit;font-weight:700}"
+        ".hp{position:absolute;left:-10000px}.landing{--accent:#315bea;--accent2:#7b61ff;--surface:#fff;"
+        "--soft:#edf2ff;--ink:#15213a}.landing--bold{--accent:#c63d12;--accent2:#ff8a00;--soft:#fff0e7}"
+        ".landing--minimal{--accent:#202532;--accent2:#697386;--soft:#f1f2f4}"
+        ".landing-hero{padding:56px clamp(22px,5vw,64px);border-radius:28px;background:linear-gradient(135deg,var(--soft),#fff);"
+        "border:1px solid #e2e6ef;box-shadow:0 18px 50px rgba(30,45,80,.08);margin-bottom:22px}"
+        ".landing-eyebrow{text-transform:uppercase;letter-spacing:.08em;font-size:13px;font-weight:850;color:var(--accent)}"
+        ".landing h1{font-size:clamp(36px,6vw,64px);line-height:1.02;letter-spacing:-.035em;margin:14px 0 18px;max-width:900px}"
+        ".landing-lead{font-size:clamp(18px,2.5vw,24px);max-width:780px;color:#46516a}"
+        ".landing-date{font-size:18px;margin:24px 0}.landing-cta{display:inline-block;padding:14px 22px;border-radius:14px;"
+        "background:linear-gradient(135deg,var(--accent),var(--accent2));color:white;text-decoration:none;font-weight:850}"
+        ".landing-section{background:var(--surface);border:1px solid #e2e6ef;border-radius:22px;padding:28px;"
+        "margin:18px 0;box-shadow:0 8px 30px rgba(30,45,80,.04)}"
+        ".landing-section h2{font-size:clamp(25px,3vw,34px);line-height:1.15;margin:0 0 18px}"
+        ".landing-points{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:0;list-style:none}"
+        ".landing-points li{padding:16px;border-radius:15px;background:var(--soft);font-weight:650}"
+        ".landing-faq details{border-top:1px solid #e5e8ef;padding:14px 0}.landing-faq summary{cursor:pointer;font-weight:800}"
+        ".landing-registration{background:#fff;border:1px solid #dfe4ee;border-radius:24px;padding:28px;margin-top:18px;"
+        "box-shadow:0 16px 45px rgba(30,45,80,.08)}.landing-final-cta{text-align:center}"
+        ".preview-banner{padding:12px 16px;border-radius:14px;background:#fff7d6;border:1px solid #ead47b;margin-bottom:16px;font-weight:750}"
+        "@media(max-width:680px){.card{padding:16px 12px 40px}.landing-hero{padding:34px 20px;border-radius:20px}"
+        ".landing-section,.landing-registration{padding:20px;border-radius:18px}.landing-points{grid-template-columns:1fr}}"
+        "</style></head><body><main class=card>"
         + body
         + "</main></body></html>"
     )
+    headers = dict(SECURITY_HEADERS)
+    if extra_headers:
+        headers.update(extra_headers)
     return web.Response(
         status=status,
         text=html,
         content_type="text/html",
         charset="utf-8",
-        headers=SECURITY_HEADERS,
+        headers=headers,
     )
 
 
@@ -77,15 +116,25 @@ def _landing(
     source: str = "",
     campaign_ref: str = "",
     advertiser_label: str | None = None,
+    landing=None,
+    preview: bool = False,
 ) -> web.Response:
+    body = render_event_landing_body(
+        event,
+        source=source,
+        campaign_ref=campaign_ref,
+        advertiser_label=advertiser_label,
+        landing=landing,
+    )
+    if preview:
+        body = (
+            "<div class=preview-banner>Предпросмотр черновика. Эта версия ещё не опубликована.</div>"
+            + body
+        )
     return _page(
         event.title,
-        render_event_landing_body(
-            event,
-            source=source,
-            campaign_ref=campaign_ref,
-            advertiser_label=advertiser_label,
-        ),
+        body,
+        extra_headers={"X-Robots-Tag": "noindex, nofollow"} if preview else None,
     )
 
 
@@ -230,12 +279,44 @@ async def public_event_landing(request: web.Request) -> web.Response:
         return _page("Не найдено", "<h1>Мероприятие не найдено</h1>", status=404)
     source = str(request.query.get("source") or "").strip()[:160]
     campaign_ref = str(request.query.get("campaign_ref") or "").strip()[:240]
-    advertiser_label = await asyncio.to_thread(_public_advertiser_label, slug)
+    advertiser_label, landing = await asyncio.gather(
+        asyncio.to_thread(_public_advertiser_label, slug),
+        asyncio.to_thread(get_public_event_landing, public_slug=slug),
+    )
     return _landing(
         event,
         source=source,
         campaign_ref=campaign_ref,
         advertiser_label=advertiser_label,
+        landing=landing,
+    )
+
+
+async def public_event_landing_preview(request: web.Request) -> web.Response:
+    slug = str(request.match_info.get("slug") or "").strip()
+    token = str(request.match_info.get("token") or "").strip()
+    try:
+        event = await asyncio.to_thread(get_public_event, public_slug=slug)
+    except EventNotFound:
+        return _page("Не найдено", "<h1>Мероприятие не найдено</h1>", status=404)
+    landing = await asyncio.to_thread(
+        get_public_event_landing_preview,
+        public_slug=slug,
+        token=token,
+    )
+    if landing is None:
+        return _page(
+            "Предпросмотр недоступен",
+            "<h1>Ссылка предпросмотра устарела</h1>",
+            status=404,
+            extra_headers={"X-Robots-Tag": "noindex, nofollow"},
+        )
+    advertiser_label = await asyncio.to_thread(_public_advertiser_label, slug)
+    return _landing(
+        event,
+        advertiser_label=advertiser_label,
+        landing=landing,
+        preview=True,
     )
 
 
@@ -705,6 +786,7 @@ async def public_event_offer(request: web.Request) -> web.Response:
 
 def register_public_event_routes(app: web.Application) -> None:
     app.router.add_get("/e/{slug}", public_event_landing)
+    app.router.add_get("/e/{slug}/preview/{token}", public_event_landing_preview)
     app.router.add_post("/e/{slug}/register", public_event_register)
     app.router.add_get("/e/manage/{token}", public_event_manage)
     app.router.add_post("/e/manage/{token}/cancel", public_event_cancel_registration)
@@ -727,6 +809,7 @@ __all__ = [
     "public_event_join",
     "public_event_manage",
     "public_event_landing",
+    "public_event_landing_preview",
     "public_event_marketing_unsubscribe",
     "public_event_marketing_unsubscribe_confirm",
     "public_event_offer",
