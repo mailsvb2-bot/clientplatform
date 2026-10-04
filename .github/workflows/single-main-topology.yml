@@ -21,6 +21,11 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     steps:
+      - name: Checkout for SHA-leased ref deletion
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
       - name: Delete non-main branches and verify
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
@@ -138,11 +143,19 @@ jobs:
                     `Deleting exact-SHA audited stale branch: ${branch.name} at ${branch.commit.sha}`,
                   );
                 }
-                await github.rest.git.deleteRef({
-                  owner,
-                  repo,
-                  ref: `heads/${branch.name}`,
-                });
+                const leasedRef = `refs/heads/${branch.name}`;
+                const lease = `--force-with-lease=${leasedRef}:${branch.commit.sha}`;
+                const deletion = await exec.exec(
+                  'git',
+                  ['push', lease, 'origin', `:${leasedRef}`],
+                  { ignoreReturnCode: true },
+                );
+                if (deletion !== 0) {
+                  preserved.push(`${branch.name}:lease-delete-failed`);
+                  core.warning(
+                    `Preserving non-main branch because SHA-leased deletion failed: ${branch.name}`,
+                  );
+                }
               }
 
               let names = [];
