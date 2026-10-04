@@ -233,6 +233,151 @@ def _event_item(snapshot: object, event_id: str):
     raise ValueError("вебинар не найден")
 
 
+def _landing_theme_label(theme: EventLandingTheme) -> str:
+    return {
+        EventLandingTheme.CALM: "спокойный",
+        EventLandingTheme.BOLD: "яркий",
+        EventLandingTheme.MINIMAL: "минималистичный",
+    }[theme]
+
+
+def _landing_source_label(source: str) -> str:
+    return {
+        "template": "автоверсия",
+        "ai": "AI-черновик",
+        "owner": "Ваши правки",
+    }.get(str(source or ""), "черновик")
+
+
+def _landing_editor_text(item: object, profile: object) -> str:
+    draft = profile.draft
+    if profile.is_published and profile.has_unpublished_changes:
+        status = "🟡 Опубликована предыдущая версия; в черновике есть изменения."
+    elif profile.is_published:
+        status = "🟢 Опубликован продающий лендинг."
+    else:
+        status = "⚪️ Публично работает простой лендинг; продающая версия пока в черновике."
+    subtitle = draft.hero_subtitle[:320] + ("…" if len(draft.hero_subtitle) > 320 else "")
+    return (
+        f"🌐 Лендинг вебинара\n\n{item.title}\n\n"
+        f"{status}\n"
+        f"Черновик: {_landing_source_label(profile.draft_source)}, ревизия {profile.revision}\n"
+        f"Стиль: {_landing_theme_label(draft.theme)}\n\n"
+        f"Заголовок: {draft.hero_title}\n"
+        + (f"{subtitle}\n" if subtitle else "")
+        + f"\nДля кого: {len(draft.audience_points)} пункт. · "
+        f"Польза: {len(draft.outcome_points)} · "
+        f"Программа: {len(draft.agenda_points)} · FAQ: {len(draft.faq)}\n\n"
+        "AI и ручные правки меняют только черновик. Публичная страница изменится "
+        "только после отдельной кнопки «🚀 Опубликовать»."
+    )
+
+
+def _landing_editor_rows(*, event_id: str, business_id: str, published: bool):
+    event_token = control._uuid_token(event_id)
+    business_token = control._uuid_token(business_id)
+    rows = [
+        [("✨ Создать AI-версию", f"cpev:lai:{event_token}:{business_token}")],
+        [("✏️ Заголовок и оффер", f"cpev:led:hero:{event_token}:{business_token}")],
+        [
+            ("👥 Для кого", f"cpev:led:audience:{event_token}:{business_token}"),
+            ("🎯 Польза", f"cpev:led:outcomes:{event_token}:{business_token}"),
+        ],
+        [("🗓 Программа", f"cpev:led:agenda:{event_token}:{business_token}")],
+        [
+            ("👤 Организатор", f"cpev:led:speaker:{event_token}:{business_token}"),
+            ("❓ FAQ", f"cpev:led:faq:{event_token}:{business_token}"),
+        ],
+        [("📣 Призыв", f"cpev:led:cta:{event_token}:{business_token}")],
+        [
+            ("🌿 Спокойный", f"cpev:ltheme:calm:{event_token}:{business_token}"),
+            ("🔥 Яркий", f"cpev:ltheme:bold:{event_token}:{business_token}"),
+            ("◻️ Минимал", f"cpev:ltheme:minimal:{event_token}:{business_token}"),
+        ],
+        [("♻️ Вернуть автоверсию", f"cpev:lreset:{event_token}:{business_token}")],
+        [("👁 Предпросмотр", f"cpev:lpreview:{event_token}:{business_token}")],
+        [("🚀 Опубликовать", f"cpev:lpublish:{event_token}:{business_token}")],
+    ]
+    if published:
+        rows.append(
+            [("↩️ Вернуть простой лендинг", f"cpev:lsimple:{event_token}:{business_token}")]
+        )
+    rows.append([(BACK_TO_EVENTS_LABEL, f"cpev:home:{business_token}")])
+    return rows
+
+
+async def _send_event_landing_editor(
+    target,
+    *,
+    user_id: int,
+    business_id: str,
+    event_id: str,
+) -> None:
+    actor = await control._actor(user_id, business_id)
+    actor.assert_can_manage_business()
+    snapshot = await asyncio.to_thread(
+        resolve_cockpit_events,
+        telegram_user_id=user_id,
+        requested_business_id=business_id,
+        limit=30,
+    )
+    item = _event_item(snapshot, event_id)
+    profile = await asyncio.to_thread(
+        ensure_event_landing_draft,
+        actor=actor,
+        event_id=event_id,
+    )
+    await target.answer(
+        _landing_editor_text(item, profile),
+        reply_markup=control._keyboard(
+            _landing_editor_rows(
+                event_id=event_id,
+                business_id=business_id,
+                published=profile.is_published,
+            )
+        ),
+    )
+
+
+def _landing_edit_prompt(section: str) -> str:
+    prompts = {
+        "hero": (
+            "✏️ Заголовок и оффер\n\n"
+            "Первая строка — главный заголовок. Следующие строки — подзаголовок.\n"
+            "Не добавляйте обещаний или фактов, которых нет в бизнесе/вебинаре.\n\n"
+            "Для выхода: Отмена"
+        ),
+        "audience": (
+            "👥 Для кого\n\nОтправьте каждый пункт с новой строки. До 6 пунктов.\n\n"
+            "Для выхода: Отмена"
+        ),
+        "outcomes": (
+            "🎯 Что будет полезного\n\nОтправьте каждый результат с новой строки. "
+            "Формулируйте без гарантий результата. До 6 пунктов.\n\nДля выхода: Отмена"
+        ),
+        "agenda": (
+            "🗓 Программа\n\nОтправьте каждый пункт с новой строки. До 6 пунктов.\n\n"
+            "Для выхода: Отмена"
+        ),
+        "speaker": (
+            "👤 Организатор\n\nОтправьте короткое описание организатора. "
+            "Только подтверждённые факты.\n\nДля выхода: Отмена"
+        ),
+        "faq": (
+            "❓ FAQ\n\nКаждая строка: Вопрос | Ответ\nДо 6 строк.\n\n"
+            "Для выхода: Отмена"
+        ),
+        "cta": (
+            "📣 Призыв к регистрации\n\nПервая строка — заголовок кнопочного блока. "
+            "Следующие строки — пояснение.\n\nДля выхода: Отмена"
+        ),
+    }
+    try:
+        return prompts[section]
+    except KeyError as exc:
+        raise ValueError("неизвестный блок лендинга") from exc
+
+
 def _visual_action_label(mode: EventContentMode) -> str:
     return (
         "🎬 Подготовить видео"
