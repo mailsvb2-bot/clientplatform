@@ -128,6 +128,22 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
         self.assertGreaterEqual(text.count('stat -c \'%u\' "$dotgit"'), 2)
         self.assertGreaterEqual(text.count('sudo -n -u "#$owner_uid" -- env'), 2)
         self.assertGreaterEqual(text.count("reason=owner_unknown"), 2)
+        self.assertGreaterEqual(text.count("WORKTREE_DISCOVERY_ERROR"), 2)
+        self.assertIn("phase=pre_cleanup", text)
+        self.assertIn("phase=post_cleanup", text)
+        self.assertGreaterEqual(
+            text.count('worktree_list="$(mktemp /tmp/clientplatform-worktrees.XXXXXX)"'),
+            2,
+        )
+        self.assertIn('done < "$worktree_list"', text)
+        self.assertNotIn(
+            'done < <(privileged find /root /home /opt /srv /tmp',
+            text,
+        )
+        self.assertNotIn(
+            'done < <(find /root /home /opt /srv /tmp',
+            text,
+        )
         self.assertNotIn(
             'privileged env GIT_OPTIONAL_LOCKS=0 git',
             text,
