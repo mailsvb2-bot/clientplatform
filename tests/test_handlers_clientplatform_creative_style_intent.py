@@ -127,7 +127,7 @@ def test_short_prompt_enters_optional_style_step_before_any_paid_preparation(
         for button in row
     ]
     assert "🤖 AI-авто — подготовить постановку" in labels
-    assert "🎬 Показать 5 вариантов" in labels
+    assert "🎬 Сгенерировать 5 AI-вариантов" in labels
     assert "один текстовый AI-вызов" in text
 
 
@@ -233,12 +233,12 @@ def test_style_rows_show_checkmark_for_current_choice_and_compact_finish_action(
     dashboard = studio.style_dashboard_rows("business-token", style)
     dashboard_labels = [label for row in dashboard for label, _callback in row]
     assert "✅ 🤗 Тёпло и дружелюбно" in dashboard_labels
-    assert "✅ Готово — ClientPlatform выберет лучший" in dashboard_labels
+    assert "✅ AI-авто — выбрать лучший" in dashboard_labels
 
     mood_rows = studio.style_dimension_rows("business-token", "m", style)
     mood_labels = [label for row in mood_rows for label, _callback in row]
     assert "✅ 😊 Доброжелательная" in mood_labels
-    assert "✅ Готово — ClientPlatform выберет лучший" in mood_labels
+    assert "✅ AI-авто — выбрать лучший" in mood_labels
     assert "⬅️ Все настройки" in mood_labels
 
 
