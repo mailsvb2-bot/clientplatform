@@ -294,6 +294,14 @@ def _yandex_responses_instructions() -> str:
     )
 
 
+def _yandex_folder_for_model(config: ProviderConfig, model_uri: str) -> str:
+    configured = str(config.folder_id or "").strip()
+    if configured:
+        return configured
+    match = re.match(r"^art://([^/]+)/", str(model_uri or "").strip())
+    return str(match.group(1)).strip() if match else ""
+
+
 def _definitive_model_rejection(exc: BaseException) -> bool:
     if not isinstance(exc, ProviderTransportError):
         return False
@@ -432,11 +440,13 @@ class YandexArtProvider:
         authorization: str,
         model_uri: str,
     ) -> CreativeJob:
+        folder_id = _yandex_folder_for_model(self.config, model_uri)
+        if not folder_id:
+            raise ProviderTransportError("provider_not_configured")
+
         orchestrator = str(self.config.model_orchestrator or "").strip()
         if not orchestrator:
-            if not self.config.folder_id:
-                raise ProviderTransportError("provider_not_configured")
-            orchestrator = f"gpt://{self.config.folder_id}/aliceai-llm"
+            orchestrator = f"gpt://{folder_id}/aliceai-llm"
 
         natural_input = str(
             (brief.metadata or {}).get("yandex_responses_input") or brief.prompt
@@ -455,10 +465,11 @@ class YandexArtProvider:
             self.config.base_url.rstrip("/") + "/v1/responses",
             headers={
                 "Authorization": authorization,
-                "OpenAI-Project": self.config.folder_id,
+                "OpenAI-Project": folder_id,
             },
             payload={
                 "model": orchestrator,
+                "store": False,
                 "instructions": _yandex_responses_instructions(),
                 "input": natural_input,
                 "tools": [
@@ -611,11 +622,21 @@ class YandexArtProvider:
                     # Image Generation Tool. Operators can explicitly select the
                     # direct Images API for controlled rollback/recovery.
                     if _yandex_art_pipeline() == "responses":
-                        return self._submit_responses_image_tool(
-                            brief,
-                            authorization=authorization,
-                            model_uri=model_uri,
-                        )
+                        try:
+                            return self._submit_responses_image_tool(
+                                brief,
+                                authorization=authorization,
+                                model_uri=model_uri,
+                            )
+                        except ProviderTransportError as exc:
+                            # Existing deployments may have an image-only key
+                            # (ai.imageGeneration.user) without the extra
+                            # Responses/LLM roles. A 403 is a definitive
+                            # pre-acceptance authorization rejection, so the
+                            # direct Images path is a safe compatibility fallback.
+                            # Any ambiguous/transport error remains fail-closed.
+                            if str(exc or "").strip() != "http_403":
+                                raise
                     return self._submit_compat_model(
                         brief,
                         authorization=authorization,
