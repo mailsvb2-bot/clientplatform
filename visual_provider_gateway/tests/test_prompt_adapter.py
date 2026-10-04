@@ -227,6 +227,37 @@ def test_yandex_adapter_expands_resource_audio_transformation_into_visual_stages
     assert "mandatory" not in adapted.prompt.casefold()
     assert len(adapted.prompt) <= 500
 
+def test_yandex_responses_input_preserves_natural_owner_request_without_storyboard_meta() -> None:
+    request = (
+        "ёж, который слушает ресурсные аудио трансы "
+        "и становится добрым и пушистым"
+    )
+    compiled = compile_visual_prompt(
+        request=request,
+        kind="image",
+        style_intent=VisualStyleIntent(quick_styles="warm_friendly,illustrative"),
+    )
+    adapted = adapt_visual_brief_for_provider(
+        CreativeBrief(
+            kind="image",
+            prompt=compiled.prompt,
+            country_code="RU",
+            aspect_ratio="4:5",
+            negative_prompt=compiled.negative_prompt,
+        ),
+        provider="yandexart",
+    )
+
+    responses_input = str(adapted.metadata["yandex_responses_input"])
+    assert responses_input.startswith(request)
+    assert "Один герой, три стадии" not in responses_input
+    assert "Owner request" not in responses_input
+    assert "mandatory" not in responses_input.casefold()
+    assert "тёплый" in responses_input or "warm" in responses_input.casefold()
+    assert len(responses_input) > len(request)
+    assert len(adapted.prompt) <= 500
+
+
 def test_yandex_preserves_owner_authored_three_stage_transformation_in_auto_and_artistic_modes() -> None:
     request = (
         "ёж во время прослушивания ресурсного аудио постепенно меняется: "
@@ -842,7 +873,7 @@ def test_engine_applies_adapter_only_after_provider_selection(monkeypatch) -> No
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 11
+    assert result.provider_payload["prompt_adapter_version"] == 12
     assert "Owner request" not in captured["brief"].prompt
     assert "hedgehog listens to an audio session" in captured["brief"].prompt
 
@@ -963,7 +994,7 @@ def test_engine_applies_meaning_adapter_to_gigachat_fallback(monkeypatch) -> Non
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 11
+    assert result.provider_payload["prompt_adapter_version"] == 12
     prompt = captured["brief"].prompt
     assert prompt.startswith(
         "a prickly hedgehog listens to an audio session and becomes gentle"
