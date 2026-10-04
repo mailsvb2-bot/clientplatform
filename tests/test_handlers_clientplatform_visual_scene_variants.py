@@ -317,6 +317,7 @@ def test_scene_variant_supplement_missing_selection_keeps_user_in_recovery_flow(
 
 
 def test_durable_ready_scene_plan_is_reused_without_second_ai_call(monkeypatch) -> None:
+    monkeypatch.setattr(studio, "visual_scene_ai_planning_available", lambda: True)
     data = _data()
     contract = studio._scene_contract_from_state(data)
     variants = studio._scene_variants_from_state(data)
@@ -359,6 +360,7 @@ def test_durable_ready_scene_plan_is_reused_without_second_ai_call(monkeypatch) 
 def test_durable_uncertain_scene_plan_fails_closed_to_deterministic_bundle(
     monkeypatch,
 ) -> None:
+    monkeypatch.setattr(studio, "visual_scene_ai_planning_available", lambda: True)
     data = _data()
     for key in (
         "creative_scene_contract",
