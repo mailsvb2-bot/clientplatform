@@ -12,6 +12,7 @@ from clientplatform.domain.event_landing import (
     event_landing_content_to_json,
 )
 from clientplatform.domain.tenancy import TenantContext, normalize_uuid
+from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 
 
 def _utc_now() -> str:
@@ -93,20 +94,30 @@ def _profile_from_row(row: Any) -> EventLandingProfile:
 class EventLandingRepository:
     def __init__(self, conn: Any):
         self._conn = conn
+        self._tenancy = TenancyRepository(conn)
 
-    def _event(self, *, actor: TenantContext, event_id: str) -> str:
-        actor.assert_can_manage_business()
+    def _event(
+        self,
+        *,
+        actor: TenantContext,
+        event_id: str,
+    ) -> tuple[TenantContext, str]:
+        current = self._tenancy.resolve_context(
+            user_id=actor.user_id,
+            business_id=actor.business_id,
+        )
+        current.assert_can_manage_business()
         normalized = normalize_uuid(event_id, field_name="event_id")
         row = self._conn.execute(
             """
             SELECT id FROM clientplatform_events
             WHERE id=? AND business_id=? LIMIT 1
             """,
-            (normalized, actor.business_id),
+            (normalized, current.business_id),
         ).fetchone()
         if row is None:
             raise ValueError("event was not found in the active business")
-        return normalized
+        return current, normalized
 
     def get(
         self,
@@ -114,11 +125,11 @@ class EventLandingRepository:
         actor: TenantContext,
         event_id: str,
     ) -> EventLandingProfile | None:
-        normalized = self._event(actor=actor, event_id=event_id)
+        current, normalized = self._event(actor=actor, event_id=event_id)
         row = self._conn.execute(
             f"SELECT {_COLUMNS} FROM clientplatform_event_landing_profiles "  # nosec B608
             "WHERE business_id=? AND event_id=? LIMIT 1",
-            (actor.business_id, normalized),
+            (current.business_id, normalized),
         ).fetchone()
         return None if row is None else _profile_from_row(row)
 
@@ -131,7 +142,7 @@ class EventLandingRepository:
         source: str,
         now: str | None = None,
     ) -> EventLandingProfile:
-        normalized = self._event(actor=actor, event_id=event_id)
+        current, normalized = self._event(actor=actor, event_id=event_id)
         source_value = str(source or "").strip().lower()
         if source_value not in {"template", "ai", "owner"}:
             raise ValueError("event landing source is invalid")
@@ -154,11 +165,11 @@ class EventLandingRepository:
                 ) VALUES(?,?,?,NULL,?,1,NULL,NULL,NULL,NULL,?,?,?,NULL)
                 """,
                 (
-                    actor.business_id,
+                    current.business_id,
                     normalized,
                     body,
                     source_value,
-                    actor.membership_id,
+                    current.membership_id,
                     timestamp,
                     timestamp,
                 ),
@@ -176,16 +187,16 @@ class EventLandingRepository:
                 (
                     body,
                     source_value,
-                    actor.membership_id,
+                    current.membership_id,
                     timestamp,
-                    actor.business_id,
+                    current.business_id,
                     normalized,
                     revision,
                 ),
             )
             if int(getattr(cursor, "rowcount", 0) or 0) != 1:
                 raise RuntimeError("event landing changed concurrently; refresh and retry")
-        stored = self.get(actor=actor, event_id=normalized)
+        stored = self.get(actor=current, event_id=normalized)
         if stored is None:
             raise RuntimeError("event landing draft was not persisted")
         return stored
@@ -198,7 +209,8 @@ class EventLandingRepository:
         expected_revision: int | None = None,
         now: str | None = None,
     ) -> EventLandingProfile:
-        profile = self.get(actor=actor, event_id=event_id)
+        current, normalized = self._event(actor=actor, event_id=event_id)
+        profile = self.get(actor=current, event_id=normalized)
         if profile is None:
             raise ValueError("event landing draft is missing")
         if expected_revision is not None and profile.revision != int(expected_revision):
@@ -214,16 +226,16 @@ class EventLandingRepository:
             """,
             (
                 timestamp,
-                actor.membership_id,
+                current.membership_id,
                 timestamp,
-                actor.business_id,
+                current.business_id,
                 profile.event_id,
                 profile.revision,
             ),
         )
         if int(getattr(cursor, "rowcount", 0) or 0) != 1:
             raise RuntimeError("event landing changed concurrently; refresh and retry")
-        stored = self.get(actor=actor, event_id=profile.event_id)
+        stored = self.get(actor=current, event_id=profile.event_id)
         if stored is None:
             raise RuntimeError("published event landing was not persisted")
         return stored
@@ -235,7 +247,8 @@ class EventLandingRepository:
         event_id: str,
         now: str | None = None,
     ) -> EventLandingProfile:
-        profile = self.get(actor=actor, event_id=event_id)
+        current, normalized = self._event(actor=actor, event_id=event_id)
+        profile = self.get(actor=current, event_id=normalized)
         if profile is None:
             raise ValueError("event landing draft is missing")
         timestamp = str(now or _utc_now())
@@ -248,16 +261,16 @@ class EventLandingRepository:
             WHERE business_id=? AND event_id=? AND revision=?
             """,
             (
-                actor.membership_id,
+                current.membership_id,
                 timestamp,
-                actor.business_id,
+                current.business_id,
                 profile.event_id,
                 profile.revision,
             ),
         )
         if int(getattr(cursor, "rowcount", 0) or 0) != 1:
             raise RuntimeError("event landing changed concurrently; refresh and retry")
-        stored = self.get(actor=actor, event_id=profile.event_id)
+        stored = self.get(actor=current, event_id=profile.event_id)
         if stored is None:
             raise RuntimeError("event landing draft disappeared")
         return stored
@@ -270,7 +283,8 @@ class EventLandingRepository:
         ttl_seconds: int = 1800,
         now: str | None = None,
     ) -> IssuedEventLandingPreview:
-        profile = self.get(actor=actor, event_id=event_id)
+        current, normalized = self._event(actor=actor, event_id=event_id)
+        profile = self.get(actor=current, event_id=normalized)
         if profile is None:
             raise ValueError("event landing draft is missing")
         ttl = max(60, min(int(ttl_seconds), 3600))
@@ -289,9 +303,9 @@ class EventLandingRepository:
                 digest,
                 profile.revision,
                 expires.isoformat(),
-                actor.membership_id,
+                current.membership_id,
                 current.isoformat(),
-                actor.business_id,
+                current.business_id,
                 profile.event_id,
                 profile.revision,
             ),
