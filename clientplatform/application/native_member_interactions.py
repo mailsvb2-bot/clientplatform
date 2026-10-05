@@ -73,6 +73,7 @@ from clientplatform.application.event_landing_builder import (
     prepare_event_landing_ai_confirmation,
     publish_event_landing,
     reset_event_landing_template,
+    resolve_event_landing_ai_ambiguity,
     restore_simple_event_landing,
     set_event_landing_theme,
     update_event_landing_section,
@@ -881,6 +882,8 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "event-landing",
             "event-landing-ai",
             "event-landing-ai-confirm",
+            "event-landing-ai-resolve",
+            "event-landing-ai-resolve-confirm",
             "event-landing-texts",
             "event-landing-more",
             "event-landing-style",
@@ -1433,6 +1436,8 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "event-landing": "cpm:events",
     "event-landing-ai": "cpm:events",
     "event-landing-ai-confirm": "cpm:events",
+    "event-landing-ai-resolve": "cpm:events",
+    "event-landing-ai-resolve-confirm": "cpm:events",
     "event-landing-texts": "cpm:events",
     "event-landing-more": "cpm:events",
     "event-landing-style": "cpm:events",
@@ -1709,6 +1714,7 @@ def _with_parent_navigation(
         back_label = BACK_TO_GROWTH_LABEL
     elif parsed.action in {
         "event-settings", "event-content", "event-landing", "event-landing-ai", "event-landing-ai-confirm",
+        "event-landing-ai-resolve", "event-landing-ai-resolve-confirm",
         "event-landing-texts", "event-landing-more", "event-landing-style",
         "event-landing-theme", "event-landing-edit", "event-landing-edit-text",
         "event-landing-reset", "event-landing-preview", "event-landing-publish",
@@ -2822,6 +2828,13 @@ def _event_landing_status_text(
         "AI и ручные правки меняют только черновик. Публичная страница меняется "
         "только после «🚀 Опубликовать». Кнопка AI запускает один текстовый AI-вызов; "
         "повтор той же ревизии защищён от второго платного вызова."
+        + (
+            "\n\n⚠️ Предыдущий AI-запрос завершился неоднозначно: провайдер мог "
+            "принять и тарифицировать запрос, но подтверждённого результата нет. "
+            "Автоматический повтор заблокирован."
+            if profile.ai_status == "ambiguous"
+            else ""
+        )
     )
 
 
@@ -2839,6 +2852,15 @@ def _event_landing_message(
         (_button("👁 Предпросмотр", f"cpm:event-landing-preview:{event_id}"),),
         (_button("🚀 Опубликовать", f"cpm:event-landing-publish:{event_id}"),),
     ]
+    if profile.ai_status == "ambiguous":
+        rows.append(
+            (
+                _button(
+                    "⚠️ Разобраться с AI-вызовом",
+                    f"cpm:event-landing-ai-resolve:{event_id}",
+                ),
+            )
+        )
     if profile.is_published:
         rows.append(
             (_button("↩️ Вернуть простой лендинг", f"cpm:event-landing-simple:{event_id}"),)
@@ -3003,6 +3025,61 @@ def _event_landing_ai_result(
             rows=((_button("🌐 К лендингу", f"cpm:event-landing:{event_id}"),),),
         )
     return _event_landing_message(actor, event_id)
+
+
+def _event_landing_ai_resolve_message(
+    actor: TenantContext,
+    event_id: str,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    profile = get_event_landing_editor_state(actor=actor, event_id=event_id)
+    if profile.ai_status != "ambiguous":
+        return CustomerInteractionMessage(
+            text="Неопределённого AI-вызова уже нет.",
+            rows=((_button("🌐 К лендингу", f"cpm:event-landing:{event_id}"),),),
+        )
+    return CustomerInteractionMessage(
+        text=(
+            "⚠️ Неоднозначный AI-вызов\n\n"
+            "Предыдущий запрос мог быть принят и тарифицирован AI-провайдером, "
+            "но ClientPlatform не получил достоверный итог. Автоматический повтор "
+            "заблокирован.\n\n"
+            "Разблокируйте новую попытку только если вы проверили состояние у "
+            "провайдера или осознанно принимаете риск повторного списания. "
+            "Эта операция сама AI не запускает."
+        ),
+        rows=(
+            (
+                _button(
+                    "✅ Разблокировать новую AI-попытку",
+                    f"cpm:event-landing-ai-resolve-confirm:{event_id}",
+                ),
+            ),
+            (_button("🌐 К лендингу", f"cpm:event-landing:{event_id}"),),
+        ),
+    )
+
+
+def _event_landing_ai_resolve_result(
+    actor: TenantContext,
+    event_id: str,
+) -> CustomerInteractionMessage:
+    try:
+        resolve_event_landing_ai_ambiguity(actor=actor, event_id=event_id)
+    except (ValueError, RuntimeError):
+        return CustomerInteractionMessage(
+            text="AI-блокировка уже снята или недоступна.",
+            rows=((_button("🌐 К лендингу", f"cpm:event-landing:{event_id}"),),),
+        )
+    message = _event_landing_message(actor, event_id)
+    return CustomerInteractionMessage(
+        text=(
+            "✅ AI-блокировка снята. AI сейчас не запускался. Для новой попытки "
+            "снова выберите «✨ Создать AI-версию» и отдельно подтвердите внешний вызов.\n\n"
+            + message.text
+        ),
+        rows=message.rows,
+    )
 
 
 def _event_landing_theme_result(
@@ -8120,6 +8197,14 @@ def _render(
                 parsed.args[0],
                 expected_revision,
             )
+        if parsed.action == "event-landing-ai-resolve":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _event_landing_ai_resolve_message(actor, parsed.args[0])
+        if parsed.action == "event-landing-ai-resolve-confirm":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _event_landing_ai_resolve_result(actor, parsed.args[0])
         if parsed.action == "event-landing-texts":
             if len(parsed.args) != 1:
                 return _stale_message()
