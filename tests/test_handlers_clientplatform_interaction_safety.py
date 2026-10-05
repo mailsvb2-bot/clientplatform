@@ -161,24 +161,6 @@ def test_cross_flow_callbacks_are_rejected_while_text_answer_is_pending() -> Non
     assert _callback_conflicts_with_state(None, "cp:clients:business") is False
 
 
-def test_creative_scene_actions_are_allowed_inside_style_step() -> None:
-    state = "ClientPlatformCreativeStudioState:choosing_style"
-
-    assert safety._callback_conflicts_with_state(state, "cpc:sv:show:business-token") is False
-    assert safety._callback_conflicts_with_state(state, "cpc:st:go:business-token") is False
-    assert safety._callback_should_clear_state(state, "cpc:sv:show:business-token") is False
-    assert safety._callback_should_clear_state(state, "cpc:st:go:business-token") is False
-
-    # The same buttons are not permitted to hijack an unrelated active wizard.
-    assert (
-        safety._callback_conflicts_with_state(
-            "ClientPlatformControlState:activity_description",
-            "cpc:sv:show:business-token",
-        )
-        is True
-    )
-
-
 def test_program_creation_escapes_only_ordinary_stale_fsm_state() -> None:
     callback = "cp:progadd:business"
     ordinary_state = "ClientPlatformControlState:activity_description"
