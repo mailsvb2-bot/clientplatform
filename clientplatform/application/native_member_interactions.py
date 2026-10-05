@@ -3587,7 +3587,9 @@ def _event_announcement_message(
                     event_title=draft.title,
                     message_text=draft.text,
                 )
-            except (TenantPermissionDenied, ValueError, RuntimeError, VisualCreativeError):
+            except VisualCreativeError:
+                prepared = None
+            except (TenantPermissionDenied, ValueError, RuntimeError):
                 prepared = None
             visual_prepared = prepared is not None
     except (TenantPermissionDenied, ValueError, RuntimeError):
