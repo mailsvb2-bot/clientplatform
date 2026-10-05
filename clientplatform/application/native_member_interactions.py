@@ -3550,7 +3550,6 @@ def _event_promotion_yandex_message(
         ),
         rows=(
             (_button("📣 Рекламные каналы", "cpm:ad-channels"),),
-            (_button("💰 Бюджет и запуск", "cpm:ad-spend"),),
             (_button("📢 К продвижению вебинара", f"cpm:event-promote:{event_id}"),),
         ),
     )
