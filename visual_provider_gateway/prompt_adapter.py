@@ -259,6 +259,43 @@ def _compiled_scene_direction_cue(lines: tuple[str, ...]) -> str:
     return ""
 
 
+def _compiled_scene_direction_full(lines: tuple[str, ...]) -> str:
+    """Return the complete selected art direction for roomy Responses input.
+
+    The direct Yandex image endpoint is limited to 500 characters, so
+    _compiled_scene_direction_cue intentionally compresses the selected direction.
+    Yandex Responses has a much larger input budget and must receive the actual
+    Art Director staging details instead of that lossy summary.
+    """
+
+    for line in lines:
+        if not line.casefold().startswith("selected presentation direction"):
+            continue
+        value = line.split(":", 1)[-1].strip()
+        base_value = value
+        supplement = ""
+        marker = ". Owner refinement: "
+        if marker in value:
+            base_value, raw_supplement = value.split(marker, 1)
+            supplement = raw_supplement.split(
+                ". Apply this only where compatible",
+                1,
+            )[0].strip(" .")
+        base_value = " ".join(base_value.split()).strip(" .")[:1400]
+        supplement = " ".join(supplement.split()).strip(" .")[:600]
+        if supplement:
+            return (
+                "Режиссёрская постановка — соблюсти полностью: "
+                + base_value
+                + ". Уточнение пользователя: "
+                + supplement
+                + "."
+            )
+        if base_value:
+            return "Режиссёрская постановка — соблюсти полностью: " + base_value + "."
+    return ""
+
+
 def _scene_contract_yandex_parts(
     brief: CreativeBrief,
 ) -> tuple[str, tuple[str, ...]]:
@@ -1008,9 +1045,16 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
         )
     )
     direction_cue = _compiled_scene_direction_cue(lines)
+    full_direction = _compiled_scene_direction_full(lines)
     style_cues = tuple(
         dict.fromkeys(
             ((direction_cue,) if direction_cue else ())
+            + _compiled_style_cues(lines)
+        )
+    )
+    responses_style_cues = tuple(
+        dict.fromkeys(
+            ((full_direction,) if full_direction else ())
             + _compiled_style_cues(lines)
         )
     )
@@ -1026,7 +1070,7 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
         [
             responses_scene,
             *semantic_cues,
-            *style_cues,
+            *responses_style_cues,
             *_natural_safety_parts(brief),
             *_natural_policy_parts(brief),
         ],
