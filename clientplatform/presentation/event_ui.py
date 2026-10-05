@@ -144,13 +144,6 @@ def event_hub_actions(snapshot: object) -> tuple[EventHubAction, ...]:
             continue
         actions.append(
             EventHubAction(
-                "landing",
-                f"🌐 Лендинг · {str(item.title)[:20]}",
-                key=str(item.id),
-            )
-        )
-        actions.append(
-            EventHubAction(
                 "content",
                 f"🗓 Контент-план · {str(item.title)[:17]}",
                 key=str(item.id),
