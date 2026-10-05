@@ -660,5 +660,85 @@ class EventLandingTelegramPresentationTests(unittest.TestCase):
         self.assertIn("cpev:promote:evt:biz", yandex_callbacks)
 
 
+    def test_event_promotion_fail_closed_and_empty_states_are_rendered(self) -> None:
+        actor = _actor()
+        empty_snapshot = SimpleNamespace(
+            title="Вебинар",
+            advertising_url="https://example.test/e/demo?source=ads",
+            provider_label="external",
+            join_ready=False,
+            landing_published=False,
+            registrations=0,
+            registrations_from_ads=0,
+        )
+
+        malformed, malformed_target = _callback("cpev:promote:evt")
+        asyncio.run(events.open_event_promotion(malformed))
+        malformed.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
+        malformed_target.answer.assert_not_awaited()
+
+        callback, target = _callback("cpev:promote:evt:biz")
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=_token_uuid),
+            patch.object(events.control, "_uuid_token", side_effect=_uuid_token),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events.control, "_callback_message", return_value=target),
+            patch.object(events.control, "_keyboard", side_effect=lambda rows: rows),
+            patch.object(events, "_public_base_url", return_value="https://example.test"),
+            patch.object(events, "get_event_promotion_snapshot", return_value=empty_snapshot),
+        ):
+            asyncio.run(events.open_event_promotion(callback))
+
+        rendered = target.answer.await_args.args[0]
+        self.assertIn("продающая версия не опубликована", rendered)
+        self.assertIn("ссылка на площадку ещё не добавлена", rendered)
+        self.assertIn("Регистраций: 0", rendered)
+
+        failed, failed_target = _callback("cpev:promote:evt:biz")
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=_token_uuid),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "_public_base_url", return_value="https://example.test"),
+            patch.object(
+                events,
+                "get_event_promotion_snapshot",
+                side_effect=RuntimeError("boom"),
+            ),
+        ):
+            asyncio.run(events.open_event_promotion(failed))
+        failed.answer.assert_awaited_once_with(
+            "Не удалось открыть продвижение вебинара",
+            show_alert=True,
+        )
+        failed_target.answer.assert_not_awaited()
+
+    def test_event_yandex_promotion_malformed_and_snapshot_failure_fail_closed(self) -> None:
+        actor = _actor()
+
+        malformed, malformed_target = _callback("cpev:py:evt")
+        asyncio.run(events.open_event_yandex_promotion(malformed))
+        malformed.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
+        malformed_target.answer.assert_not_awaited()
+
+        failed, failed_target = _callback("cpev:py:evt:biz")
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=_token_uuid),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "_public_base_url", return_value="https://example.test"),
+            patch.object(
+                events,
+                "get_event_promotion_snapshot",
+                side_effect=ValueError("invalid"),
+            ),
+        ):
+            asyncio.run(events.open_event_yandex_promotion(failed))
+
+        failed.answer.assert_awaited_once_with(
+            "Не удалось открыть рекламу вебинара",
+            show_alert=True,
+        )
+        failed_target.answer.assert_not_awaited()
+
+
 if __name__ == "__main__":
     unittest.main()
