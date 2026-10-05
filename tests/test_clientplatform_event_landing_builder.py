@@ -369,12 +369,31 @@ class EventLandingRepositoryTests(unittest.TestCase):
                 now="2026-10-05T10:07:00+00:00",
             )
             self.assertEqual(edited.revision, 2)
-            fresh_prepared = repository.prepare_ai_confirmation(
+            self.assertEqual(edited.ai_status, "ambiguous")
+
+            still_blocked = repository.prepare_ai_confirmation(
                 actor=actor,
                 event_id=event.id,
                 expected_revision=2,
                 claim_digest="b" * 64,
                 now="2026-10-05T10:08:00+00:00",
+            )
+            self.assertFalse(still_blocked.created)
+            self.assertEqual(still_blocked.status, "ambiguous")
+
+            self.assertTrue(
+                repository.resolve_ai_ambiguity(
+                    actor=actor,
+                    event_id=event.id,
+                    now="2026-10-05T10:08:30+00:00",
+                )
+            )
+            fresh_prepared = repository.prepare_ai_confirmation(
+                actor=actor,
+                event_id=event.id,
+                expected_revision=2,
+                claim_digest="b" * 64,
+                now="2026-10-05T10:09:00+00:00",
             )
             self.assertTrue(fresh_prepared.created)
             fresh = repository.claim_ai_generation(
@@ -382,7 +401,7 @@ class EventLandingRepositoryTests(unittest.TestCase):
                 event_id=event.id,
                 expected_revision=2,
                 claim_digest="b" * 64,
-                now="2026-10-05T10:08:01+00:00",
+                now="2026-10-05T10:09:01+00:00",
             )
             self.assertTrue(fresh.created)
         finally:
@@ -795,6 +814,36 @@ class EventLandingApplicationTests(unittest.TestCase):
         self.assertNotIn("contacts", facts)
         self.assertNotIn("source_urls", facts)
         self.assertNotIn("visual_assets", facts)
+
+    def test_explicit_ambiguity_resolution_clears_lock_without_provider_egress(self) -> None:
+        actor = SimpleNamespace()
+        stored = SimpleNamespace(ai_status=None)
+        repository = Mock()
+        repository.resolve_ai_ambiguity.return_value = True
+        repository.get.return_value = stored
+        with (
+            patch.object(
+                event_landing_builder,
+                "get_db",
+                side_effect=lambda: nullcontext(object()),
+            ),
+            patch.object(
+                event_landing_builder,
+                "EventLandingRepository",
+                return_value=repository,
+            ),
+            patch.object(
+                event_landing_builder.OpenAIClient,
+                "from_settings",
+            ) as ai_provider,
+        ):
+            result = event_landing_builder.resolve_event_landing_ai_ambiguity(
+                actor=actor,
+                event_id="event",
+            )
+        self.assertIs(result, stored)
+        repository.resolve_ai_ambiguity.assert_called_once()
+        ai_provider.assert_not_called()
 
     def test_ai_confirmation_prepares_revision_without_provider_egress(self) -> None:
         actor = SimpleNamespace()
