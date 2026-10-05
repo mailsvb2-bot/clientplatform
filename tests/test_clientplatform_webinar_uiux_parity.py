@@ -440,6 +440,7 @@ def test_native_landing_builder_has_explicit_ai_confirmation_and_bounded_buttons
         revision=1,
         is_published=False,
         has_unpublished_changes=False,
+        ai_status=None,
     )
     with (
         patch.object(native_ui, "_event_landing_item", return_value=item),
@@ -482,6 +483,14 @@ def test_native_landing_commands_are_parseable_for_vk_and_max_shared_renderer() 
             "event-landing-ai-confirm",
             (event_id, "1"),
         ),
+        f"cpm:event-landing-ai-resolve:{event_id}": (
+            "event-landing-ai-resolve",
+            (event_id,),
+        ),
+        f"cpm:event-landing-ai-resolve-confirm:{event_id}": (
+            "event-landing-ai-resolve-confirm",
+            (event_id,),
+        ),
         f"cpm:event-landing-theme:bold:{event_id}": (
             "event-landing-theme",
             ("bold", event_id),
@@ -494,3 +503,64 @@ def test_native_landing_commands_are_parseable_for_vk_and_max_shared_renderer() 
     for raw, expected in cases.items():
         parsed = native_ui.parse_native_member_interaction(raw)
         assert (parsed.action, parsed.args) == expected
+
+
+
+def test_native_ambiguous_landing_ai_requires_explicit_resolution() -> None:
+    actor = _actor()
+    event_id = "33333333-3333-4333-8333-333333333333"
+    item = SimpleNamespace(title="Вебинар")
+    draft = SimpleNamespace(
+        hero_title="Заголовок",
+        hero_subtitle="Подзаголовок",
+        audience_points=("A",),
+        outcome_points=("B",),
+        agenda_points=("C",),
+        faq=(),
+        theme=native_ui.EventLandingTheme.CALM,
+    )
+    ambiguous = SimpleNamespace(
+        draft=draft,
+        draft_source="owner",
+        revision=2,
+        is_published=False,
+        has_unpublished_changes=False,
+        ai_status="ambiguous",
+    )
+    resolved = SimpleNamespace(
+        draft=draft,
+        draft_source="owner",
+        revision=2,
+        is_published=False,
+        has_unpublished_changes=False,
+        ai_status=None,
+    )
+    with (
+        patch.object(native_ui, "_event_landing_item", return_value=item),
+        patch.object(
+            native_ui,
+            "get_event_landing_editor_state",
+            side_effect=[ambiguous, ambiguous, resolved],
+        ),
+        patch.object(
+            native_ui,
+            "resolve_event_landing_ai_ambiguity",
+            return_value=SimpleNamespace(ai_status=None),
+        ) as resolve,
+    ):
+        landing = native_ui._event_landing_message(actor, event_id)
+        warning = native_ui._event_landing_ai_resolve_message(actor, event_id)
+        result = native_ui._event_landing_ai_resolve_result(actor, event_id)
+
+    assert "Автоматический повтор заблокирован" in landing.text
+    assert (
+        "⚠️ Разобраться с AI-вызовом",
+        f"cpm:event-landing-ai-resolve:{event_id}",
+    ) in _commands(landing)
+    assert "риск повторного списания" in warning.text
+    assert (
+        "✅ Разблокировать новую AI-попытку",
+        f"cpm:event-landing-ai-resolve-confirm:{event_id}",
+    ) in _commands(warning)
+    assert "AI сейчас не запускался" in result.text
+    resolve.assert_called_once()
