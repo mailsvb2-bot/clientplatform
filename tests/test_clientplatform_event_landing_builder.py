@@ -35,6 +35,7 @@ from clientplatform.infrastructure.event_landing_repository import (
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 from clientplatform.privacy_manifest import TENANT_POLICIES
 from services.db.schema import create_or_update_tables
+from services.db.schema import clientplatform_event_content
 
 
 def _conn() -> sqlite3.Connection:
@@ -437,6 +438,51 @@ class EventLandingRepositoryTests(unittest.TestCase):
                     conn,
                     public_slug=event.public_slug,
                 )
+            )
+        finally:
+            conn.close()
+
+
+class EventLandingSchemaUpgradeTests(unittest.TestCase):
+    def test_existing_landing_table_gains_ai_claim_columns_idempotently(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE clientplatform_event_landing_profiles(
+                    business_id TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    draft_json TEXT NOT NULL,
+                    published_json TEXT,
+                    draft_source TEXT NOT NULL,
+                    revision INTEGER NOT NULL DEFAULT 1,
+                    published_revision INTEGER,
+                    preview_token_digest TEXT,
+                    preview_revision INTEGER,
+                    preview_expires_at TEXT,
+                    updated_by_member_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    published_at TEXT,
+                    PRIMARY KEY(business_id, event_id)
+                )
+                """
+            )
+            clientplatform_event_content.ensure(conn)
+            clientplatform_event_content.ensure(conn)
+            columns = {
+                str(row[1])
+                for row in conn.execute(
+                    "PRAGMA table_info(clientplatform_event_landing_profiles)"
+                ).fetchall()
+            }
+            self.assertTrue(
+                {
+                    "ai_status",
+                    "ai_base_revision",
+                    "ai_claim_digest",
+                    "ai_updated_at",
+                }.issubset(columns)
             )
         finally:
             conn.close()
