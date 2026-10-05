@@ -553,6 +553,67 @@ def test_yandex_responses_403_can_use_direct_only_with_operator_opt_in(monkeypat
     ]
     assert job.provider_payload["transport"] == "openai_compat"
 
+def test_yandex_responses_primary_403_retries_renewable_iam_without_direct_fallback(monkeypatch, tmp_path):
+    from services.yandex_iam_token import YandexIamTokenResult
+    from visual_provider_gateway.providers import YandexArtProvider
+
+    encoded = base64.b64encode(b"renewable-responses-image").decode("ascii")
+    calls = []
+
+    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0, ca_bundle_file=""):
+        calls.append((url, dict(headers or {})))
+        if headers["Authorization"] == "Api-Key image-only-key":
+            raise providers.ProviderTransportError("http_403")
+        assert headers["Authorization"] == "Bearer renewable-token"
+        assert url.endswith("/v1/responses")
+        return {
+            "id": "response-renewable",
+            "output": [{
+                "id": "image-renewable",
+                "type": "image_generation_call",
+                "status": "completed",
+                "result": encoded,
+            }],
+        }
+
+    monkeypatch.delenv("YANDEX_ART_PIPELINE", raising=False)
+    monkeypatch.delenv("YANDEX_ART_ALLOW_DIRECT_FALLBACK", raising=False)
+    monkeypatch.setenv("YANDEX_API_KEY", "image-only-key")
+    monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(providers, "_json_request", fake_json_request)
+    monkeypatch.setattr(
+        providers,
+        "get_yandex_art_iam_token",
+        lambda: YandexIamTokenResult(
+            configured=True,
+            available=True,
+            token="renewable-token",
+            auth_mode="authorized_key",
+        ),
+    )
+
+    provider = YandexArtProvider(
+        ProviderConfig(
+            name="yandexart",
+            base_url="https://ai.api.cloud.yandex.net",
+            api_key="image-only-key",
+            folder_id="folder",
+            model_image="art://folder/aliceai-image-art-3.0",
+            output_dir=str(tmp_path / "visual"),
+        )
+    )
+    job = provider.submit(CreativeBrief(kind="image", prompt="hedgehog"))
+
+    assert job.status == "succeeded"
+    assert [headers["Authorization"] for _url, headers in calls] == [
+        "Api-Key image-only-key",
+        "Bearer renewable-token",
+    ]
+    assert all(url.endswith("/v1/responses") for url, _headers in calls)
+    assert job.provider_payload["transport"] == "responses_image_generation"
+
+
 def test_yandex_responses_ambiguous_error_never_falls_back_to_direct_images(monkeypatch):
     from visual_provider_gateway.providers import YandexArtProvider
 
