@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import hashlib
 import json
+import logging
 import re
+import sqlite3
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
@@ -27,6 +29,9 @@ from clientplatform.infrastructure.event_repository import EventRepository
 from clientplatform.infrastructure.event_session_repository import EventSessionRepository
 from services.ai.client import OpenAIClient
 from services.db import get_db, get_db_ro
+
+
+logger = logging.getLogger(__name__)
 
 
 class EventLandingAIUnavailable(RuntimeError):
@@ -562,8 +567,14 @@ def issue_event_landing_preview(
 
 
 def get_public_event_landing(*, public_slug: str) -> EventLandingContent | None:
-    with get_db_ro() as conn:
-        return get_published_event_landing(conn, public_slug=public_slug)
+    try:
+        with get_db_ro() as conn:
+            return get_published_event_landing(conn, public_slug=public_slug)
+    except sqlite3.OperationalError:
+        logger.warning(
+            "Optional event landing storage is not ready; serving canonical simple landing"
+        )
+        return None
 
 
 def get_public_event_landing_preview(
@@ -571,12 +582,18 @@ def get_public_event_landing_preview(
     public_slug: str,
     token: str,
 ) -> EventLandingContent | None:
-    with get_db_ro() as conn:
-        return get_preview_event_landing(
-            conn,
-            public_slug=public_slug,
-            token=token,
+    try:
+        with get_db_ro() as conn:
+            return get_preview_event_landing(
+                conn,
+                public_slug=public_slug,
+                token=token,
+            )
+    except sqlite3.OperationalError:
+        logger.warning(
+            "Optional event landing preview storage is not ready"
         )
+        return None
 
 
 __all__ = [
