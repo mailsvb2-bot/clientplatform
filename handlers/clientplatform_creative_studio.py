@@ -2390,6 +2390,7 @@ def install_creative_studio_safety(safety: ModuleType) -> None:
         "cpc:st:d:",
         "cpc:st:s:",
         "cpc:st:reset:",
+        "cpc:sv:show:",
     )
     _extend_tuple(
         safety,
@@ -2417,7 +2418,7 @@ def install_creative_studio_safety(safety: ModuleType) -> None:
     def state_local_callback_allowed(current_state: str, callback_data: str) -> bool:
         if current_state.startswith("ClientPlatformCreativeStudioState:choosing_style"):
             return callback_data.startswith(
-                ("cpc:st:", "cpc:new:", "cpc:video:", "cpc:open:")
+                ("cpc:st:", "cpc:sv:", "cpc:new:", "cpc:video:", "cpc:open:")
             )
         return original_state_local(current_state, callback_data)
 
