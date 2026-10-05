@@ -2766,7 +2766,7 @@ def _event_conduct_message(
     )
 
 
-def _event_landing_item(actor: TenantContext, event_id: str):
+def _event_landing_item(actor: TenantContext, event_id: str) -> Any:
     snapshot = resolve_events_snapshot(
         actor=actor,
         business_name=_business_name(actor),
@@ -2785,7 +2785,10 @@ def _event_landing_item(actor: TenantContext, event_id: str):
     return item
 
 
-def _event_landing_status_text(item: object, profile: object) -> str:
+def _event_landing_status_text(
+    item: Any,
+    profile: EventLandingEditorState,
+) -> str:
     draft = profile.draft
     if profile.is_published and profile.has_unpublished_changes:
         status = "🟡 Опубликована предыдущая версия; в черновике есть изменения."
@@ -2853,6 +2856,7 @@ def _event_landing_texts_message(
 ) -> CustomerInteractionMessage:
     actor.assert_can_manage_business()
     _event_landing_item(actor, event_id)
+    rows: tuple[tuple[CustomerInteractionButton, ...], ...]
     if more:
         rows = (
             (_button("👤 Организатор", f"cpm:event-landing-edit:speaker:{event_id}"),),
