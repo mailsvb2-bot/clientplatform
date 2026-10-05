@@ -48,6 +48,11 @@ class EventLandingEditorState:
 
 
 @dataclass(frozen=True, slots=True)
+class EventLandingAIConfirmation:
+    revision: int
+
+
+@dataclass(frozen=True, slots=True)
 class EventLandingPreview:
     url: str
     revision: int
@@ -334,21 +339,42 @@ def _landing_ai_payload(raw: object) -> dict[str, object]:
     return payload
 
 
-def generate_event_landing_ai(
+def _ai_unavailable_for_claim_status(status: str) -> EventLandingAIUnavailable:
+    if status == "ready":
+        return EventLandingAIUnavailable(
+            "AI-черновик по этому подтверждению уже создан. "
+            "Повторный платный вызов не запущен."
+        )
+    if status == "planning":
+        return EventLandingAIUnavailable(
+            "AI-черновик уже создаётся. Повторный платный вызов не запущен."
+        )
+    if status == "ambiguous":
+        return EventLandingAIUnavailable(
+            "Предыдущий AI-вызов для этой версии завершился неоднозначно. "
+            "Автоповтор заблокирован: измените черновик или верните автоверсию "
+            "перед новой попыткой."
+        )
+    return EventLandingAIUnavailable(
+        "AI-подтверждение устарело. Откройте конструктор и подтвердите новую попытку."
+    )
+
+
+def prepare_event_landing_ai_confirmation(
     *,
     actor: TenantContext,
     event_id: str,
-) -> EventLandingProfile:
+) -> EventLandingAIConfirmation:
     current = ensure_event_landing_draft(actor=actor, event_id=event_id)
+    if OpenAIClient.from_settings() is None:
+        raise EventLandingAIUnavailable(
+            "AI-генерация сейчас не настроена. Автоверсия лендинга сохранена "
+            "и доступна для ручного редактирования."
+        )
     event, sessions, business_name, profile, details, details_confirmed = _event_context(
         actor=actor,
         event_id=event_id,
     )
-    client = OpenAIClient.from_settings()
-    if client is None:
-        raise EventLandingAIUnavailable(
-            "AI-генерация сейчас не настроена. Автоверсия лендинга сохранена и доступна для ручного редактирования."
-        )
     payload = _landing_ai_input(
         current=current,
         event=event,
@@ -364,22 +390,85 @@ def generate_event_landing_ai(
         payload=payload,
     )
     with get_db() as conn:
-        claim = EventLandingRepository(conn).claim_ai_generation(
+        claim = EventLandingRepository(conn).prepare_ai_confirmation(
             actor=actor,
             event_id=event_id,
             expected_revision=current.revision,
             claim_digest=claim_digest,
         )
-    if not claim.created:
-        if claim.status == "planning":
-            raise EventLandingAIUnavailable(
-                "AI-черновик уже создаётся. Повторный платный вызов не запущен."
-            )
+    if claim.status in {"planning", "ambiguous"}:
+        raise _ai_unavailable_for_claim_status(claim.status)
+    return EventLandingAIConfirmation(revision=current.revision)
+
+
+def generate_event_landing_ai(
+    *,
+    actor: TenantContext,
+    event_id: str,
+    expected_revision: int,
+) -> EventLandingProfile:
+    revision = int(expected_revision)
+    if revision < 1:
         raise EventLandingAIUnavailable(
-            "Предыдущий AI-вызов для этой версии завершился неоднозначно. "
-            "Повторный платный вызов автоматически не запускается: измените черновик "
-            "или верните автоверсию перед новой попыткой."
+            "AI-подтверждение устарело. Откройте конструктор и подтвердите новую попытку."
         )
+    client = OpenAIClient.from_settings()
+    if client is None:
+        raise EventLandingAIUnavailable(
+            "AI-генерация сейчас не настроена. Автоверсия лендинга сохранена "
+            "и доступна для ручного редактирования."
+        )
+
+    current = get_event_landing_profile(actor=actor, event_id=event_id)
+    if current is None:
+        raise EventLandingAIUnavailable(
+            "AI-подтверждение устарело. Откройте конструктор и подтвердите новую попытку."
+        )
+    if current.revision != revision:
+        with get_db() as conn:
+            state = EventLandingRepository(conn).ai_generation_state(
+                actor=actor,
+                event_id=event_id,
+                base_revision=revision,
+            )
+        if state is not None:
+            raise _ai_unavailable_for_claim_status(state.status)
+        raise EventLandingAIUnavailable(
+            "AI-подтверждение устарело. Откройте конструктор и подтвердите новую попытку."
+        )
+
+    event, sessions, business_name, profile, details, details_confirmed = _event_context(
+        actor=actor,
+        event_id=event_id,
+    )
+    payload = _landing_ai_input(
+        current=current,
+        event=event,
+        sessions=tuple(sessions),
+        business_name=business_name,
+        profile=profile,
+        details=details,
+        details_confirmed=details_confirmed,
+    )
+    claim_digest = _landing_ai_claim_digest(
+        event_id=event_id,
+        revision=revision,
+        payload=payload,
+    )
+    try:
+        with get_db() as conn:
+            claim = EventLandingRepository(conn).claim_ai_generation(
+                actor=actor,
+                event_id=event_id,
+                expected_revision=revision,
+                claim_digest=claim_digest,
+            )
+    except RuntimeError as exc:
+        raise EventLandingAIUnavailable(
+            "AI-подтверждение устарело. Откройте конструктор и подтвердите новую попытку."
+        ) from exc
+    if not claim.created:
+        raise _ai_unavailable_for_claim_status(claim.status)
 
     instructions = (
         "You create conversion-oriented Russian copy for an online-event landing page. "
@@ -421,7 +510,7 @@ def generate_event_landing_ai(
             EventLandingRepository(conn).mark_ai_generation_ambiguous(
                 actor=actor,
                 event_id=event_id,
-                base_revision=current.revision,
+                base_revision=revision,
                 claim_digest=claim_digest,
             )
         raise EventLandingAIUnavailable(
@@ -434,7 +523,7 @@ def generate_event_landing_ai(
             return EventLandingRepository(conn).complete_ai_generation(
                 actor=actor,
                 event_id=event_id,
-                base_revision=current.revision,
+                base_revision=revision,
                 claim_digest=claim_digest,
                 content=generated,
             )
@@ -443,7 +532,6 @@ def generate_event_landing_ai(
             "Черновик изменился во время AI-генерации. AI-результат не опубликован "
             "и не перезаписал более новую версию."
         ) from exc
-
 
 def reset_event_landing_template(
     *,
@@ -633,6 +721,7 @@ def get_public_event_landing_preview(
 
 __all__ = [
     "EventLandingAIUnavailable",
+    "EventLandingAIConfirmation",
     "EventLandingPreview",
     "build_event_landing_template",
     "ensure_event_landing_draft",
@@ -642,6 +731,7 @@ __all__ = [
     "get_public_event_landing",
     "get_public_event_landing_preview",
     "issue_event_landing_preview",
+    "prepare_event_landing_ai_confirmation",
     "publish_event_landing",
     "reset_event_landing_template",
     "restore_simple_event_landing",
