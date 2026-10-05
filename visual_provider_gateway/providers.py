@@ -284,6 +284,14 @@ def _yandex_art_pipeline() -> str:
     return normalized if normalized in {"responses", "images"} else "responses"
 
 
+def _yandex_allow_direct_fallback() -> bool:
+    """Allow lossy Responses -> direct Images downgrade only by operator opt-in."""
+
+    return str(
+        os.getenv("YANDEX_ART_ALLOW_DIRECT_FALLBACK", "0") or "0"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _yandex_responses_instructions() -> str:
     return (
         "Создай ровно одно изображение через image_generation. Сохрани исходный "
@@ -629,14 +637,16 @@ class YandexArtProvider:
                                 model_uri=model_uri,
                             )
                         except ProviderTransportError as exc:
-                            # Existing deployments may have an image-only key
-                            # (ai.imageGeneration.user) without the extra
-                            # Responses/LLM roles. A 403 is a definitive
-                            # pre-acceptance authorization rejection, so the
-                            # direct Images path is a safe compatibility fallback.
-                            # Any ambiguous/transport error remains fail-closed.
+                            # Production is fail-closed by default. Responses carries
+                            # the full Art Director contract; silently downgrading to
+                            # the 500-character direct Images path can materially
+                            # degrade composition and semantic fidelity.
                             if str(exc or "").strip() != "http_403":
                                 raise
+                            if not _yandex_allow_direct_fallback():
+                                raise ProviderTransportError(
+                                    "yandex_responses_not_authorized"
+                                ) from exc
                     return self._submit_compat_model(
                         brief,
                         authorization=authorization,
