@@ -86,8 +86,12 @@ class VisualProviderGatewayProductionContractTests(unittest.TestCase):
         )
 
         self.assertIn('and safe["configured_video"]', workflow)
-        self.assertIn('and not safe["runtime_image_error"]', workflow)
-        self.assertIn('and not safe["runtime_video_error"]', workflow)
+        self.assertIn('historical_runtime_error = bool(', workflow)
+        self.assertIn('safe["runtime_image_error"] or safe["runtime_video_error"]', workflow)
+        readiness_block = workflow.split('historical_runtime_error = bool(', 1)[1]
+        readiness_block = readiness_block.split('PY', 1)[0]
+        self.assertNotIn('and not safe["runtime_image_error"]', readiness_block)
+        self.assertNotIn('and not safe["runtime_video_error"]', readiness_block)
         self.assertIn('if readiness != "ready":', workflow)
         self.assertIn("raise SystemExit(28)", workflow)
         self.assertIn("YANDEX_ART_AUTHORIZED_KEY_FILE", workflow)

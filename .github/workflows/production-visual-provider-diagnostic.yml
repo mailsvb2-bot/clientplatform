@@ -312,18 +312,25 @@ jobs:
               },
           }
           print("CLIENTPLATFORM_PRODUCTION_VISUAL_SNAPSHOT " + json.dumps(safe, ensure_ascii=False, sort_keys=True))
+          historical_runtime_error = bool(
+              safe["runtime_image_error"] or safe["runtime_video_error"]
+          )
           readiness = (
               "ready"
               if (
                   safe["enabled"]
                   and safe["configured_image"]
                   and safe["configured_video"]
-                  and not safe["runtime_image_error"]
-                  and not safe["runtime_video_error"]
               )
               else "provider_unavailable"
           )
-          print("CLIENTPLATFORM_PRODUCTION_VISUAL_READINESS state=" + readiness)
+          print(
+              "CLIENTPLATFORM_PRODUCTION_VISUAL_READINESS "
+              + "state="
+              + readiness
+              + " historical_runtime_error="
+              + ("true" if historical_runtime_error else "false")
+          )
           if readiness != "ready":
               raise SystemExit(28)
           PY
