@@ -2334,13 +2334,10 @@ async def create_event_announcement(callback: CallbackQuery) -> None:
         )
         vk_url = draft.registration_url(public_base_url=public_base, source="vk")
         max_url = draft.registration_url(public_base_url=public_base, source="max")
-        promotion = await asyncio.to_thread(
-            get_event_promotion_snapshot,
-            actor=actor,
-            event_id=event_id,
+        advertising_url = draft.registration_url(
             public_base_url=public_base,
+            source="ads",
         )
-        advertising_url = promotion.advertising_url
     except (TenantPermissionDenied, ValueError, RuntimeError):
         await callback.answer("Не удалось подготовить анонс", show_alert=True)
         return
