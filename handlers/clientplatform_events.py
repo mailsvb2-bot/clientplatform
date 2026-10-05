@@ -1026,7 +1026,11 @@ async def generate_event_landing(callback: CallbackQuery) -> None:
     target = control._callback_message(callback)
     try:
         actor = await control._actor(int(callback.from_user.id), business_id)
-        await generate_event_landing_ai(actor=actor, event_id=event_id)
+        await asyncio.to_thread(
+            generate_event_landing_ai,
+            actor=actor,
+            event_id=event_id,
+        )
     except EventLandingAIUnavailable as exc:
         await target.answer(str(exc))
     except (TenantPermissionDenied, ValueError, RuntimeError):
