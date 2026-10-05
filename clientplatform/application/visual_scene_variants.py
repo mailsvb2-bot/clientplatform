@@ -209,28 +209,118 @@ def _safe_direction_for_composition(
     return mapping[composition]
 
 
+def _fallback_variant_copy(
+    *,
+    contract: VisualSceneContract,
+    owner_request: str,
+) -> tuple[tuple[str, str], ...]:
+    """Build user-facing alternatives around the actual requested meaning.
+
+    Deterministic fallback must never masquerade generic style presets as scene
+    alternatives.  It may not invent facts, so it anchors every explanation in
+    the owner's own bounded request and the grounded subject/topology.
+    """
+
+    concept = " ".join(str(owner_request or "").split()).strip()[:240]
+    subject = str(contract.primary_subject or "").strip() or "главный объект"
+    quoted = f"«{concept}»" if concept else "исходный смысл запроса"
+
+    if contract.topology in {"transformation", "sequence", "replacement"}:
+        return (
+            (
+                "Причина и результат в одном кадре",
+                f"{subject.capitalize()} остаётся одним и тем же героем: исходное состояние, "
+                f"причинное действие и заметный результат {quoted} читаются в одной сцене.",
+            ),
+            (
+                "История через ключевой момент",
+                f"Главный акцент — на действии, которое запускает изменение {quoted}; "
+                "окружение и поза героя показывают, откуда началось и к чему пришло.",
+            ),
+            (
+                "Три связанных этапа",
+                f"Один и тот же {subject}: начало → причинное действие → итог. "
+                f"Все три момента визуально связаны и раскрывают именно {quoted}.",
+            ),
+            (
+                "Крупный фокус на изменении",
+                f"Камера держится ближе к {subject}: действие и физически заметная перемена "
+                f"становятся главным доказательством смысла {quoted}.",
+            ),
+            (
+                "Последовательность без подписей",
+                f"Смысл {quoted} читается слева направо без стрелок и поясняющего текста: "
+                "тот же герой, причина изменения и различимый финальный результат.",
+            ),
+        )
+
+    return (
+        (
+            "Смысл одним кадром",
+            f"Один ясный кадр, где {subject} и главное действие напрямую раскрывают {quoted}.",
+        ),
+        (
+            "Действие в живой сцене",
+            f"{subject.capitalize()} показан в естественном окружении; контекст помогает "
+            f"сразу понять действие и смысл {quoted}.",
+        ),
+        (
+            "Чистая смысловая композиция",
+            f"Второстепенные детали убраны, а визуальная иерархия подчёркивает именно {quoted}.",
+        ),
+        (
+            "Крупный фокус на главном",
+            f"Более близкий кадр: {subject}, его действие и нужное взаимодействие занимают "
+            f"основное внимание и раскрывают {quoted}.",
+        ),
+        (
+            "Контекстная история",
+            f"Окружение и взаимодействия дают больше контекста, но сохраняют неизменным "
+            f"главный смысл {quoted}.",
+        ),
+    )
+
+
 def _fallback_variants(
     *,
     contract: VisualSceneContract,
     style: VisualStyleIntent,
+    owner_request: str = "",
 ) -> tuple[VisualSceneVariant, ...]:
     compositions = _COMPOSITION_ORDER
+    copy = _fallback_variant_copy(
+        contract=contract,
+        owner_request=owner_request,
+    )
     variants: list[VisualSceneVariant] = []
-    for index, ((title, description, direction), composition) in enumerate(
-        zip(_fallback_directions(contract), compositions, strict=True),
+    for index, (((_generic_title, _generic_description, base_direction), composition), (title, description)) in enumerate(
+        zip(
+            zip(_fallback_directions(contract), compositions, strict=True),
+            copy,
+            strict=True,
+        ),
         start=1,
     ):
+        concept = " ".join(str(owner_request or "").split()).strip()[:700]
+        direction = _safe_direction_for_composition(contract, composition)
+        if concept:
+            direction = (
+                direction.rstrip(".")
+                + ". Preserve this exact owner concept throughout the composition: "
+                + concept
+                + "."
+            )
         variants.append(
             VisualSceneVariant(
                 id=f"v{index}",
                 title=title,
-                description=description,
-                direction=_safe_direction_for_composition(contract, composition),
+                description=description[:_MAX_DESCRIPTION_CHARS],
+                direction=direction[:1400],
                 composition=composition,
                 score=_score_variant(
                     contract=contract,
                     composition=composition,
-                    direction=direction,
+                    direction=base_direction,
                     style=style,
                     index=index,
                 ),
@@ -389,6 +479,7 @@ def deterministic_visual_scene_bundle(
     variants = _fallback_variants(
         contract=contract,
         style=style_intent,
+        owner_request=owner_request,
     )
     return contract, "deterministic", variants
 
