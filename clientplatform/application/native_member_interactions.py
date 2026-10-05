@@ -2942,6 +2942,27 @@ def _event_landing_edit_result(
     return _event_landing_message(actor, event_id)
 
 
+def _event_landing_ai_confirm_message(
+    actor: TenantContext,
+    event_id: str,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    _event_landing_item(actor, event_id)
+    return CustomerInteractionMessage(
+        text=(
+            "✨ AI-версия лендинга\n\n"
+            "Будет выполнен один внешний текстовый AI-вызов, который может учитываться "
+            "в стоимости AI-провайдера. Результат сохранится только как черновик и "
+            "не станет публичным без отдельного «🚀 Опубликовать».\n\n"
+            "Повтор той же ревизии защищён от второго платного вызова."
+        ),
+        rows=(
+            (_button("✅ Запустить AI", f"cpm:event-landing-ai-confirm:{event_id}"),),
+            (_button("🌐 К лендингу", f"cpm:event-landing:{event_id}"),),
+        ),
+    )
+
+
 def _event_landing_ai_result(
     actor: TenantContext,
     event_id: str,
@@ -8056,6 +8077,10 @@ def _render(
                 return _stale_message()
             return _event_landing_message(actor, parsed.args[0])
         if parsed.action == "event-landing-ai":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _event_landing_ai_confirm_message(actor, parsed.args[0])
+        if parsed.action == "event-landing-ai-confirm":
             if len(parsed.args) != 1:
                 return _stale_message()
             return _event_landing_ai_result(actor, parsed.args[0])
