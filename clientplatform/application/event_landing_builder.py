@@ -444,6 +444,7 @@ def generate_event_landing_ai(
             "и не перезаписал более новую версию."
         ) from exc
 
+
 def reset_event_landing_template(
     *,
     actor: TenantContext,
