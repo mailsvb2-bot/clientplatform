@@ -164,14 +164,14 @@ def test_cross_flow_callbacks_are_rejected_while_text_answer_is_pending() -> Non
 def test_creative_scene_actions_are_allowed_inside_style_step() -> None:
     state = "ClientPlatformCreativeStudioState:choosing_style"
 
-    assert _callback_conflicts_with_state(state, "cpc:sv:show:business-token") is False
-    assert _callback_conflicts_with_state(state, "cpc:st:go:business-token") is False
-    assert _callback_should_clear_state(state, "cpc:sv:show:business-token") is False
-    assert _callback_should_clear_state(state, "cpc:st:go:business-token") is False
+    assert safety._callback_conflicts_with_state(state, "cpc:sv:show:business-token") is False
+    assert safety._callback_conflicts_with_state(state, "cpc:st:go:business-token") is False
+    assert safety._callback_should_clear_state(state, "cpc:sv:show:business-token") is False
+    assert safety._callback_should_clear_state(state, "cpc:st:go:business-token") is False
 
     # The same buttons are not permitted to hijack an unrelated active wizard.
     assert (
-        _callback_conflicts_with_state(
+        safety._callback_conflicts_with_state(
             "ClientPlatformControlState:activity_description",
             "cpc:sv:show:business-token",
         )
