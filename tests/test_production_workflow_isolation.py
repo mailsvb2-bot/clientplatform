@@ -257,6 +257,30 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
         self.assertNotIn('print(job_id)', text)
         self.assertNotIn('print(scope_id)', text)
 
+    def test_visual_diagnostic_fresh_auth_probe_overrides_stale_runtime_error(self) -> None:
+        text = self._text(VISUAL_DIAGNOSTIC)
+
+        self.assertIn(
+            'historical_runtime_error = bool(',
+            text,
+        )
+        self.assertIn(
+            'CLIENTPLATFORM_PRODUCTION_VISUAL_READINESS ',
+            text,
+        )
+        self.assertIn(
+            'historical_runtime_error="',
+            text,
+        )
+        readiness_block = text.split('historical_runtime_error = bool(', 1)[1]
+        readiness_block = readiness_block.split('PY', 1)[0]
+        self.assertIn('safe["enabled"]', readiness_block)
+        self.assertIn('safe["configured_image"]', readiness_block)
+        self.assertIn('safe["configured_video"]', readiness_block)
+        self.assertNotIn('and not safe["runtime_image_error"]', readiness_block)
+        self.assertNotIn('and not safe["runtime_video_error"]', readiness_block)
+
+
     def test_visual_diagnostic_waits_for_exact_marked_deploy_before_probe(self) -> None:
         text = self._text(VISUAL_DIAGNOSTIC)
 
