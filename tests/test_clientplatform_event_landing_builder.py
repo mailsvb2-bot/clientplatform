@@ -299,7 +299,7 @@ class EventLandingRepositoryTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_ai_claim_is_idempotent_and_manual_edit_rearms_new_revision(self) -> None:
+    def test_ai_confirmation_is_idempotent_and_stale_planning_becomes_ambiguous(self) -> None:
         conn = _conn()
         try:
             actor = _owner(conn, 1301, "Практика")
@@ -313,6 +313,16 @@ class EventLandingRepositoryTests(unittest.TestCase):
                 now="2026-10-05T10:00:00+00:00",
             )
             digest = "a" * 64
+            prepared = repository.prepare_ai_confirmation(
+                actor=actor,
+                event_id=event.id,
+                expected_revision=1,
+                claim_digest=digest,
+                now="2026-10-05T10:00:30+00:00",
+            )
+            self.assertTrue(prepared.created)
+            self.assertEqual(prepared.status, "confirming")
+
             first = repository.claim_ai_generation(
                 actor=actor,
                 event_id=event.id,
@@ -331,22 +341,24 @@ class EventLandingRepositoryTests(unittest.TestCase):
             self.assertFalse(duplicate.created)
             self.assertEqual(duplicate.status, "planning")
 
-            repository.mark_ai_generation_ambiguous(
+            recovered = repository.ai_generation_state(
                 actor=actor,
                 event_id=event.id,
                 base_revision=1,
-                claim_digest=digest,
-                now="2026-10-05T10:02:00+00:00",
+                now="2026-10-05T10:06:01+00:00",
             )
-            ambiguous = repository.claim_ai_generation(
+            self.assertIsNotNone(recovered)
+            self.assertEqual(recovered.status, "ambiguous")
+
+            blocked = repository.prepare_ai_confirmation(
                 actor=actor,
                 event_id=event.id,
                 expected_revision=1,
                 claim_digest=digest,
-                now="2026-10-05T10:02:01+00:00",
+                now="2026-10-05T10:06:02+00:00",
             )
-            self.assertFalse(ambiguous.created)
-            self.assertEqual(ambiguous.status, "ambiguous")
+            self.assertFalse(blocked.created)
+            self.assertEqual(blocked.status, "ambiguous")
 
             edited = repository.save_draft(
                 actor=actor,
@@ -354,17 +366,79 @@ class EventLandingRepositoryTests(unittest.TestCase):
                 content=_landing("Новая ревизия"),
                 source="owner",
                 expected_revision=1,
-                now="2026-10-05T10:03:00+00:00",
+                now="2026-10-05T10:07:00+00:00",
             )
             self.assertEqual(edited.revision, 2)
+            fresh_prepared = repository.prepare_ai_confirmation(
+                actor=actor,
+                event_id=event.id,
+                expected_revision=2,
+                claim_digest="b" * 64,
+                now="2026-10-05T10:08:00+00:00",
+            )
+            self.assertTrue(fresh_prepared.created)
             fresh = repository.claim_ai_generation(
                 actor=actor,
                 event_id=event.id,
                 expected_revision=2,
                 claim_digest="b" * 64,
-                now="2026-10-05T10:04:00+00:00",
+                now="2026-10-05T10:08:01+00:00",
             )
             self.assertTrue(fresh.created)
+        finally:
+            conn.close()
+
+    def test_successful_ai_receipt_is_terminal_for_old_confirmation(self) -> None:
+        conn = _conn()
+        try:
+            actor = _owner(conn, 1303, "Практика")
+            event = _published_event(conn, actor)
+            repository = EventLandingRepository(conn)
+            repository.save_draft(
+                actor=actor,
+                event_id=event.id,
+                content=_landing("До AI"),
+                source="template",
+                now="2026-10-05T11:00:00+00:00",
+            )
+            digest = "d" * 64
+            repository.prepare_ai_confirmation(
+                actor=actor,
+                event_id=event.id,
+                expected_revision=1,
+                claim_digest=digest,
+                now="2026-10-05T11:00:10+00:00",
+            )
+            repository.claim_ai_generation(
+                actor=actor,
+                event_id=event.id,
+                expected_revision=1,
+                claim_digest=digest,
+                now="2026-10-05T11:00:20+00:00",
+            )
+            completed = repository.complete_ai_generation(
+                actor=actor,
+                event_id=event.id,
+                base_revision=1,
+                claim_digest=digest,
+                content=_landing("AI результат"),
+                now="2026-10-05T11:00:30+00:00",
+            )
+            self.assertEqual(completed.revision, 2)
+
+            replay = repository.claim_ai_generation(
+                actor=actor,
+                event_id=event.id,
+                expected_revision=1,
+                claim_digest=digest,
+                now="2026-10-05T11:00:40+00:00",
+            )
+            self.assertFalse(replay.created)
+            self.assertEqual(replay.status, "ready")
+            self.assertEqual(
+                repository.get(actor=actor, event_id=event.id).revision,
+                2,
+            )
         finally:
             conn.close()
 
@@ -381,6 +455,12 @@ class EventLandingRepositoryTests(unittest.TestCase):
                 source="template",
             )
             digest = "c" * 64
+            repository.prepare_ai_confirmation(
+                actor=actor,
+                event_id=event.id,
+                expected_revision=1,
+                claim_digest=digest,
+            )
             repository.claim_ai_generation(
                 actor=actor,
                 event_id=event.id,
