@@ -621,6 +621,21 @@ class EventLandingApplicationTests(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_public_landing_unrelated_operational_error_is_not_hidden(self) -> None:
+        class _BrokenConnection:
+            def execute(self, *_args, **_kwargs):
+                raise sqlite3.OperationalError("database is locked")
+
+        with patch.object(
+            event_landing_builder,
+            "get_db_ro",
+            return_value=nullcontext(_BrokenConnection()),
+        ):
+            with self.assertRaisesRegex(sqlite3.OperationalError, "locked"):
+                event_landing_builder.get_public_event_landing(
+                    public_slug="still-visible-error",
+                )
+
     def test_editor_projection_open_is_read_only(self) -> None:
         actor = SimpleNamespace()
         template = _landing("Виртуальная автоверсия")
