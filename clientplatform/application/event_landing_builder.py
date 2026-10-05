@@ -566,11 +566,25 @@ def issue_event_landing_preview(
     )
 
 
+def _optional_landing_storage_missing(exc: sqlite3.OperationalError) -> bool:
+    text = str(exc or "").casefold()
+    return (
+        "clientplatform_event_landing_profiles" in text
+        and (
+            "no such table" in text
+            or "does not exist" in text
+            or "undefined table" in text
+        )
+    )
+
+
 def get_public_event_landing(*, public_slug: str) -> EventLandingContent | None:
     try:
         with get_db_ro() as conn:
             return get_published_event_landing(conn, public_slug=public_slug)
-    except sqlite3.OperationalError:
+    except sqlite3.OperationalError as exc:
+        if not _optional_landing_storage_missing(exc):
+            raise
         logger.warning(
             "Optional event landing storage is not ready; serving canonical simple landing"
         )
@@ -589,7 +603,9 @@ def get_public_event_landing_preview(
                 public_slug=public_slug,
                 token=token,
             )
-    except sqlite3.OperationalError:
+    except sqlite3.OperationalError as exc:
+        if not _optional_landing_storage_missing(exc):
+            raise
         logger.warning(
             "Optional event landing preview storage is not ready"
         )
