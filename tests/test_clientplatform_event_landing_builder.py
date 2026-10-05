@@ -796,75 +796,14 @@ class EventLandingApplicationTests(unittest.TestCase):
         self.assertNotIn("source_urls", facts)
         self.assertNotIn("visual_assets", facts)
 
-    def test_ai_generation_uses_one_claimed_call_and_saves_only_draft(self) -> None:
+    def test_ai_confirmation_prepares_revision_without_provider_egress(self) -> None:
         actor = SimpleNamespace()
         safe = SimpleNamespace(draft=_landing("Безопасный черновик"), revision=1)
-        generated = _landing("AI заголовок").to_payload()
-        stored = SimpleNamespace(
-            draft=_landing("AI заголовок"),
-            draft_source="ai",
-        )
-        client = SimpleNamespace(
-            chat=Mock(return_value=json.dumps(generated, ensure_ascii=False))
-        )
-        repository = Mock()
-
-        def claim(**kwargs):
-            return EventLandingAIClaim(
-                created=True,
-                status="planning",
-                base_revision=1,
-                claim_digest=kwargs["claim_digest"],
-            )
-
-        repository.claim_ai_generation.side_effect = claim
-        repository.complete_ai_generation.return_value = stored
-
-        with (
-            patch.object(
-                event_landing_builder,
-                "ensure_event_landing_draft",
-                return_value=safe,
-            ),
-            patch.object(
-                event_landing_builder,
-                "_event_context",
-                return_value=self._ai_context(),
-            ),
-            patch.object(
-                event_landing_builder.OpenAIClient,
-                "from_settings",
-                return_value=client,
-            ),
-            patch.object(
-                event_landing_builder,
-                "get_db",
-                side_effect=lambda: nullcontext(object()),
-            ),
-            patch.object(
-                event_landing_builder,
-                "EventLandingRepository",
-                return_value=repository,
-            ),
-        ):
-            result = event_landing_builder.generate_event_landing_ai(
-                actor=actor,
-                event_id="event",
-            )
-
-        self.assertIs(result, stored)
-        self.assertEqual(client.chat.call_count, 1)
-        repository.complete_ai_generation.assert_called_once()
-        self.assertEqual(result.draft_source, "ai")
-
-    def test_duplicate_ai_claim_never_calls_provider_twice(self) -> None:
-        actor = SimpleNamespace()
-        safe = SimpleNamespace(draft=_landing(), revision=1)
         client = SimpleNamespace(chat=Mock())
         repository = Mock()
-        repository.claim_ai_generation.return_value = EventLandingAIClaim(
-            created=False,
-            status="planning",
+        repository.prepare_ai_confirmation.return_value = EventLandingAIClaim(
+            created=True,
+            status="confirming",
             base_revision=1,
             claim_digest="a" * 64,
         )
@@ -895,6 +834,116 @@ class EventLandingApplicationTests(unittest.TestCase):
                 return_value=repository,
             ),
         ):
+            confirmation = (
+                event_landing_builder.prepare_event_landing_ai_confirmation(
+                    actor=actor,
+                    event_id="event",
+                )
+            )
+        self.assertEqual(confirmation.revision, 1)
+        client.chat.assert_not_called()
+        repository.prepare_ai_confirmation.assert_called_once()
+
+    def test_ai_generation_uses_one_confirmed_call_and_saves_only_draft(self) -> None:
+        actor = SimpleNamespace()
+        safe = SimpleNamespace(draft=_landing("Безопасный черновик"), revision=1)
+        generated = _landing("AI заголовок").to_payload()
+        stored = SimpleNamespace(
+            draft=_landing("AI заголовок"),
+            draft_source="ai",
+        )
+        client = SimpleNamespace(
+            chat=Mock(return_value=json.dumps(generated, ensure_ascii=False))
+        )
+        repository = Mock()
+
+        def claim(**kwargs):
+            return EventLandingAIClaim(
+                created=True,
+                status="planning",
+                base_revision=1,
+                claim_digest=kwargs["claim_digest"],
+            )
+
+        repository.claim_ai_generation.side_effect = claim
+        repository.complete_ai_generation.return_value = stored
+
+        with (
+            patch.object(
+                event_landing_builder,
+                "get_event_landing_profile",
+                return_value=safe,
+            ),
+            patch.object(
+                event_landing_builder,
+                "_event_context",
+                return_value=self._ai_context(),
+            ),
+            patch.object(
+                event_landing_builder.OpenAIClient,
+                "from_settings",
+                return_value=client,
+            ),
+            patch.object(
+                event_landing_builder,
+                "get_db",
+                side_effect=lambda: nullcontext(object()),
+            ),
+            patch.object(
+                event_landing_builder,
+                "EventLandingRepository",
+                return_value=repository,
+            ),
+        ):
+            result = event_landing_builder.generate_event_landing_ai(
+                actor=actor,
+                event_id="event",
+                expected_revision=1,
+            )
+
+        self.assertIs(result, stored)
+        self.assertEqual(client.chat.call_count, 1)
+        repository.complete_ai_generation.assert_called_once()
+        self.assertEqual(result.draft_source, "ai")
+
+    def test_duplicate_planning_claim_never_calls_provider_twice(self) -> None:
+        actor = SimpleNamespace()
+        safe = SimpleNamespace(draft=_landing(), revision=1)
+        client = SimpleNamespace(chat=Mock())
+        repository = Mock()
+        repository.claim_ai_generation.return_value = EventLandingAIClaim(
+            created=False,
+            status="planning",
+            base_revision=1,
+            claim_digest="a" * 64,
+        )
+        with (
+            patch.object(
+                event_landing_builder,
+                "get_event_landing_profile",
+                return_value=safe,
+            ),
+            patch.object(
+                event_landing_builder,
+                "_event_context",
+                return_value=self._ai_context(),
+            ),
+            patch.object(
+                event_landing_builder.OpenAIClient,
+                "from_settings",
+                return_value=client,
+            ),
+            patch.object(
+                event_landing_builder,
+                "get_db",
+                side_effect=lambda: nullcontext(object()),
+            ),
+            patch.object(
+                event_landing_builder,
+                "EventLandingRepository",
+                return_value=repository,
+            ),
+        ):
             with self.assertRaisesRegex(
                 event_landing_builder.EventLandingAIUnavailable,
                 "уже создаётся",
@@ -902,8 +951,54 @@ class EventLandingApplicationTests(unittest.TestCase):
                 event_landing_builder.generate_event_landing_ai(
                     actor=actor,
                     event_id="event",
+                    expected_revision=1,
                 )
         client.chat.assert_not_called()
+
+    def test_successful_old_confirmation_is_terminal_without_provider_replay(self) -> None:
+        actor = SimpleNamespace()
+        current = SimpleNamespace(draft=_landing("AI результат"), revision=2)
+        client = SimpleNamespace(chat=Mock())
+        repository = Mock()
+        repository.ai_generation_state.return_value = EventLandingAIClaim(
+            created=False,
+            status="ready",
+            base_revision=1,
+            claim_digest="d" * 64,
+        )
+        with (
+            patch.object(
+                event_landing_builder,
+                "get_event_landing_profile",
+                return_value=current,
+            ),
+            patch.object(
+                event_landing_builder.OpenAIClient,
+                "from_settings",
+                return_value=client,
+            ),
+            patch.object(
+                event_landing_builder,
+                "get_db",
+                side_effect=lambda: nullcontext(object()),
+            ),
+            patch.object(
+                event_landing_builder,
+                "EventLandingRepository",
+                return_value=repository,
+            ),
+        ):
+            with self.assertRaisesRegex(
+                event_landing_builder.EventLandingAIUnavailable,
+                "уже создан",
+            ):
+                event_landing_builder.generate_event_landing_ai(
+                    actor=actor,
+                    event_id="event",
+                    expected_revision=1,
+                )
+        client.chat.assert_not_called()
+        repository.claim_ai_generation.assert_not_called()
 
     def test_invalid_ai_output_marks_claim_ambiguous_without_draft_write(self) -> None:
         actor = SimpleNamespace()
@@ -923,7 +1018,7 @@ class EventLandingApplicationTests(unittest.TestCase):
         with (
             patch.object(
                 event_landing_builder,
-                "ensure_event_landing_draft",
+                "get_event_landing_profile",
                 return_value=safe,
             ),
             patch.object(
@@ -954,29 +1049,23 @@ class EventLandingApplicationTests(unittest.TestCase):
                 event_landing_builder.generate_event_landing_ai(
                     actor=actor,
                     event_id="event",
+                    expected_revision=1,
                 )
         repository.mark_ai_generation_ambiguous.assert_called_once()
         repository.complete_ai_generation.assert_not_called()
 
     def test_ai_unavailable_never_claims_egress(self) -> None:
-        safe = SimpleNamespace(draft=_landing(), revision=1)
         with (
-            patch.object(
-                event_landing_builder,
-                "ensure_event_landing_draft",
-                return_value=safe,
-            ),
-            patch.object(
-                event_landing_builder,
-                "_event_context",
-                return_value=self._ai_context(),
-            ),
             patch.object(
                 event_landing_builder.OpenAIClient,
                 "from_settings",
                 return_value=None,
             ),
             patch.object(event_landing_builder, "get_db") as database,
+            patch.object(
+                event_landing_builder,
+                "get_event_landing_profile",
+            ) as profile,
         ):
             with self.assertRaisesRegex(
                 event_landing_builder.EventLandingAIUnavailable,
@@ -985,8 +1074,10 @@ class EventLandingApplicationTests(unittest.TestCase):
                 event_landing_builder.generate_event_landing_ai(
                     actor=SimpleNamespace(),
                     event_id="event",
+                    expected_revision=1,
                 )
         database.assert_not_called()
+        profile.assert_not_called()
 
 
 class EventLandingPrivacyTests(unittest.TestCase):
