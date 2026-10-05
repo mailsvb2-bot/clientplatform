@@ -60,6 +60,7 @@ from clientplatform.application.event_landing_builder import (
     prepare_event_landing_ai_confirmation,
     publish_event_landing,
     reset_event_landing_template,
+    resolve_event_landing_ai_ambiguity,
     restore_simple_event_landing,
     set_event_landing_theme,
     update_event_landing_section,
@@ -260,6 +261,13 @@ def _landing_editor_text(item: object, profile: object) -> str:
     else:
         status = "⚪️ Публично работает простой лендинг; продающая версия пока в черновике."
     subtitle = draft.hero_subtitle[:320] + ("…" if len(draft.hero_subtitle) > 320 else "")
+    ai_warning = (
+        "\n\n⚠️ Предыдущий AI-запрос завершился неоднозначно: провайдер мог принять "
+        "и тарифицировать запрос, но ClientPlatform не получил подтверждённый результат. "
+        "Автоматический повтор заблокирован."
+        if profile.ai_status == "ambiguous"
+        else ""
+    )
     return (
         f"🌐 Лендинг вебинара\n\n{item.title}\n\n"
         f"{status}\n"
@@ -273,10 +281,17 @@ def _landing_editor_text(item: object, profile: object) -> str:
         "AI и ручные правки меняют только черновик. Публичная страница изменится "
         "только после отдельной кнопки «🚀 Опубликовать». Перед внешним AI-вызовом "
         "будет отдельное подтверждение; повтор той же ревизии не запускает второй вызов."
+        + ai_warning
     )
 
 
-def _landing_editor_rows(*, event_id: str, business_id: str, published: bool):
+def _landing_editor_rows(
+    *,
+    event_id: str,
+    business_id: str,
+    published: bool,
+    ai_status: str | None,
+):
     event_token = control._uuid_token(event_id)
     business_token = control._uuid_token(business_id)
     rows = [
@@ -301,6 +316,15 @@ def _landing_editor_rows(*, event_id: str, business_id: str, published: bool):
         [("👁 Предпросмотр", f"cpev:lp:{event_token}:{business_token}")],
         [("🚀 Опубликовать", f"cpev:lx:{event_token}:{business_token}")],
     ]
+    if ai_status == "ambiguous":
+        rows.append(
+            [
+                (
+                    "⚠️ Разобраться с AI-вызовом",
+                    f"cpev:lar:{event_token}:{business_token}",
+                )
+            ]
+        )
     if published:
         rows.append(
             [("↩️ Вернуть простой лендинг", f"cpev:ls:{event_token}:{business_token}")]
@@ -337,6 +361,7 @@ async def _send_event_landing_editor(
                 event_id=event_id,
                 business_id=business_id,
                 published=profile.is_published,
+                ai_status=profile.ai_status,
             )
         ),
     )
@@ -1094,6 +1119,86 @@ async def generate_event_landing(callback: CallbackQuery) -> None:
         await target.answer("Не удалось безопасно создать AI-версию. Текущий черновик не изменён.")
     else:
         await target.answer("✨ AI-черновик готов. Публичная страница ещё не изменена.")
+    await _send_event_landing_editor(
+        target,
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+        event_id=event_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:lar:"))
+async def explain_event_landing_ai_ambiguity(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":", 3)
+    if len(parts) != 4:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[2])
+    business_id = control._token_uuid(parts[3])
+    try:
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        actor.assert_can_manage_business()
+        profile = await asyncio.to_thread(
+            get_event_landing_editor_state,
+            actor=actor,
+            event_id=event_id,
+        )
+        if profile.ai_status != "ambiguous":
+            await callback.answer("Неопределённого AI-вызова уже нет", show_alert=True)
+            return
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        await callback.answer("Не удалось проверить AI-вызов", show_alert=True)
+        return
+    await callback.answer()
+    event_token = control._uuid_token(event_id)
+    business_token = control._uuid_token(business_id)
+    await control._callback_message(callback).answer(
+        "⚠️ Неоднозначный AI-вызов\n\n"
+        "Предыдущий запрос мог быть принят и тарифицирован AI-провайдером, но "
+        "ClientPlatform не получил достоверный итог. Поэтому автоматический повтор "
+        "заблокирован.\n\n"
+        "Разблокируйте новую попытку только если вы проверили состояние у провайдера "
+        "или осознанно принимаете риск повторного списания. Эта операция сама AI не запускает.",
+        reply_markup=control._keyboard(
+            [
+                [
+                    (
+                        "✅ Разблокировать новую AI-попытку",
+                        f"cpev:larok:{event_token}:{business_token}",
+                    )
+                ],
+                [("🌐 К конструктору", f"cpev:landing:{event_token}:{business_token}")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:larok:"))
+async def resolve_event_landing_ai_ambiguity_callback(
+    callback: CallbackQuery,
+) -> None:
+    parts = str(callback.data or "").split(":", 3)
+    if len(parts) != 4:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[2])
+    business_id = control._token_uuid(parts[3])
+    target = control._callback_message(callback)
+    try:
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        await asyncio.to_thread(
+            resolve_event_landing_ai_ambiguity,
+            actor=actor,
+            event_id=event_id,
+        )
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        await callback.answer("Не удалось снять AI-блокировку", show_alert=True)
+        return
+    await callback.answer("AI-блокировка снята")
+    await target.answer(
+        "✅ Блокировка снята. AI сейчас не запускался. Для новой попытки снова "
+        "нажмите «✨ Создать AI-версию» и отдельно подтвердите внешний вызов."
+    )
     await _send_event_landing_editor(
         target,
         user_id=int(callback.from_user.id),
