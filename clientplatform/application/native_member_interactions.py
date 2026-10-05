@@ -3579,16 +3579,19 @@ def _event_announcement_message(
         modes = get_event_content_plan(actor=actor, event_id=event_id)
         visual_prepared = False
         if modes.event_day is not EventContentMode.TEXT:
-            prepared = prepare_event_stage_visual(
-                actor=actor,
-                event_id=event_id,
-                stage=EventContentStage.EVENT_DAY,
-                message_key="announcement",
-                event_title=draft.title,
-                message_text=draft.text,
-            )
+            try:
+                prepared = prepare_event_stage_visual(
+                    actor=actor,
+                    event_id=event_id,
+                    stage=EventContentStage.EVENT_DAY,
+                    message_key="announcement",
+                    event_title=draft.title,
+                    message_text=draft.text,
+                )
+            except (TenantPermissionDenied, ValueError, RuntimeError, VisualCreativeError):
+                prepared = None
             visual_prepared = prepared is not None
-    except (TenantPermissionDenied, ValueError, RuntimeError, VisualCreativeError):
+    except (TenantPermissionDenied, ValueError, RuntimeError):
         return CustomerInteractionMessage(
             text="Не удалось подготовить анонс. Вернитесь к вебинарам и попробуйте ещё раз.",
             rows=((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), _back_row()),
