@@ -97,7 +97,7 @@ def get_event_promotion_snapshot(
             event_id=normalized_event_id,
         ),
         provider_label=str(event.provider_label or event.provider_key or "площадка"),
-        join_ready=bool(event.join_ready),
+        join_ready=bool(event.join_is_ready),
         landing_published=bool(landing is not None and landing.is_published),
         registrations=value("registrations", 0),
         registrations_from_ads=value("registrations_from_ads", 1),
