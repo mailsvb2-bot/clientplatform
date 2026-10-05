@@ -66,13 +66,15 @@ AI не имеет права самостоятельно публиковат�
 
 ## Защита платного AI-вызова
 
-До egress создаётся durable claim, привязанный к event + revision + normalized input digest.
+До egress создаётся durable confirmation receipt, привязанный к event + конкретной draft revision + normalized input digest. Подтверждающая кнопка несёт именно эту revision; provider egress разрешён только переходом `confirming -> planning` для того же receipt.
 
-Повторный callback той же ревизии:
+Повторный callback:
 
-- не запускает второй provider call, если первый ещё planning;
-- не запускает автоматический повтор после ambiguous outcome;
-- требует новую draft revision перед новой попыткой после ambiguous outcome.
+- не запускает второй provider call, если первый ещё `planning`;
+- после успешного `ready` старое подтверждение является терминальным и не может переиспользовать новую draft revision;
+- если процесс исчез после возможной отправки запроса и `planning` протухает, состояние переводится в `ambiguous`, а не перезапускается;
+- `ambiguous` сохраняется даже при обычном редактировании draft;
+- новая AI-попытка после `ambiguous` возможна только после отдельного owner action «Разобраться с AI-вызовом» → явного подтверждения разблокировки риска повторного списания; сама разблокировка AI не запускает.
 
 Если владелец меняет draft во время AI-вызова, stale AI result не может перезаписать новую ревизию.
 
@@ -115,8 +117,10 @@ Owner builder доступен через тот же application/domain contrac
 - preview TTL/revision;
 - tenant isolation и live membership re-authorization;
 - CAS и stale writes;
-- AI claim idempotency;
-- ambiguous AI egress;
+- durable AI confirmation/revision binding;
+- terminal successful AI receipt and stale-button replay;
+- abandoned `planning -> ambiguous` recovery;
+- persistent ambiguous lock + explicit owner resolution;
 - stale AI completion;
 - data minimization;
 - optional-schema rollout;
