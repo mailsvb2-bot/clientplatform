@@ -440,9 +440,10 @@ class EventLandingTelegramPresentationTests(unittest.TestCase):
             show_alert=True,
         )
 
-        resolve, _ = _callback("cpev:larok:evt:biz")
+        resolve, resolve_target = _callback("cpev:larok:evt:biz")
         with (
             patch.object(events.control, "_token_uuid", side_effect=_token_uuid),
+            patch.object(events.control, "_callback_message", return_value=resolve_target),
             patch.object(
                 events.control,
                 "_actor",
