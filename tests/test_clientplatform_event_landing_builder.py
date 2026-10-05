@@ -684,6 +684,38 @@ class EventLandingApplicationTests(unittest.TestCase):
             True,
         )
 
+    def test_ai_input_excludes_business_contacts_and_source_assets(self) -> None:
+        details = BusinessProfileDetails(
+            services=("Групповая программа",),
+            audiences=("Взрослые 30–50 лет",),
+            contacts=("owner@example.test", "+79990000000"),
+            source_urls=("https://example.test/private-source",),
+            visual_assets=("s3://private/bucket/asset.png",),
+            tone_of_voice="спокойный",
+        )
+        payload = event_landing_builder._landing_ai_input(
+            current=SimpleNamespace(draft=_landing()),
+            event=SimpleNamespace(
+                kind="webinar",
+                title="Вебинар",
+                description="Описание",
+                timezone_name="Europe/Moscow",
+                local_start_label=lambda: "08.10.2026 18:00",
+            ),
+            sessions=(),
+            business_name="Практика Баланс",
+            profile=SimpleNamespace(activity_description="Образовательные программы"),
+            details=details,
+            details_confirmed=True,
+        )
+        facts = payload["business"]["confirmed_marketing_facts"]
+        self.assertEqual(facts["services"], ["Групповая программа"])
+        self.assertEqual(facts["audiences"], ["Взрослые 30–50 лет"])
+        self.assertEqual(facts["tone_of_voice"], "спокойный")
+        self.assertNotIn("contacts", facts)
+        self.assertNotIn("source_urls", facts)
+        self.assertNotIn("visual_assets", facts)
+
     def test_ai_generation_uses_one_claimed_call_and_saves_only_draft(self) -> None:
         actor = SimpleNamespace()
         safe = SimpleNamespace(draft=_landing("Безопасный черновик"), revision=1)
