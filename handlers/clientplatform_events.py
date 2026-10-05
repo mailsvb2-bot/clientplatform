@@ -41,6 +41,7 @@ from clientplatform.application.event_warmups import (
     set_event_warmup_text,
 )
 from clientplatform.application.events import set_event_join_target
+from clientplatform.application.event_promotion import get_event_promotion_snapshot
 from clientplatform.application.event_owner_flow import (
     OnlineEventCreateRequest,
     create_and_publish_online_event,
@@ -168,8 +169,8 @@ def _announcement_share_markup(
         [
             [
                 InlineKeyboardButton(
-                    text="📣 Запустить рекламу",
-                    callback_data=f"cpj:promote:{business_token}",
+                    text="📢 Продвигать вебинар",
+                    callback_data=f"cpev:promote:{event_token}:{business_token}",
                 )
             ],
             [
@@ -430,6 +431,7 @@ def _content_plan_rows(
         rows.append([("📨 Настроить сообщения до вебинара", f"cpev:ws:{event_token}:{business_token}")])
     rows.extend(
         [
+            [("📢 Продвижение вебинара", f"cpev:promote:{event_token}:{business_token}")],
             [("🌐 Продающий лендинг", f"cpev:landing:{event_token}:{business_token}")],
             [("✨ Анонс", f"cpev:announce:{event_token}:{business_token}")],
             [("💬 Тексты дожима", f"cpev:fp:{event_token}:{business_token}")],
@@ -1019,6 +1021,97 @@ async def open_event_hub(
             direction_id=context.direction_id,
             direction_title=context.title,
         )
+
+
+@router.callback_query(F.data.startswith("cpev:promote:"))
+async def open_event_promotion(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":", 3)
+    if len(parts) != 4:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[2])
+    business_id = control._token_uuid(parts[3])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    try:
+        snapshot = await asyncio.to_thread(
+            get_event_promotion_snapshot,
+            actor=actor,
+            event_id=event_id,
+            public_base_url=_public_base_url(),
+        )
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        await callback.answer("Не удалось открыть продвижение вебинара", show_alert=True)
+        return
+
+    event_token = control._uuid_token(event_id)
+    business_token = control._uuid_token(business_id)
+    landing = "✅ опубликован" if snapshot.landing_published else "⚪ продающая версия не опубликована"
+    venue = (
+        f"✅ {snapshot.provider_label}"
+        if snapshot.join_ready
+        else "⚪ ссылка на площадку ещё не добавлена"
+    )
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        f"📢 Продвижение вебинара\n\n{snapshot.title}\n\n"
+        f"🌐 Лендинг: {landing}\n"
+        f"🎥 Площадка эфира: {venue}\n"
+        f"👥 Регистраций: {snapshot.registrations}\n"
+        f"📣 Из рекламы: {snapshot.registrations_from_ads}\n\n"
+        "Путь: объявление/креатив → продающий лендинг → регистрация → "
+        "напоминания → площадка эфира.\n\n"
+        f"🔗 Ссылка для рекламы:\n{snapshot.advertising_url}\n\n"
+        "Это ссылка именно этого вебинара; она не переводит Вас в рекламу "
+        "свободных booking-слотов.",
+        reply_markup=control._keyboard(
+            [
+                [("🌐 Продающий лендинг", f"cpev:landing:{event_token}:{business_token}")],
+                [("✨ Анонс и креатив", f"cpev:announce:{event_token}:{business_token}")],
+                [("📡 Яндекс Директ", f"cpev:py:{event_token}:{business_token}")],
+                [("🔗 Площадка эфира", f"cpev:join:{event_token}:{business_token}")],
+                [("🗓 Контент-план", f"cpev:content:{event_token}:{business_token}")],
+                [(BACK_TO_EVENTS_LABEL, f"cpev:home:{business_token}")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:py:"))
+async def open_event_yandex_promotion(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":", 3)
+    if len(parts) != 4:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[2])
+    business_id = control._token_uuid(parts[3])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    try:
+        snapshot = await asyncio.to_thread(
+            get_event_promotion_snapshot,
+            actor=actor,
+            event_id=event_id,
+            public_base_url=_public_base_url(),
+        )
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        await callback.answer("Не удалось открыть рекламу вебинара", show_alert=True)
+        return
+
+    event_token = control._uuid_token(event_id)
+    business_token = control._uuid_token(business_id)
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        f"📡 Яндекс Директ · вебинар\n\n{snapshot.title}\n\n"
+        f"Посадочная страница объявления:\n{snapshot.advertising_url}\n\n"
+        "Используйте именно эту event-ссылку: source=ads и campaign_ref "
+        "конкретного мероприятия сохраняются при регистрации. "
+        "Так вебинар не смешивается с записью на услуги.",
+        reply_markup=control._keyboard(
+            [
+                [("⚙️ Кабинет Яндекс Директ", f"cpa:home:{business_token}")],
+                [("📢 К продвижению вебинара", f"cpev:promote:{event_token}:{business_token}")],
+            ]
+        ),
+    )
 
 
 @router.callback_query(F.data.startswith("cpev:landing:"))
@@ -2095,6 +2188,12 @@ async def receive_event_details(message: Message, state: FSMContext) -> None:
         )
         event_rows.append(
             [(
+                "📢 Продвижение вебинара",
+                f"cpev:promote:{control._uuid_token(created_event_id)}:{token}",
+            )]
+        )
+        event_rows.append(
+            [(
                 "✨ Сделать анонс",
                 f"cpev:announce:{control._uuid_token(created_event_id)}:{token}",
             )]
@@ -2187,6 +2286,12 @@ async def receive_event_time(message: Message, state: FSMContext) -> None:
         )
         event_rows.append(
             [(
+                "📢 Продвижение вебинара",
+                f"cpev:promote:{control._uuid_token(created_event_id)}:{token}",
+            )]
+        )
+        event_rows.append(
+            [(
                 "✨ Сделать анонс",
                 f"cpev:announce:{control._uuid_token(created_event_id)}:{token}",
             )]
@@ -2230,7 +2335,8 @@ async def create_event_announcement(callback: CallbackQuery) -> None:
         vk_url = draft.registration_url(public_base_url=public_base, source="vk")
         max_url = draft.registration_url(public_base_url=public_base, source="max")
         advertising_url = draft.registration_url(
-            public_base_url=public_base, source="ads"
+            public_base_url=public_base,
+            source="ads",
         )
     except (TenantPermissionDenied, ValueError, RuntimeError):
         await callback.answer("Не удалось подготовить анонс", show_alert=True)

@@ -64,6 +64,7 @@ from clientplatform.application.event_followups import (
     reset_event_followup_text,
     set_event_followup_text,
 )
+from clientplatform.application.event_promotion import get_event_promotion_snapshot
 from clientplatform.application.event_landing_builder import (
     EventLandingAIUnavailable,
     EventLandingEditorState,
@@ -879,6 +880,8 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "events",
             "event-settings",
             "event-content",
+            "event-promote",
+            "event-promote-yandex",
             "event-landing",
             "event-landing-ai",
             "event-landing-ai-confirm",
@@ -1433,6 +1436,8 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "events": "cpm:growth",
     "event-settings": "cpm:events",
     "event-content": "cpm:events",
+    "event-promote": "cpm:events",
+    "event-promote-yandex": "cpm:events",
     "event-landing": "cpm:events",
     "event-landing-ai": "cpm:events",
     "event-landing-ai-confirm": "cpm:events",
@@ -1713,7 +1718,8 @@ def _with_parent_navigation(
     if parsed.action == "events":
         back_label = BACK_TO_GROWTH_LABEL
     elif parsed.action in {
-        "event-settings", "event-content", "event-landing", "event-landing-ai", "event-landing-ai-confirm",
+        "event-settings", "event-content", "event-promote", "event-promote-yandex",
+        "event-landing", "event-landing-ai", "event-landing-ai-confirm",
         "event-landing-ai-resolve", "event-landing-ai-resolve-confirm",
         "event-landing-texts", "event-landing-more", "event-landing-style",
         "event-landing-theme", "event-landing-edit", "event-landing-edit-text",
@@ -3193,6 +3199,7 @@ def _event_content_message(
         warmup_text = "не настроен"
     rows.extend(
         [
+            (_button("📢 Продвижение вебинара", f"cpm:event-promote:{event_id}"),),
             (_button("🌐 Продающий лендинг", f"cpm:event-landing:{event_id}"),),
             (_button("✨ Анонс", f"cpm:event-announce:{event_id}"),),
             (_button("💬 Тексты дожима", f"cpm:event-content-followups:{event_id}"),),
@@ -3453,6 +3460,94 @@ def _event_channel_action(
     return _event_settings_message(actor)
 
 
+def _event_promotion_message(
+    actor: TenantContext,
+    event_id: str,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    public_base = str(getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "") or "").strip()
+    try:
+        snapshot = get_event_promotion_snapshot(
+            actor=actor,
+            event_id=event_id,
+            public_base_url=public_base,
+        )
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        return CustomerInteractionMessage(
+            text=(
+                "📢 Продвижение вебинара\n\n"
+                "Не удалось безопасно собрать маршрут продвижения. "
+                "Проверьте публичный HTTPS-адрес и откройте вебинар заново."
+            ),
+            rows=((_button("🗓 К вебинарам", "cpm:events"),),),
+        )
+
+    landing = "✅ опубликован" if snapshot.landing_published else "⚪ продающая версия не опубликована"
+    venue = (
+        f"✅ {snapshot.provider_label}"
+        if snapshot.join_ready
+        else "⚪ ссылка на площадку ещё не добавлена"
+    )
+    return CustomerInteractionMessage(
+        text=(
+            f"📢 Продвижение вебинара\n\n{snapshot.title}\n\n"
+            f"🌐 Лендинг: {landing}\n"
+            f"🎥 Площадка эфира: {venue}\n"
+            f"👥 Регистраций: {snapshot.registrations}\n"
+            f"📣 Из рекламы: {snapshot.registrations_from_ads}\n\n"
+            "Канонический путь: объявление/креатив → продающий лендинг → "
+            "регистрация → напоминания → площадка эфира.\n\n"
+            f"🔗 Ссылка для рекламы:\n{snapshot.advertising_url}\n\n"
+            "Эта ссылка относится именно к вебинару и не переводит пользователя "
+            "в мастер рекламы свободных booking-слотов."
+        ),
+        rows=(
+            (_button("🌐 Продающий лендинг", f"cpm:event-landing:{event_id}"),),
+            (_button("✨ Анонс и креатив", f"cpm:event-announce:{event_id}"),),
+            (_button("📡 Яндекс Директ", f"cpm:event-promote-yandex:{event_id}"),),
+            (_button("🔗 Площадка эфира", f"cpm:event-join:{event_id}"),),
+            (_button("🗓 Контент-план", f"cpm:event-content:{event_id}"),),
+        ),
+    )
+
+
+def _event_promotion_yandex_message(
+    actor: TenantContext,
+    event_id: str,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    public_base = str(getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "") or "").strip()
+    try:
+        snapshot = get_event_promotion_snapshot(
+            actor=actor,
+            event_id=event_id,
+            public_base_url=public_base,
+        )
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        return _stale_message()
+
+    active = _active_yandex_connection(actor)
+    status = (
+        f"✅ подключён · {active.external_login}"
+        if active is not None
+        else "⚪ кабинет ещё не подтверждён в ClientPlatform"
+    )
+    return CustomerInteractionMessage(
+        text=(
+            f"📡 Яндекс Директ · вебинар\n\n{snapshot.title}\n\n"
+            f"Кабинет: {status}\n\n"
+            f"Посадочная страница объявления:\n{snapshot.advertising_url}\n\n"
+            "Для вебинара используйте именно эту event-ссылку. Она сохраняет "
+            "source=ads и campaign_ref конкретного мероприятия; регистрация остаётся "
+            "в event CRM и не смешивается с записью на услуги."
+        ),
+        rows=(
+            (_button("📣 Рекламные каналы", "cpm:ad-channels"),),
+            (_button("📢 К продвижению вебинара", f"cpm:event-promote:{event_id}"),),
+        ),
+    )
+
+
 def _event_announcement_message(
     actor: TenantContext,
     event_id: str,
@@ -3491,7 +3586,11 @@ def _event_announcement_message(
             "Ссылку для рекламы можно вставить в рекламный кабинет, сайт или пост. "
             "ClientPlatform отдельно сохранит источник ads; обычная регистрационная ссылка помечена текущим каналом."
         ),
-        rows=((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), _back_row()),
+        rows=(
+            (_button("🎨 Картинка / видео", "cpm:ai-visuals"),),
+            (_button("📢 Продвигать вебинар", f"cpm:event-promote:{event_id}"),),
+            (_button("🗓 Контент-план", f"cpm:event-content:{event_id}"),),
+        ),
     )
 
 
@@ -8177,6 +8276,14 @@ def _render(
             if len(parsed.args) != 1:
                 return _stale_message()
             return _event_content_message(actor, parsed.args[0])
+        if parsed.action == "event-promote":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _event_promotion_message(actor, parsed.args[0])
+        if parsed.action == "event-promote-yandex":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _event_promotion_yandex_message(actor, parsed.args[0])
         if parsed.action == "event-landing":
             if len(parsed.args) != 1:
                 return _stale_message()

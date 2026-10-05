@@ -164,6 +164,8 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpo:ads:",
         "cpev:home:",
         "cpev:settings:",
+        "cpev:promote:",
+        "cpev:py:",
         "cpev:landing:",
         "cpev:lar:",
         "cpev:edit:",
@@ -191,6 +193,8 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpo:ads:",
         "cpev:home:",
         "cpev:settings:",
+        "cpev:promote:",
+        "cpev:py:",
         "cpev:landing:",
         "cpev:lar:",
         # Calendar browsing/selection is idempotent UI state. Telegram Web may

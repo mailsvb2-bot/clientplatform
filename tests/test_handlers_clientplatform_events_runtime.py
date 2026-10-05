@@ -332,6 +332,10 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             rows[2],
+            [("📢 Продвижение вебинара", f"cpev:promote:{EVENT_TOKEN}:{TOKEN}")],
+        )
+        self.assertEqual(
+            rows[3],
             [("✨ Сделать анонс", f"cpev:announce:{EVENT_TOKEN}:{TOKEN}")],
         )
 

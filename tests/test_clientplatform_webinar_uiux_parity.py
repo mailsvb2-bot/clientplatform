@@ -416,10 +416,68 @@ def test_native_content_plan_exposes_sales_landing_builder_without_expanding_hub
         )
     commands = _commands(message)
     assert (
+        "📢 Продвижение вебинара",
+        "cpm:event-promote:33333333-3333-4333-8333-333333333333",
+    ) in commands
+    assert (
         "🌐 Продающий лендинг",
         "cpm:event-landing:33333333-3333-4333-8333-333333333333",
     ) in commands
     assert len(event_hub_actions(snapshot)) <= 8
+
+
+def test_native_event_promotion_is_event_scoped_and_exposes_full_funnel() -> None:
+    actor = _actor()
+    event_id = "33333333-3333-4333-8333-333333333333"
+    promotion = SimpleNamespace(
+        title="Вебинар",
+        advertising_url=(
+            "https://client.example.test/e/demo?"
+            "source=ads&campaign_ref=event%3A33333333-3333-4333-8333-333333333333"
+        ),
+        provider_label="Webinar.ru",
+        join_ready=True,
+        landing_published=True,
+        registrations=11,
+        registrations_from_ads=6,
+    )
+    with patch.object(
+        native_ui,
+        "get_event_promotion_snapshot",
+        return_value=promotion,
+    ):
+        message = native_ui._event_promotion_message(actor, event_id)
+
+    assert "Из рекламы: 6" in message.text
+    assert promotion.advertising_url in message.text
+    commands = _commands(message)
+    assert ("🌐 Продающий лендинг", f"cpm:event-landing:{event_id}") in commands
+    assert ("✨ Анонс и креатив", f"cpm:event-announce:{event_id}") in commands
+    assert ("📡 Яндекс Директ", f"cpm:event-promote-yandex:{event_id}") in commands
+    assert ("🔗 Площадка эфира", f"cpm:event-join:{event_id}") in commands
+    assert not any("ad-offer" in command for _, command in commands)
+
+
+def test_native_event_yandex_screen_preserves_event_destination() -> None:
+    actor = _actor()
+    event_id = "33333333-3333-4333-8333-333333333333"
+    promotion = SimpleNamespace(
+        title="Вебинар",
+        advertising_url="https://client.example.test/e/demo?source=ads",
+    )
+    active = SimpleNamespace(external_login="owner-login")
+    with (
+        patch.object(native_ui, "get_event_promotion_snapshot", return_value=promotion),
+        patch.object(native_ui, "_active_yandex_connection", return_value=active),
+    ):
+        message = native_ui._event_promotion_yandex_message(actor, event_id)
+
+    assert "owner-login" in message.text
+    assert promotion.advertising_url in message.text
+    commands = _commands(message)
+    assert ("📣 Рекламные каналы", "cpm:ad-channels") in commands
+    assert not any(command == "cpm:ad-spend" for _, command in commands)
+    assert ("📢 К продвижению вебинара", f"cpm:event-promote:{event_id}") in commands
 
 
 def test_native_landing_builder_has_explicit_ai_confirmation_and_bounded_buttons() -> None:
@@ -477,6 +535,11 @@ def test_native_landing_builder_has_explicit_ai_confirmation_and_bounded_buttons
 def test_native_landing_commands_are_parseable_for_vk_and_max_shared_renderer() -> None:
     event_id = "33333333-3333-4333-8333-333333333333"
     cases = {
+        f"cpm:event-promote:{event_id}": ("event-promote", (event_id,)),
+        f"cpm:event-promote-yandex:{event_id}": (
+            "event-promote-yandex",
+            (event_id,),
+        ),
         f"cpm:event-landing:{event_id}": ("event-landing", (event_id,)),
         f"cpm:event-landing-ai:{event_id}": ("event-landing-ai", (event_id,)),
         f"cpm:event-landing-ai-confirm:{event_id}:1": (
