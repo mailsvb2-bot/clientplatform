@@ -2195,12 +2195,6 @@ async def receive_event_details(message: Message, state: FSMContext) -> None:
         )
         event_rows.append(
             [(
-                "📢 Продвижение вебинара",
-                f"cpev:promote:{control._uuid_token(created_event_id)}:{token}",
-            )]
-        )
-        event_rows.append(
-            [(
                 "✨ Сделать анонс",
                 f"cpev:announce:{control._uuid_token(created_event_id)}:{token}",
             )]
@@ -2293,6 +2287,12 @@ async def receive_event_time(message: Message, state: FSMContext) -> None:
         )
         event_rows.append(
             [(
+                "📢 Продвижение вебинара",
+                f"cpev:promote:{control._uuid_token(created_event_id)}:{token}",
+            )]
+        )
+        event_rows.append(
+            [(
                 "✨ Сделать анонс",
                 f"cpev:announce:{control._uuid_token(created_event_id)}:{token}",
             )]
@@ -2335,9 +2335,13 @@ async def create_event_announcement(callback: CallbackQuery) -> None:
         )
         vk_url = draft.registration_url(public_base_url=public_base, source="vk")
         max_url = draft.registration_url(public_base_url=public_base, source="max")
-        advertising_url = draft.registration_url(
-            public_base_url=public_base, source="ads"
+        promotion = await asyncio.to_thread(
+            get_event_promotion_snapshot,
+            actor=actor,
+            event_id=event_id,
+            public_base_url=public_base,
         )
+        advertising_url = promotion.advertising_url
     except (TenantPermissionDenied, ValueError, RuntimeError):
         await callback.answer("Не удалось подготовить анонс", show_alert=True)
         return
