@@ -66,6 +66,7 @@ from clientplatform.application.event_followups import (
 )
 from clientplatform.application.event_landing_builder import (
     EventLandingAIUnavailable,
+    EventLandingEditorState,
     generate_event_landing_ai,
     get_event_landing_editor_state,
     issue_event_landing_preview,
