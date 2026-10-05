@@ -1191,6 +1191,7 @@ def _owner_input_invalid_message(action: str) -> CustomerInteractionMessage:
         "event_schedule": "Пришлите новое расписание: одна строка на каждый эфир в формате ДД.ММ.ГГГГ ЧЧ:ММ-ЧЧ:ММ.",
         "event_warmup_text": "Пришлите новый текст сообщения до вебинара одним сообщением длиной до 3500 символов.",
         "event_followup_text": "Пришлите новый текст дожима одним сообщением длиной до 3500 символов.",
+        "event_landing_section": "Проверьте формат редактируемого блока лендинга и отправьте текст ещё раз.",
         "event_warmup_days": "Пришлите допустимое число дней сообщений до вебинара.",
         "price": "Напишите сумму и валюту, например: 5000 RUB.",
         "payment": "Напишите сумму и валюту, например: 3500 RUB | консультация.",
@@ -1199,7 +1200,7 @@ def _owner_input_invalid_message(action: str) -> CustomerInteractionMessage:
     }.get(action, "Проверьте ответ и попробуйте ещё раз.")
     exit_hint = (
         "Чтобы выйти без изменений, отправьте «Отмена» или нажмите «🎥 К вебинарам»."
-        if action in {"online_event", "event_schedule", "event_warmup_text", "event_followup_text", "event_warmup_days"}
+        if action in {"online_event", "event_schedule", "event_warmup_text", "event_followup_text", "event_landing_section", "event_warmup_days"}
         else "Чтобы выйти без изменений, отправьте «Отмена»."
     )
     return CustomerInteractionMessage(
