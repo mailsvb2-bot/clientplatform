@@ -10,6 +10,7 @@ already persisted with the registration.
 """
 
 from dataclasses import dataclass
+import sqlite3
 from urllib.parse import quote, urlencode
 
 from clientplatform.domain.tenancy import TenantContext, normalize_uuid
@@ -62,10 +63,19 @@ def get_event_promotion_snapshot(
     normalized_event_id = normalize_uuid(event_id, field_name="event_id")
     with get_db_ro() as conn:
         event = EventRepository(conn).get(actor=actor, event_id=normalized_event_id)
-        landing = EventLandingRepository(conn).get(
-            actor=actor,
-            event_id=normalized_event_id,
-        )
+        try:
+            landing = EventLandingRepository(conn).get(
+                actor=actor,
+                event_id=normalized_event_id,
+            )
+        except sqlite3.OperationalError as exc:
+            detail = str(exc).casefold()
+            if (
+                "no such table" not in detail
+                or "clientplatform_event_landing_profiles" not in detail
+            ):
+                raise
+            landing = None
         row = conn.execute(
             """
             SELECT
