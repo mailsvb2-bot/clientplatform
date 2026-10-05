@@ -1084,3 +1084,54 @@ def test_yandex_scene_contract_preserves_exact_requested_visible_text() -> None:
     assert adapted.prompt.startswith("красная чашка")
     assert "Точный запрошенный текст в кадре" in adapted.prompt
     assert "СКИДКА" in adapted.prompt
+
+
+def test_yandex_responses_receives_full_selected_art_direction() -> None:
+    request = "ёж слушает ресурсное аудио и постепенно становится добрым и пушистым"
+    contract = VisualSceneContract(
+        version=1,
+        topology="transformation",
+        primary_subject="ёж",
+        initial_state=("колючий",),
+        actions=("слушает ресурсное аудио",),
+        cause="слушает ресурсное аудио",
+        transition=("становится",),
+        final_state=("добрым", "пушистым"),
+        explicit_text=(),
+        required_evidence=("visible audio interaction",),
+        forbidden=("unrelated subject",),
+    )
+    detailed_direction = (
+        "Use a cinematic medium-wide composition with the same hedgehog repeated "
+        "across three visually connected moments. Start with tense posture and sparse "
+        "quills, place visible headphones and a small audio player in the causal middle "
+        "stage, then finish with relaxed eyes, open posture and visibly fuller soft fur. "
+        "Use warm practical light that gradually increases from left to right, keep the "
+        "background coherent across all stages, avoid decorative clutter, and make the "
+        "cause-and-effect readable without captions, arrows or symbolic wave graphics."
+    )
+    compiled = compile_visual_prompt(
+        request=request,
+        kind="image",
+        scene_contract=contract,
+        scene_direction=detailed_direction,
+    )
+    brief = CreativeBrief(
+        kind="image",
+        prompt=compiled.prompt,
+        country_code="RU",
+        aspect_ratio="4:5",
+        negative_prompt=compiled.negative_prompt,
+        scene_contract=contract.to_mapping(),
+    )
+
+    adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
+
+    responses_input = str(adapted.metadata.get("yandex_responses_input") or "")
+    assert len(adapted.prompt) <= 500
+    assert "Режиссёрская постановка — соблюсти полностью:" in responses_input
+    assert "same hedgehog repeated across three visually connected moments" in responses_input
+    assert "visible headphones and a small audio player" in responses_input
+    assert "warm practical light that gradually increases from left to right" in responses_input
+    assert "avoid decorative clutter" in responses_input
+    assert "symbolic wave graphics" in responses_input
