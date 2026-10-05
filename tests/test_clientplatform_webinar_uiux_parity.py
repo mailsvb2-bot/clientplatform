@@ -465,6 +465,7 @@ def test_native_landing_builder_has_explicit_ai_confirmation_and_bounded_buttons
         "cpm:event-landing-ai-confirm:33333333-3333-4333-8333-333333333333",
     ) in confirm_commands
     assert "может учитываться в стоимости AI-провайдера" in confirm.text
+    assert "данные зарегистрированных участников не передаются" in confirm.text
 
 
 def test_native_landing_commands_are_parseable_for_vk_and_max_shared_renderer() -> None:
