@@ -310,10 +310,13 @@ class EventLandingRepository:
             SET ai_status='planning',ai_base_revision=?,ai_claim_digest=?,
                 ai_updated_at=?,updated_by_member_id=?,updated_at=?
             WHERE business_id=? AND event_id=? AND revision=?
-              AND NOT (
-                ai_status IN ('planning','ambiguous')
-                AND ai_base_revision=?
-                AND ai_claim_digest=?
+              AND (
+                ai_status IS NULL
+                OR ai_base_revision IS NULL
+                OR ai_claim_digest IS NULL
+                OR ai_status NOT IN ('planning','ambiguous')
+                OR ai_base_revision<>?
+                OR ai_claim_digest<>?
               )
             """,
             (
