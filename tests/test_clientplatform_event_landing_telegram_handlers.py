@@ -656,7 +656,7 @@ class EventLandingTelegramPresentationTests(unittest.TestCase):
         yandex_rows = yandex_target.answer.await_args.kwargs["reply_markup"]
         yandex_callbacks = [value for row in yandex_rows for _label, value in row]
         self.assertIn("cpa:home:biz", yandex_callbacks)
-        self.assertIn("cpsp:home:biz", yandex_callbacks)
+        self.assertNotIn("cpsp:home:biz", yandex_callbacks)
         self.assertIn("cpev:promote:evt:biz", yandex_callbacks)
 
 
