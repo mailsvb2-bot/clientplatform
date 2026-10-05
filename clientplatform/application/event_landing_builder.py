@@ -45,6 +45,7 @@ class EventLandingEditorState:
     revision: int
     is_published: bool
     has_unpublished_changes: bool
+    ai_status: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,6 +227,7 @@ def get_event_landing_editor_state(
             revision=0,
             is_published=False,
             has_unpublished_changes=False,
+            ai_status=None,
         )
     return EventLandingEditorState(
         draft=existing.draft,
@@ -233,6 +235,7 @@ def get_event_landing_editor_state(
         revision=existing.revision,
         is_published=existing.is_published,
         has_unpublished_changes=existing.has_unpublished_changes,
+        ai_status=existing.ai_status,
     )
 
 
@@ -351,9 +354,9 @@ def _ai_unavailable_for_claim_status(status: str) -> EventLandingAIUnavailable:
         )
     if status == "ambiguous":
         return EventLandingAIUnavailable(
-            "Предыдущий AI-вызов для этой версии завершился неоднозначно. "
-            "Автоповтор заблокирован: измените черновик или верните автоверсию "
-            "перед новой попыткой."
+            "Предыдущий AI-вызов завершился неоднозначно. Автоповтор заблокирован. "
+            "В конструкторе откройте «⚠️ Разобраться с AI-вызовом» и явно подтвердите "
+            "разблокировку новой попытки."
         )
     return EventLandingAIUnavailable(
         "AI-подтверждение устарело. Откройте конструктор и подтвердите новую попытку."
@@ -532,6 +535,24 @@ def generate_event_landing_ai(
             "Черновик изменился во время AI-генерации. AI-результат не опубликован "
             "и не перезаписал более новую версию."
         ) from exc
+
+def resolve_event_landing_ai_ambiguity(
+    *,
+    actor: TenantContext,
+    event_id: str,
+) -> EventLandingProfile:
+    with get_db() as conn:
+        repository = EventLandingRepository(conn)
+        if not repository.resolve_ai_ambiguity(
+            actor=actor,
+            event_id=event_id,
+        ):
+            raise ValueError("неопределённый AI-вызов уже разрешён или отсутствует")
+        stored = repository.get(actor=actor, event_id=event_id)
+        if stored is None:
+            raise RuntimeError("event landing draft disappeared after AI resolution")
+        return stored
+
 
 def reset_event_landing_template(
     *,
@@ -734,6 +755,7 @@ __all__ = [
     "prepare_event_landing_ai_confirmation",
     "publish_event_landing",
     "reset_event_landing_template",
+    "resolve_event_landing_ai_ambiguity",
     "restore_simple_event_landing",
     "set_event_landing_theme",
     "update_event_landing_section",
