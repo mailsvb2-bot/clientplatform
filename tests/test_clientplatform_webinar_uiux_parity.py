@@ -476,7 +476,7 @@ def test_native_event_yandex_screen_preserves_event_destination() -> None:
     assert promotion.advertising_url in message.text
     commands = _commands(message)
     assert ("📣 Рекламные каналы", "cpm:ad-channels") in commands
-    assert ("💰 Бюджет и запуск", "cpm:ad-spend") in commands
+    assert not any(command == "cpm:ad-spend" for _, command in commands)
     assert ("📢 К продвижению вебинара", f"cpm:event-promote:{event_id}") in commands
 
 
