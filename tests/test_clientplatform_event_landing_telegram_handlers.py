@@ -376,6 +376,141 @@ class EventLandingTelegramPresentationTests(unittest.TestCase):
             asyncio.run(events.receive_event_landing_section(failure_message, failure_state))
         self.assertIn("ошибка формата", failure_message.answer.await_args.args[0])
 
+    def test_landing_callbacks_fail_closed_with_safe_user_messages(self) -> None:
+        actor_error = AsyncMock(side_effect=ValueError("internal detail"))
+
+        callback, target = _callback("cpev:landing:evt:biz")
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=_token_uuid),
+            patch.object(events.control, "_callback_message", return_value=target),
+            patch.object(
+                events,
+                "_send_event_landing_editor",
+                new=AsyncMock(side_effect=ValueError("internal detail")),
+            ),
+        ):
+            asyncio.run(events.open_event_landing_builder(callback))
+        callback.answer.assert_awaited_once_with(
+            "Не удалось открыть конструктор лендинга",
+            show_alert=True,
+        )
+
+        confirm, _ = _callback("cpev:la:evt:biz")
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=_token_uuid),
+            patch.object(events.control, "_actor", new=actor_error),
+        ):
+            asyncio.run(events.confirm_event_landing_ai(confirm))
+        confirm.answer.assert_awaited_once_with(
+            "AI-генерация недоступна",
+            show_alert=True,
+        )
+
+        generate, generate_target = _callback("cpev:laok:evt:biz:7")
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=_token_uuid),
+            patch.object(
+                events.control,
+                "_actor",
+                new=AsyncMock(side_effect=ValueError("internal detail")),
+            ),
+            patch.object(events.control, "_callback_message", return_value=generate_target),
+            patch.object(events, "_send_event_landing_editor", new=AsyncMock()),
+        ):
+            asyncio.run(events.generate_event_landing(generate))
+        self.assertTrue(
+            any(
+                "Не удалось безопасно создать AI-версию" in call.args[0]
+                for call in generate_target.answer.await_args_list
+            )
+        )
+
+        explain, _ = _callback("cpev:lar:evt:biz")
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=_token_uuid),
+            patch.object(
+                events.control,
+                "_actor",
+                new=AsyncMock(side_effect=ValueError("internal detail")),
+            ),
+        ):
+            asyncio.run(events.explain_event_landing_ai_ambiguity(explain))
+        explain.answer.assert_awaited_once_with(
+            "Не удалось проверить AI-вызов",
+            show_alert=True,
+        )
+
+        resolve, _ = _callback("cpev:larok:evt:biz")
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=_token_uuid),
+            patch.object(
+                events.control,
+                "_actor",
+                new=AsyncMock(side_effect=ValueError("internal detail")),
+            ),
+        ):
+            asyncio.run(events.resolve_event_landing_ai_ambiguity_callback(resolve))
+        resolve.answer.assert_awaited_once_with(
+            "Не удалось снять AI-блокировку",
+            show_alert=True,
+        )
+
+        edit, _ = _callback("cpev:le:h:evt:biz")
+        state = SimpleNamespace(set_state=AsyncMock(), update_data=AsyncMock())
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=_token_uuid),
+            patch.object(
+                events.control,
+                "_actor",
+                new=AsyncMock(side_effect=ValueError("internal detail")),
+            ),
+        ):
+            asyncio.run(events.edit_event_landing_section(edit, state))
+        edit.answer.assert_awaited_once_with(
+            "Не удалось открыть редактирование",
+            show_alert=True,
+        )
+
+        cases = (
+            (
+                events.set_event_landing_style,
+                "cpev:lt:b:evt:biz",
+                "Не удалось изменить стиль",
+            ),
+            (
+                events.reset_event_landing,
+                "cpev:lr:evt:biz",
+                "Не удалось вернуть автоверсию",
+            ),
+            (
+                events.preview_event_landing,
+                "cpev:lp:evt:biz",
+                "Не удалось создать предпросмотр",
+            ),
+            (
+                events.publish_event_landing_callback,
+                "cpev:lx:evt:biz",
+                "Не удалось опубликовать лендинг",
+            ),
+            (
+                events.restore_simple_event_landing_callback,
+                "cpev:ls:evt:biz",
+                "Не удалось вернуть простой лендинг",
+            ),
+        )
+        for handler, data, expected in cases:
+            item, _ = _callback(data)
+            with (
+                patch.object(events.control, "_token_uuid", side_effect=_token_uuid),
+                patch.object(
+                    events.control,
+                    "_actor",
+                    new=AsyncMock(side_effect=ValueError("internal detail")),
+                ),
+            ):
+                asyncio.run(handler(item))
+            item.answer.assert_awaited_once_with(expected, show_alert=True)
+
     def test_style_reset_preview_publish_and_simple_callbacks(self) -> None:
         actor = _actor()
 
