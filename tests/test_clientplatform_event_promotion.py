@@ -24,6 +24,25 @@ def test_event_advertising_url_is_event_scoped_and_attributable() -> None:
     assert "/clientplatform/acquire" not in url
 
 
+def test_event_advertising_url_fails_closed_without_https_or_slug() -> None:
+    event_id = "33333333-3333-4333-8333-333333333333"
+    for base, slug in (
+        ("http://client.example.test", "AbCdEf0123456789_slug-demo"),
+        ("", "AbCdEf0123456789_slug-demo"),
+        ("https://client.example.test", ""),
+    ):
+        try:
+            event_promotion.event_advertising_url(
+                public_base_url=base,
+                public_slug=slug,
+                event_id=event_id,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("unsafe event advertising URL must fail closed")
+
+
 def test_event_promotion_snapshot_keeps_event_funnel_separate_from_booking_slots() -> None:
     business_id = str(uuid4())
     event_id = str(uuid4())
