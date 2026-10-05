@@ -46,6 +46,9 @@ class EventLandingProfile:
     created_at: str
     updated_at: str
     published_at: str | None
+    ai_status: str | None
+    ai_base_revision: int | None
+    ai_updated_at: str | None
 
     @property
     def is_published(self) -> bool:
@@ -73,7 +76,8 @@ class EventLandingAIClaim:
 
 _COLUMNS = (
     "business_id,event_id,draft_json,published_json,draft_source,revision,"
-    "published_revision,updated_by_member_id,created_at,updated_at,published_at"
+    "published_revision,updated_by_member_id,created_at,updated_at,published_at,"
+    "ai_status,ai_base_revision,ai_updated_at"
 )
 
 
@@ -99,6 +103,21 @@ def _profile_from_row(row: Any) -> EventLandingProfile:
         created_at=str(_value(row, "created_at", 8)),
         updated_at=str(_value(row, "updated_at", 9)),
         published_at=None if published_at is None else str(published_at),
+        ai_status=(
+            None
+            if _value(row, "ai_status", 11) is None
+            else str(_value(row, "ai_status", 11))
+        ),
+        ai_base_revision=(
+            None
+            if _value(row, "ai_base_revision", 12) is None
+            else int(_value(row, "ai_base_revision", 12))
+        ),
+        ai_updated_at=(
+            None
+            if _value(row, "ai_updated_at", 13) is None
+            else str(_value(row, "ai_updated_at", 13))
+        ),
     )
 
 
@@ -197,10 +216,22 @@ class EventLandingRepository:
                 UPDATE clientplatform_event_landing_profiles
                 SET draft_json=?,draft_source=?,revision=revision+1,
                     preview_token_digest=NULL,preview_revision=NULL,preview_expires_at=NULL,
-                    ai_status=CASE WHEN ai_status='planning' THEN 'ambiguous' ELSE NULL END,
-                    ai_base_revision=CASE WHEN ai_status='planning' THEN ai_base_revision ELSE NULL END,
-                    ai_claim_digest=CASE WHEN ai_status='planning' THEN ai_claim_digest ELSE NULL END,
-                    ai_updated_at=CASE WHEN ai_status='planning' THEN ? ELSE NULL END,
+                    ai_status=CASE
+                        WHEN ai_status IN ('planning','ambiguous') THEN 'ambiguous'
+                        ELSE NULL
+                    END,
+                    ai_base_revision=CASE
+                        WHEN ai_status IN ('planning','ambiguous') THEN ai_base_revision
+                        ELSE NULL
+                    END,
+                    ai_claim_digest=CASE
+                        WHEN ai_status IN ('planning','ambiguous') THEN ai_claim_digest
+                        ELSE NULL
+                    END,
+                    ai_updated_at=CASE
+                        WHEN ai_status IN ('planning','ambiguous') THEN ?
+                        ELSE NULL
+                    END,
                     updated_by_member_id=?,updated_at=?
                 WHERE business_id=? AND event_id=? AND revision=?
                 """,
@@ -339,30 +370,32 @@ class EventLandingRepository:
         stored_digest = str(_value(row, "ai_claim_digest", 3) or "")
         ai_updated_at = _value(row, "ai_updated_at", 4)
 
+        if status == "planning" and base is not None:
+            stored_base = int(base)
+            if self._expire_stale_planning(
+                current=current,
+                event_id=normalized,
+                base_revision=stored_base,
+                claim_digest=stored_digest,
+                ai_updated_at=ai_updated_at,
+                now=current_time,
+            ):
+                status = "ambiguous"
+            return EventLandingAIClaim(
+                created=False,
+                status=status,
+                base_revision=stored_base,
+                claim_digest=stored_digest or digest,
+            )
+        if status == "ambiguous" and base is not None:
+            return EventLandingAIClaim(
+                created=False,
+                status="ambiguous",
+                base_revision=int(base),
+                claim_digest=stored_digest or digest,
+            )
+
         if base is not None and int(base) == revision:
-            if status == "planning":
-                if self._expire_stale_planning(
-                    current=current,
-                    event_id=normalized,
-                    base_revision=revision,
-                    claim_digest=stored_digest,
-                    ai_updated_at=ai_updated_at,
-                    now=current_time,
-                ):
-                    status = "ambiguous"
-                return EventLandingAIClaim(
-                    created=False,
-                    status=status,
-                    base_revision=revision,
-                    claim_digest=stored_digest or digest,
-                )
-            if status == "ambiguous":
-                return EventLandingAIClaim(
-                    created=False,
-                    status="ambiguous",
-                    base_revision=revision,
-                    claim_digest=stored_digest or digest,
-                )
             if status == "confirming" and stored_digest == digest:
                 self._conn.execute(
                     """
@@ -569,6 +602,31 @@ class EventLandingRepository:
             base_revision=revision,
             claim_digest=digest,
         )
+
+    def resolve_ai_ambiguity(
+        self,
+        *,
+        actor: TenantContext,
+        event_id: str,
+        now: str | None = None,
+    ) -> bool:
+        current, normalized = self._event(actor=actor, event_id=event_id)
+        timestamp = str(now or _utc_now())
+        cursor = self._conn.execute(
+            """
+            UPDATE clientplatform_event_landing_profiles
+            SET ai_status=NULL,ai_base_revision=NULL,ai_claim_digest=NULL,
+                ai_updated_at=NULL,updated_by_member_id=?,updated_at=?
+            WHERE business_id=? AND event_id=? AND ai_status='ambiguous'
+            """,
+            (
+                current.membership_id,
+                timestamp,
+                current.business_id,
+                normalized,
+            ),
+        )
+        return int(getattr(cursor, "rowcount", 0) or 0) == 1
 
     def mark_ai_generation_ambiguous(
         self,
