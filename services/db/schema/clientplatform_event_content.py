@@ -138,7 +138,7 @@ def ensure(c: sqlite3.Connection) -> None:
             CHECK(revision >= 1),
             CHECK(published_revision IS NULL OR published_revision >= 1),
             CHECK(preview_revision IS NULL OR preview_revision >= 1),
-            CHECK(ai_status IS NULL OR ai_status IN ('planning','ready','ambiguous')),
+            CHECK(ai_status IS NULL OR ai_status IN ('confirming','planning','ready','ambiguous')),
             CHECK(ai_base_revision IS NULL OR ai_base_revision >= 1),
             CHECK(
                 (ai_status IS NULL
