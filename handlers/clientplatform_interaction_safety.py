@@ -78,8 +78,6 @@ _CLIENTPLATFORM_CALLBACK_PREFIXES = (
     "cpp:",
     "cpy:",
     "cpsp:",
-    "cpc:sv:show:",
-    "cpc:st:go:",
     *_OWNER_NAVIGATION_PREFIXES,
 )
 
@@ -205,7 +203,6 @@ _REPEATABLE_NAVIGATION_PREFIXES = (
     "cpa:disconnects:",
     "cpy:a:",
     "cpsp:home:",
-    "cpc:sv:show:",
     *_OWNER_NAVIGATION_PREFIXES,
 )
 
@@ -374,8 +371,6 @@ def _state_local_callback_allowed(current_state: str, callback_data: str) -> boo
                 "cpj:wizcancel:",
             )
         )
-    if current_state.startswith("ClientPlatformCreativeStudioState:choosing_style"):
-        return callback_data.startswith(("cpc:sv:show:", "cpc:st:go:"))
     if current_state.startswith("ClientPlatformProgramBuilderState:review"):
         return callback_data.startswith(("cp:dadd:", "cp:dpub:", "cp:darc:"))
     if current_state.startswith("AdSpendConsentState:confirming_consent"):
@@ -403,11 +398,6 @@ def _callback_should_clear_state(
     callback_data: str,
 ) -> bool:
     if not current_state:
-        return False
-    if (
-        current_state.startswith("ClientPlatformCreativeStudioState:choosing_style")
-        and callback_data.startswith(("cpc:sv:show:", "cpc:st:go:"))
-    ):
         return False
     if _state_local_callback_allowed(current_state, callback_data):
         return False
