@@ -264,6 +264,26 @@ def _landing_ai_input(
         item.starts_at.astimezone(zone).strftime("%d.%m.%Y %H:%M")
         for item in sessions
     ] or [event.local_start_label()]
+    details_payload = details.to_payload() if details_confirmed else {}
+    allowed_detail_keys = (
+        "services",
+        "products",
+        "prices",
+        "audiences",
+        "geo",
+        "tone_of_voice",
+        "allowed_claims",
+        "prohibited_claims",
+        "legal_constraints",
+        "faq",
+        "sales_terms",
+        "preferred_conversion_action",
+    )
+    minimized_details = {
+        key: details_payload.get(key)
+        for key in allowed_detail_keys
+        if details_payload.get(key) not in (None, "", [], ())
+    }
     return {
         "event": {
             "kind": event.kind,
@@ -274,9 +294,7 @@ def _landing_ai_input(
         "business": {
             "name": business_name,
             "activity_description": profile.activity_description,
-            "confirmed_profile_details": (
-                details.to_payload() if details_confirmed else {}
-            ),
+            "confirmed_marketing_facts": minimized_details,
         },
         "current_safe_template": current.draft.to_payload(),
     }
