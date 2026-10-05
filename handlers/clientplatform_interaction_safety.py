@@ -147,7 +147,6 @@ _STATE_ESCAPE_PREFIXES = (
     "cpa:disconnects:",
     "cpy:a:",
     "cpsp:home:",
-    "cpc:sv:show:",
     *_OWNER_NAVIGATION_PREFIXES,
 )
 
@@ -206,6 +205,7 @@ _REPEATABLE_NAVIGATION_PREFIXES = (
     "cpa:disconnects:",
     "cpy:a:",
     "cpsp:home:",
+    "cpc:sv:show:",
     *_OWNER_NAVIGATION_PREFIXES,
 )
 
