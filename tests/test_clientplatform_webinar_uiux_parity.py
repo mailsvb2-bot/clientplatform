@@ -444,6 +444,11 @@ def test_native_landing_builder_has_explicit_ai_confirmation_and_bounded_buttons
     with (
         patch.object(native_ui, "_event_landing_item", return_value=item),
         patch.object(native_ui, "get_event_landing_editor_state", return_value=state),
+        patch.object(
+            native_ui,
+            "prepare_event_landing_ai_confirmation",
+            return_value=SimpleNamespace(revision=1),
+        ),
     ):
         message = native_ui._event_landing_message(
             actor,
@@ -462,7 +467,7 @@ def test_native_landing_builder_has_explicit_ai_confirmation_and_bounded_buttons
     confirm_commands = _commands(confirm)
     assert (
         "✅ Запустить AI",
-        "cpm:event-landing-ai-confirm:33333333-3333-4333-8333-333333333333",
+        "cpm:event-landing-ai-confirm:33333333-3333-4333-8333-333333333333:1",
     ) in confirm_commands
     assert "может учитываться в стоимости AI-провайдера" in confirm.text
     assert "данные зарегистрированных участников не передаются" in confirm.text
@@ -473,9 +478,9 @@ def test_native_landing_commands_are_parseable_for_vk_and_max_shared_renderer() 
     cases = {
         f"cpm:event-landing:{event_id}": ("event-landing", (event_id,)),
         f"cpm:event-landing-ai:{event_id}": ("event-landing-ai", (event_id,)),
-        f"cpm:event-landing-ai-confirm:{event_id}": (
+        f"cpm:event-landing-ai-confirm:{event_id}:1": (
             "event-landing-ai-confirm",
-            (event_id,),
+            (event_id, "1"),
         ),
         f"cpm:event-landing-theme:bold:{event_id}": (
             "event-landing-theme",
