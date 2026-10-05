@@ -65,7 +65,8 @@ def test_event_hub_is_repeatable_navigation_but_creation_remains_a_mutation() ->
     assert safety._is_repeatable_navigation(f"cpev:home:{_TOKEN}")
     assert safety._is_repeatable_navigation(f"cpev:settings:{_TOKEN}")
     assert safety._is_repeatable_navigation(f"cpev:landing:{_TOKEN}:{_TOKEN}")
-    for action in ("la", "laok", "lt", "lr", "lp", "lx", "ls"):
+    assert safety._is_repeatable_navigation(f"cpev:lar:{_TOKEN}:{_TOKEN}")
+    for action in ("la", "laok", "larok", "lt", "lr", "lp", "lx", "ls"):
         assert not safety._is_repeatable_navigation(f"cpev:{action}:{_TOKEN}:{_TOKEN}")
     assert not safety._is_repeatable_navigation(f"cpev:new:{_TOKEN}")
     state_name = "ClientPlatformControlState:activity_description"
