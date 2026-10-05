@@ -127,7 +127,7 @@ def test_short_prompt_enters_optional_style_step_before_any_paid_preparation(
         for button in row
     ]
     assert "🤖 AI-авто — подготовить постановку" in labels
-    assert "🎬 Сгенерировать 5 AI-вариантов" in labels
+    assert "🎬 Подготовить 5 вариантов постановки" in labels
     assert "один текстовый AI-вызов" in text
 
 
