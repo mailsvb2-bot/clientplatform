@@ -165,6 +165,7 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpev:home:",
         "cpev:settings:",
         "cpev:landing:",
+        "cpev:lar:",
         "cpev:edit:",
         # Canonical webinar wizard state lives in durable owner_input, not
         # Telegram FSM. These buttons may clear only an ordinary stale Telegram
@@ -224,6 +225,7 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpev:le:",
         "cpev:la:",
         "cpev:laok:",
+        "cpev:larok:",
         "cpev:lt:",
         "cpev:lr:",
         "cpev:lp:",
