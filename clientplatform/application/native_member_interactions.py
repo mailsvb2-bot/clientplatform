@@ -878,6 +878,7 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "event-content",
             "event-landing",
             "event-landing-ai",
+            "event-landing-ai-confirm",
             "event-landing-texts",
             "event-landing-more",
             "event-landing-style",
@@ -1429,6 +1430,7 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "event-content": "cpm:events",
     "event-landing": "cpm:events",
     "event-landing-ai": "cpm:events",
+    "event-landing-ai-confirm": "cpm:events",
     "event-landing-texts": "cpm:events",
     "event-landing-more": "cpm:events",
     "event-landing-style": "cpm:events",
@@ -1704,7 +1706,7 @@ def _with_parent_navigation(
     if parsed.action == "events":
         back_label = BACK_TO_GROWTH_LABEL
     elif parsed.action in {
-        "event-settings", "event-content", "event-landing", "event-landing-ai",
+        "event-settings", "event-content", "event-landing", "event-landing-ai", "event-landing-ai-confirm",
         "event-landing-texts", "event-landing-more", "event-landing-style",
         "event-landing-theme", "event-landing-edit", "event-landing-edit-text",
         "event-landing-reset", "event-landing-preview", "event-landing-publish",
