@@ -51,12 +51,27 @@ from clientplatform.application.event_followup_settings import (
     set_business_event_followup_segment_enabled,
     set_business_event_followups_enabled,
 )
+from clientplatform.application.event_landing_builder import (
+    EventLandingAIUnavailable,
+    ensure_event_landing_draft,
+    generate_event_landing_ai,
+    get_event_landing_editor_state,
+    issue_event_landing_preview,
+    prepare_event_landing_ai_confirmation,
+    publish_event_landing,
+    reset_event_landing_template,
+    resolve_event_landing_ai_ambiguity,
+    restore_simple_event_landing,
+    set_event_landing_theme,
+    update_event_landing_section,
+)
 from clientplatform.domain.bookings import parse_local_booking_start
 from clientplatform.domain.event_content import (
     EventContentMode,
     EventContentStage,
     event_content_mode_label,
 )
+from clientplatform.domain.event_landing import EventLandingTheme
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.presentation.event_ui import (
     BACK_TO_EVENTS_LABEL,
@@ -88,6 +103,7 @@ class ClientPlatformEventState(StatesGroup):
     waiting_content_text = State()
     waiting_followup_text = State()
     waiting_visual_upload = State()
+    waiting_landing_section = State()
 
 
 def _cancel_keyboard(business_id: str):
@@ -220,6 +236,176 @@ def _event_item(snapshot: object, event_id: str):
     raise ValueError("вебинар не найден")
 
 
+def _landing_theme_label(theme: EventLandingTheme) -> str:
+    return {
+        EventLandingTheme.CALM: "спокойный",
+        EventLandingTheme.BOLD: "яркий",
+        EventLandingTheme.MINIMAL: "минималистичный",
+    }[theme]
+
+
+def _landing_source_label(source: str) -> str:
+    return {
+        "template": "автоверсия",
+        "ai": "AI-черновик",
+        "owner": "Ваши правки",
+    }.get(str(source or ""), "черновик")
+
+
+def _landing_editor_text(item: object, profile: object) -> str:
+    draft = profile.draft
+    if profile.is_published and profile.has_unpublished_changes:
+        status = "🟡 Опубликована предыдущая версия; в черновике есть изменения."
+    elif profile.is_published:
+        status = "🟢 Опубликован продающий лендинг."
+    else:
+        status = "⚪️ Публично работает простой лендинг; продающая версия пока в черновике."
+    subtitle = draft.hero_subtitle[:320] + ("…" if len(draft.hero_subtitle) > 320 else "")
+    ai_warning = (
+        "\n\n⚠️ Предыдущий AI-запрос завершился неоднозначно: провайдер мог принять "
+        "и тарифицировать запрос, но ClientPlatform не получил подтверждённый результат. "
+        "Автоматический повтор заблокирован."
+        if profile.ai_status == "ambiguous"
+        else ""
+    )
+    return (
+        f"🌐 Лендинг вебинара\n\n{item.title}\n\n"
+        f"{status}\n"
+        f"Черновик: {_landing_source_label(profile.draft_source)}, ревизия {profile.revision}\n"
+        f"Стиль: {_landing_theme_label(draft.theme)}\n\n"
+        f"Заголовок: {draft.hero_title}\n"
+        + (f"{subtitle}\n" if subtitle else "")
+        + f"\nДля кого: {len(draft.audience_points)} пункт. · "
+        f"Польза: {len(draft.outcome_points)} · "
+        f"Программа: {len(draft.agenda_points)} · FAQ: {len(draft.faq)}\n\n"
+        "AI и ручные правки меняют только черновик. Публичная страница изменится "
+        "только после отдельной кнопки «🚀 Опубликовать». Перед внешним AI-вызовом "
+        "будет отдельное подтверждение; повтор той же ревизии не запускает второй вызов."
+        + ai_warning
+    )
+
+
+def _landing_editor_rows(
+    *,
+    event_id: str,
+    business_id: str,
+    published: bool,
+    ai_status: str | None,
+):
+    event_token = control._uuid_token(event_id)
+    business_token = control._uuid_token(business_id)
+    rows = [
+        [("✨ Создать AI-версию", f"cpev:la:{event_token}:{business_token}")],
+        [("✏️ Заголовок и оффер", f"cpev:le:h:{event_token}:{business_token}")],
+        [
+            ("👥 Для кого", f"cpev:le:a:{event_token}:{business_token}"),
+            ("🎯 Польза", f"cpev:le:o:{event_token}:{business_token}"),
+        ],
+        [("🗓 Программа", f"cpev:le:g:{event_token}:{business_token}")],
+        [
+            ("👤 Организатор", f"cpev:le:s:{event_token}:{business_token}"),
+            ("❓ FAQ", f"cpev:le:f:{event_token}:{business_token}"),
+        ],
+        [("📣 Призыв", f"cpev:le:c:{event_token}:{business_token}")],
+        [
+            ("🌿 Спокойный", f"cpev:lt:c:{event_token}:{business_token}"),
+            ("🔥 Яркий", f"cpev:lt:b:{event_token}:{business_token}"),
+            ("◻️ Минимал", f"cpev:lt:m:{event_token}:{business_token}"),
+        ],
+        [("♻️ Вернуть автоверсию", f"cpev:lr:{event_token}:{business_token}")],
+        [("👁 Предпросмотр", f"cpev:lp:{event_token}:{business_token}")],
+        [("🚀 Опубликовать", f"cpev:lx:{event_token}:{business_token}")],
+    ]
+    if ai_status == "ambiguous":
+        rows.append(
+            [
+                (
+                    "⚠️ Разобраться с AI-вызовом",
+                    f"cpev:lar:{event_token}:{business_token}",
+                )
+            ]
+        )
+    if published:
+        rows.append(
+            [("↩️ Вернуть простой лендинг", f"cpev:ls:{event_token}:{business_token}")]
+        )
+    rows.append([(BACK_TO_EVENTS_LABEL, f"cpev:home:{business_token}")])
+    return rows
+
+
+async def _send_event_landing_editor(
+    target,
+    *,
+    user_id: int,
+    business_id: str,
+    event_id: str,
+) -> None:
+    actor = await control._actor(user_id, business_id)
+    actor.assert_can_manage_business()
+    snapshot = await asyncio.to_thread(
+        resolve_cockpit_events,
+        telegram_user_id=user_id,
+        requested_business_id=business_id,
+        limit=30,
+    )
+    item = _event_item(snapshot, event_id)
+    profile = await asyncio.to_thread(
+        get_event_landing_editor_state,
+        actor=actor,
+        event_id=event_id,
+    )
+    await target.answer(
+        _landing_editor_text(item, profile),
+        reply_markup=control._keyboard(
+            _landing_editor_rows(
+                event_id=event_id,
+                business_id=business_id,
+                published=profile.is_published,
+                ai_status=profile.ai_status,
+            )
+        ),
+    )
+
+
+def _landing_edit_prompt(section: str) -> str:
+    prompts = {
+        "hero": (
+            "✏️ Заголовок и оффер\n\n"
+            "Первая строка — главный заголовок. Следующие строки — подзаголовок.\n"
+            "Не добавляйте обещаний или фактов, которых нет в бизнесе/вебинаре.\n\n"
+            "Для выхода: Отмена"
+        ),
+        "audience": (
+            "👥 Для кого\n\nОтправьте каждый пункт с новой строки. До 6 пунктов.\n\n"
+            "Для выхода: Отмена"
+        ),
+        "outcomes": (
+            "🎯 Что будет полезного\n\nОтправьте каждый результат с новой строки. "
+            "Формулируйте без гарантий результата. До 6 пунктов.\n\nДля выхода: Отмена"
+        ),
+        "agenda": (
+            "🗓 Программа\n\nОтправьте каждый пункт с новой строки. До 6 пунктов.\n\n"
+            "Для выхода: Отмена"
+        ),
+        "speaker": (
+            "👤 Организатор\n\nОтправьте короткое описание организатора. "
+            "Только подтверждённые факты.\n\nДля выхода: Отмена"
+        ),
+        "faq": (
+            "❓ FAQ\n\nКаждая строка: Вопрос | Ответ\nДо 6 строк.\n\n"
+            "Для выхода: Отмена"
+        ),
+        "cta": (
+            "📣 Призыв к регистрации\n\nПервая строка — заголовок кнопочного блока. "
+            "Следующие строки — пояснение.\n\nДля выхода: Отмена"
+        ),
+    }
+    try:
+        return prompts[section]
+    except KeyError as exc:
+        raise ValueError("неизвестный блок лендинга") from exc
+
+
 def _visual_action_label(mode: EventContentMode) -> str:
     return (
         "🎬 Подготовить видео"
@@ -244,6 +430,7 @@ def _content_plan_rows(
         rows.append([("📨 Настроить сообщения до вебинара", f"cpev:ws:{event_token}:{business_token}")])
     rows.extend(
         [
+            [("🌐 Продающий лендинг", f"cpev:landing:{event_token}:{business_token}")],
             [("✨ Анонс", f"cpev:announce:{event_token}:{business_token}")],
             [("💬 Тексты дожима", f"cpev:fp:{event_token}:{business_token}")],
             [("⚙️ Автосообщения", f"cpev:settings:{business_token}")],
@@ -832,6 +1019,436 @@ async def open_event_hub(
             direction_id=context.direction_id,
             direction_title=context.title,
         )
+
+
+@router.callback_query(F.data.startswith("cpev:landing:"))
+async def open_event_landing_builder(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":", 3)
+    if len(parts) != 4:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[2])
+    business_id = control._token_uuid(parts[3])
+    try:
+        await _send_event_landing_editor(
+            control._callback_message(callback),
+            user_id=int(callback.from_user.id),
+            business_id=business_id,
+            event_id=event_id,
+        )
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        await callback.answer("Не удалось открыть конструктор лендинга", show_alert=True)
+        return
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("cpev:la:"))
+async def confirm_event_landing_ai(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":", 3)
+    if len(parts) != 4:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[2])
+    business_id = control._token_uuid(parts[3])
+    try:
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        actor.assert_can_manage_business()
+        confirmation = await asyncio.to_thread(
+            prepare_event_landing_ai_confirmation,
+            actor=actor,
+            event_id=event_id,
+        )
+    except EventLandingAIUnavailable as exc:
+        await callback.answer()
+        await control._callback_message(callback).answer(str(exc))
+        return
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        await callback.answer("AI-генерация недоступна", show_alert=True)
+        return
+    await callback.answer()
+    event_token = control._uuid_token(event_id)
+    business_token = control._uuid_token(business_id)
+    await control._callback_message(callback).answer(
+        "✨ AI-версия лендинга\n\n"
+        "Будет выполнен один внешний текстовый AI-вызов, который может учитываться "
+        "в стоимости AI-провайдера. Провайдеру передаются тема и описание вебинара, "
+        "расписание и подтверждённые данные профиля бизнеса; данные зарегистрированных "
+        "участников не передаются. Результат сохранится только как черновик и "
+        "не станет публичным без отдельной кнопки «🚀 Опубликовать».\n\n"
+        "Повторный callback для той же ревизии защищён от второго платного вызова.",
+        reply_markup=control._keyboard(
+            [
+                [
+                    (
+                        "✅ Запустить AI",
+                        f"cpev:laok:{event_token}:{business_token}:{confirmation.revision}",
+                    )
+                ],
+                [("🌐 К конструктору", f"cpev:landing:{event_token}:{business_token}")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:laok:"))
+async def generate_event_landing(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":", 4)
+    if len(parts) != 5:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[2])
+    business_id = control._token_uuid(parts[3])
+    try:
+        expected_revision = int(parts[4])
+    except (TypeError, ValueError):
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    await callback.answer("Готовлю AI-черновик…")
+    target = control._callback_message(callback)
+    try:
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        await asyncio.to_thread(
+            generate_event_landing_ai,
+            actor=actor,
+            event_id=event_id,
+            expected_revision=expected_revision,
+        )
+    except EventLandingAIUnavailable as exc:
+        await target.answer(str(exc))
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        await target.answer("Не удалось безопасно создать AI-версию. Текущий черновик не изменён.")
+    else:
+        await target.answer("✨ AI-черновик готов. Публичная страница ещё не изменена.")
+    await _send_event_landing_editor(
+        target,
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+        event_id=event_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:lar:"))
+async def explain_event_landing_ai_ambiguity(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":", 3)
+    if len(parts) != 4:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[2])
+    business_id = control._token_uuid(parts[3])
+    try:
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        actor.assert_can_manage_business()
+        profile = await asyncio.to_thread(
+            get_event_landing_editor_state,
+            actor=actor,
+            event_id=event_id,
+        )
+        if profile.ai_status != "ambiguous":
+            await callback.answer("Неопределённого AI-вызова уже нет", show_alert=True)
+            return
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        await callback.answer("Не удалось проверить AI-вызов", show_alert=True)
+        return
+    await callback.answer()
+    event_token = control._uuid_token(event_id)
+    business_token = control._uuid_token(business_id)
+    await control._callback_message(callback).answer(
+        "⚠️ Неоднозначный AI-вызов\n\n"
+        "Предыдущий запрос мог быть принят и тарифицирован AI-провайдером, но "
+        "ClientPlatform не получил достоверный итог. Поэтому автоматический повтор "
+        "заблокирован.\n\n"
+        "Разблокируйте новую попытку только если вы проверили состояние у провайдера "
+        "или осознанно принимаете риск повторного списания. Эта операция сама AI не запускает.",
+        reply_markup=control._keyboard(
+            [
+                [
+                    (
+                        "✅ Разблокировать новую AI-попытку",
+                        f"cpev:larok:{event_token}:{business_token}",
+                    )
+                ],
+                [("🌐 К конструктору", f"cpev:landing:{event_token}:{business_token}")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:larok:"))
+async def resolve_event_landing_ai_ambiguity_callback(
+    callback: CallbackQuery,
+) -> None:
+    parts = str(callback.data or "").split(":", 3)
+    if len(parts) != 4:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[2])
+    business_id = control._token_uuid(parts[3])
+    target = control._callback_message(callback)
+    try:
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        await asyncio.to_thread(
+            resolve_event_landing_ai_ambiguity,
+            actor=actor,
+            event_id=event_id,
+        )
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        await callback.answer("Не удалось снять AI-блокировку", show_alert=True)
+        return
+    await callback.answer("AI-блокировка снята")
+    await target.answer(
+        "✅ Блокировка снята. AI сейчас не запускался. Для новой попытки снова "
+        "нажмите «✨ Создать AI-версию» и отдельно подтвердите внешний вызов."
+    )
+    await _send_event_landing_editor(
+        target,
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+        event_id=event_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:le:"))
+async def edit_event_landing_section(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    parts = str(callback.data or "").split(":", 4)
+    if len(parts) != 5:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    section = {
+        "h": "hero",
+        "a": "audience",
+        "o": "outcomes",
+        "g": "agenda",
+        "s": "speaker",
+        "f": "faq",
+        "c": "cta",
+    }.get(parts[2])
+    if section is None:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[3])
+    business_id = control._token_uuid(parts[4])
+    try:
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        actor.assert_can_manage_business()
+        await asyncio.to_thread(
+            ensure_event_landing_draft,
+            actor=actor,
+            event_id=event_id,
+        )
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        await callback.answer("Не удалось открыть редактирование", show_alert=True)
+        return
+    await state.set_state(ClientPlatformEventState.waiting_landing_section)
+    await state.update_data(
+        landing_business_id=business_id,
+        landing_event_id=event_id,
+        landing_section=section,
+    )
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        _landing_edit_prompt(section),
+        reply_markup=_cancel_keyboard(business_id),
+    )
+
+
+@router.message(ClientPlatformEventState.waiting_landing_section)
+async def receive_event_landing_section(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("landing_business_id") or "")
+    event_id = str(data.get("landing_event_id") or "")
+    section = str(data.get("landing_section") or "")
+    body = str(message.text or "").strip()
+    if not business_id or not event_id or not section:
+        await state.clear()
+        await message.answer("Сессия конструктора устарела. Откройте вебинары заново.")
+        return
+    if " ".join(body.split()).casefold() in {"отмена", "cancel"}:
+        await state.clear()
+        await _send_event_landing_editor(
+            message,
+            user_id=int(message.from_user.id),
+            business_id=business_id,
+            event_id=event_id,
+        )
+        return
+    try:
+        actor = await control._actor(int(message.from_user.id), business_id)
+        await asyncio.to_thread(
+            update_event_landing_section,
+            actor=actor,
+            event_id=event_id,
+            section=section,
+            text=body,
+        )
+    except (TenantPermissionDenied, ValueError, RuntimeError) as exc:
+        await message.answer(f"Не удалось сохранить блок: {exc}")
+        return
+    await state.clear()
+    await message.answer("✅ Черновик обновлён. Публичная страница пока не менялась.")
+    await _send_event_landing_editor(
+        message,
+        user_id=int(message.from_user.id),
+        business_id=business_id,
+        event_id=event_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:lt:"))
+async def set_event_landing_style(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":", 4)
+    if len(parts) != 5:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    theme = {
+        "c": EventLandingTheme.CALM,
+        "b": EventLandingTheme.BOLD,
+        "m": EventLandingTheme.MINIMAL,
+    }.get(parts[2])
+    if theme is None:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[3])
+    business_id = control._token_uuid(parts[4])
+    try:
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        await asyncio.to_thread(
+            set_event_landing_theme,
+            actor=actor,
+            event_id=event_id,
+            theme=theme,
+        )
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        await callback.answer("Не удалось изменить стиль", show_alert=True)
+        return
+    await callback.answer("Стиль сохранён")
+    await _send_event_landing_editor(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+        event_id=event_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:lr:"))
+async def reset_event_landing(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":", 3)
+    if len(parts) != 4:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[2])
+    business_id = control._token_uuid(parts[3])
+    try:
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        await asyncio.to_thread(
+            reset_event_landing_template,
+            actor=actor,
+            event_id=event_id,
+        )
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        await callback.answer("Не удалось вернуть автоверсию", show_alert=True)
+        return
+    await callback.answer("Автоверсия восстановлена")
+    await _send_event_landing_editor(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+        event_id=event_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:lp:"))
+async def preview_event_landing(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":", 3)
+    if len(parts) != 4:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[2])
+    business_id = control._token_uuid(parts[3])
+    try:
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        preview = await asyncio.to_thread(
+            issue_event_landing_preview,
+            actor=actor,
+            event_id=event_id,
+            public_base_url=_public_base_url(),
+        )
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        await callback.answer("Не удалось создать предпросмотр", show_alert=True)
+        return
+    await callback.answer()
+    event_token = control._uuid_token(event_id)
+    business_token = control._uuid_token(business_id)
+    await control._callback_message(callback).answer(
+        "👁 Предпросмотр черновика\n\nСсылка временная и показывает только текущую ревизию.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="👁 Открыть предпросмотр", url=preview.url)],
+                [
+                    InlineKeyboardButton(
+                        text="🌐 К конструктору",
+                        callback_data=f"cpev:landing:{event_token}:{business_token}",
+                    )
+                ],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:lx:"))
+async def publish_event_landing_callback(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":", 3)
+    if len(parts) != 4:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[2])
+    business_id = control._token_uuid(parts[3])
+    try:
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        await asyncio.to_thread(
+            publish_event_landing,
+            actor=actor,
+            event_id=event_id,
+        )
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        await callback.answer("Не удалось опубликовать лендинг", show_alert=True)
+        return
+    await callback.answer("Лендинг опубликован")
+    await _send_event_landing_editor(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+        event_id=event_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:ls:"))
+async def restore_simple_event_landing_callback(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":", 3)
+    if len(parts) != 4:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[2])
+    business_id = control._token_uuid(parts[3])
+    try:
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        await asyncio.to_thread(
+            restore_simple_event_landing,
+            actor=actor,
+            event_id=event_id,
+        )
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        await callback.answer("Не удалось вернуть простой лендинг", show_alert=True)
+        return
+    await callback.answer("Публично снова используется простой лендинг")
+    await _send_event_landing_editor(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+        event_id=event_id,
+    )
 
 
 @router.callback_query(F.data.startswith("cpev:content:"))

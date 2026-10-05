@@ -151,6 +151,20 @@ def resolve_owner_input(session: OwnerInputSession, value: object) -> OwnerInput
             (event_id, "\n".join(lines)),
         )
 
+    if session.action == "event_landing_section":
+        event_id = str(session.context.get("event_id") or "").strip()
+        section = str(session.context.get("section") or "").strip().casefold()
+        if (
+            not event_id
+            or section not in {"hero", "audience", "outcomes", "agenda", "speaker", "faq", "cta"}
+            or not 1 <= len(raw_text) <= 3500
+        ):
+            raise ValueError("event landing section input is invalid")
+        return OwnerInputResolution(
+            "event-landing-edit-text",
+            (event_id, section, raw_text),
+        )
+
     if session.action == "event_warmup_text":
         if not 1 <= len(raw_text) <= 3500:
             raise ValueError("event warmup text length is invalid")

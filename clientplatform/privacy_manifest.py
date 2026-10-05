@@ -59,6 +59,7 @@ _POLICIES = (
     _required("clientplatform_event_content_preferences", "retain", "business-owned event stage presentation mode and owner update evidence without participant identity"),
     _required("clientplatform_event_content_messages", "retain", "business-owned webinar content plan text, schedule, source and owner update evidence without participant identity"),
     _required("clientplatform_event_content_assets", "erase", "owner-uploaded or generated webinar media references and generation lineage; media is tenant content and must be removed with the business"),
+    _required("clientplatform_event_landing_profiles", "retain", "business-owned event landing draft and published copy, revision evidence and short-lived preview capability digest without participant identity"),
     _required("clientplatform_event_sessions", "retain", "business-owned multi-session event schedule and provider routing without participant identity"),
     _required("clientplatform_event_registrations", "erase", "public event registration PII, consent, CRM linkage and attendance signals"),
     _required("clientplatform_event_conversion_links", "anonymize", "verified event-to-payment attribution retained without public registration PII"),

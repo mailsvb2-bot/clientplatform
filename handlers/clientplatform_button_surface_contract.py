@@ -164,6 +164,8 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpo:ads:",
         "cpev:home:",
         "cpev:settings:",
+        "cpev:landing:",
+        "cpev:lar:",
         "cpev:edit:",
         # Canonical webinar wizard state lives in durable owner_input, not
         # Telegram FSM. These buttons may clear only an ordinary stale Telegram
@@ -189,6 +191,8 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpo:ads:",
         "cpev:home:",
         "cpev:settings:",
+        "cpev:landing:",
+        "cpev:lar:",
         # Calendar browsing/selection is idempotent UI state. Telegram Web may
         # retransmit the same callback while a keyboard redraw is in flight;
         # never turn that into the misleading "Действие уже выполняется".
@@ -219,6 +223,15 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpo:region:",
         "cpev:new:",
         "cpev:edit:",
+        "cpev:le:",
+        "cpev:la:",
+        "cpev:laok:",
+        "cpev:larok:",
+        "cpev:lt:",
+        "cpev:lr:",
+        "cpev:lp:",
+        "cpev:lx:",
+        "cpev:ls:",
     )
 
     original_state_local = cast(
@@ -260,6 +273,7 @@ def install_button_surface_contract(safety: ModuleType) -> None:
             "ClientPlatformEventState:waiting_details",
             "ClientPlatformEventState:waiting_time",
             "ClientPlatformEventState:waiting_join_url",
+            "ClientPlatformEventState:waiting_landing_section",
         )):
             if callback_data.startswith("cpev:cancel:"):
                 return True
