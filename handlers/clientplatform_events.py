@@ -1108,7 +1108,6 @@ async def open_event_yandex_promotion(callback: CallbackQuery) -> None:
         reply_markup=control._keyboard(
             [
                 [("⚙️ Кабинет Яндекс Директ", f"cpa:home:{business_token}")],
-                [("💳 Бюджет и безопасный запуск", f"cpsp:home:{business_token}")],
                 [("📢 К продвижению вебинара", f"cpev:promote:{event_token}:{business_token}")],
             ]
         ),
