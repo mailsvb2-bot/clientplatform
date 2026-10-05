@@ -341,9 +341,8 @@ def _parse_variant_items(
     variants: list[VisualSceneVariant] = []
     seen_compositions: set[str] = set()
     for index, item in enumerate(items, start=1):
-        if not isinstance(item, dict) or set(item) != {
-            "title", "description", "direction", "composition",
-        }:
+        required = {"title", "description", "direction", "composition"}
+        if not isinstance(item, dict) or not required.issubset(item):
             return None
         try:
             title = _clean(item["title"], limit=80)
@@ -541,6 +540,7 @@ def build_visual_scene_bundle(
     )
     source = "ai" if variants and all(item.source == "ai" for item in variants) else "deterministic"
     return contract, source, variants
+
 
 def build_visual_scene_variants(
     *,
