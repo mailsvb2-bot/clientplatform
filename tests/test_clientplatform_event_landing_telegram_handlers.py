@@ -589,5 +589,76 @@ class EventLandingTelegramPresentationTests(unittest.TestCase):
         )
 
 
+    def test_event_announcement_promotes_the_event_not_booking_slots(self) -> None:
+        markup = events._announcement_share_markup(
+            text="Анонс",
+            title="Вебинар",
+            telegram_url="https://example.test/tg",
+            vk_url="https://example.test/vk",
+            max_url="https://example.test/max",
+            business_token="biz",
+            event_token="evt",
+        )
+        callbacks = [
+            button.callback_data
+            for row in markup.inline_keyboard
+            for button in row
+            if button.callback_data
+        ]
+        self.assertIn("cpev:promote:evt:biz", callbacks)
+        self.assertFalse(any(value.startswith("cpj:promote:") for value in callbacks))
+
+    def test_event_promotion_screen_keeps_event_context_through_yandex(self) -> None:
+        actor = _actor()
+        snapshot = SimpleNamespace(
+            title="Вебинар",
+            advertising_url="https://example.test/e/demo?source=ads&campaign_ref=event%3Aevt",
+            provider_label="Webinar.ru",
+            join_ready=True,
+            landing_published=True,
+            registrations=9,
+            registrations_from_ads=4,
+        )
+        callback, target = _callback("cpev:promote:evt:biz")
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=_token_uuid),
+            patch.object(events.control, "_uuid_token", side_effect=_uuid_token),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events.control, "_callback_message", return_value=target),
+            patch.object(events.control, "_keyboard", side_effect=lambda rows: rows),
+            patch.object(events, "_public_base_url", return_value="https://example.test"),
+            patch.object(events, "get_event_promotion_snapshot", return_value=snapshot),
+        ):
+            asyncio.run(events.open_event_promotion(callback))
+
+        callback.answer.assert_awaited_once()
+        text, = target.answer.await_args.args
+        rows = target.answer.await_args.kwargs["reply_markup"]
+        callbacks = [value for row in rows for _label, value in row]
+        self.assertIn("Из рекламы: 4", text)
+        self.assertIn(snapshot.advertising_url, text)
+        self.assertIn("cpev:py:evt:biz", callbacks)
+        self.assertIn("cpev:landing:evt:biz", callbacks)
+        self.assertFalse(any(value.startswith("cpj:promote:") for value in callbacks))
+
+        yandex, yandex_target = _callback("cpev:py:evt:biz")
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=_token_uuid),
+            patch.object(events.control, "_uuid_token", side_effect=_uuid_token),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events.control, "_callback_message", return_value=yandex_target),
+            patch.object(events.control, "_keyboard", side_effect=lambda rows: rows),
+            patch.object(events, "_public_base_url", return_value="https://example.test"),
+            patch.object(events, "get_event_promotion_snapshot", return_value=snapshot),
+        ):
+            asyncio.run(events.open_event_yandex_promotion(yandex))
+
+        yandex_rows = yandex_target.answer.await_args.kwargs["reply_markup"]
+        yandex_callbacks = [value for row in yandex_rows for _label, value in row]
+        self.assertIn("cpa:home:biz", yandex_callbacks)
+        self.assertIn("cpsp:home:biz", yandex_callbacks)
+        self.assertIn("cpev:promote:evt:biz", yandex_callbacks)
+
+
 if __name__ == "__main__":
     unittest.main()
