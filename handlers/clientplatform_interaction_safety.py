@@ -404,6 +404,11 @@ def _callback_should_clear_state(
 ) -> bool:
     if not current_state:
         return False
+    if (
+        current_state.startswith("ClientPlatformCreativeStudioState:choosing_style")
+        and callback_data.startswith(("cpc:sv:show:", "cpc:st:go:"))
+    ):
+        return False
     if _state_local_callback_allowed(current_state, callback_data):
         return False
     return _callback_can_escape_state(current_state, callback_data)
