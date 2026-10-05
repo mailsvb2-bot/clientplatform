@@ -108,16 +108,24 @@ def test_provider_snapshot_does_not_expose_credentials(monkeypatch):
 def test_provider_snapshot_reports_yandex_responses_pipeline_and_orchestrator(monkeypatch):
     monkeypatch.setenv("YANDEX_ART_FOLDER_ID", "folder")
     monkeypatch.delenv("YANDEX_ART_PIPELINE", raising=False)
+    monkeypatch.delenv("YANDEX_ART_ALLOW_DIRECT_FALLBACK", raising=False)
 
     snapshot = provider_snapshot("RU")
     yandex = snapshot["models"]["yandexart"]
 
     assert yandex["api_family"] == "responses_image_generation"
+    assert yandex["responses_required"] is True
+    assert yandex["direct_fallback_allowed"] is False
     assert yandex["orchestrator_model"] == "gpt://folder/aliceai-llm"
+
+    monkeypatch.setenv("YANDEX_ART_ALLOW_DIRECT_FALLBACK", "1")
+    snapshot = provider_snapshot("RU")
+    assert snapshot["models"]["yandexart"]["direct_fallback_allowed"] is True
 
     monkeypatch.setenv("YANDEX_ART_PIPELINE", "images")
     snapshot = provider_snapshot("RU")
     assert snapshot["models"]["yandexart"]["api_family"] == "openai_images"
+    assert snapshot["models"]["yandexart"]["responses_required"] is False
 
 
 def test_gigachat_semantic_qa_is_non_generative_and_cleans_uploaded_file(
