@@ -1016,6 +1016,38 @@ async def open_event_landing_builder(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("cpev:la:"))
+async def confirm_event_landing_ai(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":", 3)
+    if len(parts) != 4:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[2])
+    business_id = control._token_uuid(parts[3])
+    try:
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        actor.assert_can_manage_business()
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        await callback.answer("AI-генерация недоступна", show_alert=True)
+        return
+    await callback.answer()
+    event_token = control._uuid_token(event_id)
+    business_token = control._uuid_token(business_id)
+    await control._callback_message(callback).answer(
+        "✨ AI-версия лендинга\n\n"
+        "Будет выполнен один внешний текстовый AI-вызов, который может учитываться "
+        "в стоимости AI-провайдера. Результат сохранится только как черновик и "
+        "не станет публичным без отдельной кнопки «🚀 Опубликовать».\n\n"
+        "Повторный callback для той же ревизии защищён от второго платного вызова.",
+        reply_markup=control._keyboard(
+            [
+                [("✅ Запустить AI", f"cpev:laok:{event_token}:{business_token}")],
+                [("🌐 К конструктору", f"cpev:landing:{event_token}:{business_token}")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:laok:"))
 async def generate_event_landing(callback: CallbackQuery) -> None:
     parts = str(callback.data or "").split(":", 3)
     if len(parts) != 4:
