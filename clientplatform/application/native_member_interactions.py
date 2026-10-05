@@ -8049,6 +8049,69 @@ def _render(
             if len(parsed.args) != 1:
                 return _stale_message()
             return _event_content_message(actor, parsed.args[0])
+        if parsed.action == "event-landing":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _event_landing_message(actor, parsed.args[0])
+        if parsed.action == "event-landing-ai":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _event_landing_ai_result(actor, parsed.args[0])
+        if parsed.action == "event-landing-texts":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _event_landing_texts_message(actor, parsed.args[0])
+        if parsed.action == "event-landing-more":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _event_landing_texts_message(actor, parsed.args[0], more=True)
+        if parsed.action == "event-landing-style":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _event_landing_style_message(actor, parsed.args[0])
+        if parsed.action == "event-landing-theme":
+            if len(parsed.args) != 2:
+                return _stale_message()
+            return _event_landing_theme_result(
+                actor,
+                event_id=parsed.args[1],
+                theme=parsed.args[0],
+            )
+        if parsed.action == "event-landing-edit":
+            if len(parsed.args) != 2:
+                return _stale_message()
+            return _event_landing_edit_message(
+                actor,
+                event_id=parsed.args[1],
+                section=parsed.args[0],
+                current_platform=current_platform,
+                input_surface=input_surface,
+            )
+        if parsed.action == "event-landing-edit-text":
+            if len(parsed.args) != 3:
+                return _stale_message()
+            return _event_landing_edit_result(
+                actor,
+                event_id=parsed.args[0],
+                section=parsed.args[1],
+                text=parsed.args[2],
+            )
+        if parsed.action == "event-landing-reset":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _event_landing_reset_result(actor, parsed.args[0])
+        if parsed.action == "event-landing-preview":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _event_landing_preview_message(actor, parsed.args[0])
+        if parsed.action == "event-landing-publish":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _event_landing_publish_result(actor, parsed.args[0])
+        if parsed.action == "event-landing-simple":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _event_landing_simple_result(actor, parsed.args[0])
         if parsed.action == "event-content-followups":
             if len(parsed.args) not in {1, 2}:
                 return _stale_message()
