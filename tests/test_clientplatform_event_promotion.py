@@ -82,29 +82,55 @@ def test_event_promotion_tolerates_only_missing_optional_landing_schema() -> Non
         def get(self, *, actor, event_id):
             return event
 
-    class MissingLandingRepository:
+    for missing_error in (
+        "no such table: clientplatform_event_landing_profiles",
+        'relation "clientplatform_event_landing_profiles" does not exist',
+        "undefined table: clientplatform_event_landing_profiles",
+    ):
+        class MissingLandingRepository:
+            def __init__(self, _conn):
+                pass
+
+            def get(self, *, actor, event_id):
+                raise sqlite3.OperationalError(missing_error)
+
+        with (
+            patch.object(event_promotion, "get_db_ro", fake_db),
+            patch.object(event_promotion, "EventRepository", FakeEventRepository),
+            patch.object(event_promotion, "EventLandingRepository", MissingLandingRepository),
+        ):
+            snapshot = event_promotion.get_event_promotion_snapshot(
+                actor=actor,
+                event_id=event_id,
+                public_base_url="https://client.example.test",
+            )
+
+        assert snapshot.landing_published is False
+        assert snapshot.join_ready is False
+        assert snapshot.provider_label == "external"
+
+    class BrokenLandingRepository:
         def __init__(self, _conn):
             pass
 
         def get(self, *, actor, event_id):
-            raise sqlite3.OperationalError(
-                "no such table: clientplatform_event_landing_profiles"
-            )
+            raise sqlite3.OperationalError("database is locked")
 
     with (
         patch.object(event_promotion, "get_db_ro", fake_db),
         patch.object(event_promotion, "EventRepository", FakeEventRepository),
-        patch.object(event_promotion, "EventLandingRepository", MissingLandingRepository),
+        patch.object(event_promotion, "EventLandingRepository", BrokenLandingRepository),
     ):
-        snapshot = event_promotion.get_event_promotion_snapshot(
-            actor=actor,
-            event_id=event_id,
-            public_base_url="https://client.example.test",
-        )
-
-    assert snapshot.landing_published is False
-    assert snapshot.join_ready is False
-    assert snapshot.provider_label == "external"
+        try:
+            event_promotion.get_event_promotion_snapshot(
+                actor=actor,
+                event_id=event_id,
+                public_base_url="https://client.example.test",
+            )
+        except sqlite3.OperationalError as exc:
+            assert "locked" in str(exc)
+        else:
+            raise AssertionError("non-schema landing storage failure must remain visible")
 
 
 def test_event_promotion_snapshot_keeps_event_funnel_separate_from_booking_slots() -> None:
