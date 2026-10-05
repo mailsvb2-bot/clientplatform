@@ -989,20 +989,14 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
     lines = _compiled_directives(brief.prompt)
     owner_request = _compiled_owner_request(lines)
 
-    # The Responses/Image Generation Tool path has a language model in front of
-    # Alice AI ART. Preserve a natural, substantially uncompressed owner-facing
-    # request for that orchestrator instead of feeding it our 500-character
-    # direct-model compression. The direct Images API prompt is still compiled
-    # below for explicit legacy/recovery mode.
-    responses_input = _bounded_join(
-        _yandex_natural_prompt_parts(brief),
-        limit=4000,
-    )
     metadata = dict(brief.metadata or {})
-    if responses_input:
-        metadata["yandex_responses_input"] = responses_input
-
     if not owner_request:
+        responses_input = _bounded_join(
+            _yandex_natural_prompt_parts(brief),
+            limit=4000,
+        )
+        if responses_input:
+            metadata["yandex_responses_input"] = responses_input
         prompt = _bounded_join([brief.prompt], limit=_YANDEX_PROMPT_LIMIT)
         return replace(brief, prompt=prompt, metadata=metadata)
 
@@ -1020,6 +1014,26 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
             + _compiled_style_cues(lines)
         )
     )
+
+    # Responses has an LLM orchestrator in front of Alice AI ART. Feed it the same
+    # immutable scene semantics that the direct 500-character path receives.
+    # Previously this path got only the raw owner request + style/safety, which
+    # bypassed transformation topology, causal action and identity continuity.
+    # Keep the wording natural (no compiler meta-language) while preserving the
+    # canonical scene contract and selected art direction.
+    responses_scene = contract_head or owner_request
+    responses_input = _bounded_join(
+        [
+            responses_scene,
+            *semantic_cues,
+            *style_cues,
+            *_natural_safety_parts(brief),
+            *_natural_policy_parts(brief),
+        ],
+        limit=4000,
+    )
+    if responses_input:
+        metadata["yandex_responses_input"] = responses_input
     folded = tuple(line.casefold() for line in lines)
     if contract_head:
         # Compiler v6+: the bounded scene contract is the provider-facing source of
