@@ -58,10 +58,7 @@ from clientplatform.application.bookings import create_booking_slot, list_bookin
 from clientplatform.application.cockpit import cockpit_navigation
 from clientplatform.application.cockpit_events import resolve_event_live_snapshot, resolve_events_snapshot
 from clientplatform.application.event_announcements import draft_event_announcement_template
-from clientplatform.application.event_content_plans import (
-    get_event_content_plan,
-    prepare_event_stage_visual,
-)
+from clientplatform.application.event_content_plans import get_event_content_plan
 from clientplatform.application.event_followups import (
     get_event_followup_content_plan,
     reset_event_followup_text,
@@ -210,11 +207,7 @@ from clientplatform.domain.automation_policy import AutomationPolicyError
 from clientplatform.domain.ad_spend import AdSpendAuthorizationStatus, AdSpendError
 from clientplatform.domain.bookings import BookingError, BookingSlotStatus, parse_local_booking_start
 from clientplatform.domain.connections import ConnectionPlatform
-from clientplatform.domain.event_content import (
-    EventContentMode,
-    EventContentStage,
-    event_content_mode_label,
-)
+from clientplatform.domain.event_content import event_content_mode_label
 from clientplatform.domain.event_landing import EventLandingTheme
 from clientplatform.domain.customer_interactions import (
     CustomerInteractionButton,
@@ -3569,29 +3562,10 @@ def _event_announcement_message(
             public_base_url=public_base,
             source=current_platform.value,
         )
-        promotion = get_event_promotion_snapshot(
-            actor=actor,
-            event_id=event_id,
+        advertising_url = draft.registration_url(
             public_base_url=public_base,
+            source="ads",
         )
-        advertising_url = promotion.advertising_url
-        modes = get_event_content_plan(actor=actor, event_id=event_id)
-        visual_prepared = False
-        if modes.event_day is not EventContentMode.TEXT:
-            try:
-                prepared = prepare_event_stage_visual(
-                    actor=actor,
-                    event_id=event_id,
-                    stage=EventContentStage.EVENT_DAY,
-                    message_key="announcement",
-                    event_title=draft.title,
-                    message_text=draft.text,
-                )
-            except VisualCreativeError:
-                prepared = None
-            except (TenantPermissionDenied, ValueError, RuntimeError):
-                prepared = None
-            visual_prepared = prepared is not None
     except (TenantPermissionDenied, ValueError, RuntimeError):
         return CustomerInteractionMessage(
             text="Не удалось подготовить анонс. Вернитесь к вебинарам и попробуйте ещё раз.",
@@ -3613,12 +3587,7 @@ def _event_announcement_message(
             "ClientPlatform отдельно сохранит источник ads; обычная регистрационная ссылка помечена текущим каналом."
         ),
         rows=(
-            *(((_button(
-                "🎬 Подготовить видео"
-                if modes.event_day is EventContentMode.TEXT_WITH_VIDEO
-                else "🎨 Подготовить картинку",
-                "cpm:ai-visuals",
-            ),),) if visual_prepared else ()),
+            (_button("🎨 Картинка / видео", "cpm:ai-visuals"),),
             (_button("📢 Продвигать вебинар", f"cpm:event-promote:{event_id}"),),
             (_button("🗓 Контент-план", f"cpm:event-content:{event_id}"),),
         ),
