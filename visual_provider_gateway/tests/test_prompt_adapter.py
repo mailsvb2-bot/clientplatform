@@ -227,7 +227,7 @@ def test_yandex_adapter_expands_resource_audio_transformation_into_visual_stages
     assert "mandatory" not in adapted.prompt.casefold()
     assert len(adapted.prompt) <= 500
 
-def test_yandex_responses_input_preserves_natural_owner_request_without_storyboard_meta() -> None:
+def test_yandex_responses_input_preserves_scene_semantics_without_compiler_meta() -> None:
     request = (
         "ёж, который слушает ресурсные аудио трансы "
         "и становится добрым и пушистым"
@@ -250,9 +250,15 @@ def test_yandex_responses_input_preserves_natural_owner_request_without_storyboa
 
     responses_input = str(adapted.metadata["yandex_responses_input"])
     assert responses_input.startswith(request)
-    assert "Один герой, три стадии" not in responses_input
+    assert "Один герой, три стадии без подписей" in responses_input
+    assert "слушает аудио" in responses_input
+    assert "наушниках" in responses_input
+    assert "доброжелательный расслабленный взгляд" in responses_input
+    assert "заметно более густой пушистый мех" in responses_input
     assert "Owner request" not in responses_input
     assert "mandatory" not in responses_input.casefold()
+    assert "BEFORE" not in responses_input
+    assert "AFTER" not in responses_input
     assert "тёплый" in responses_input or "warm" in responses_input.casefold()
     assert len(responses_input) > len(request)
     assert len(adapted.prompt) <= 500
