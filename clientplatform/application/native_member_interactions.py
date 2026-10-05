@@ -2764,6 +2764,255 @@ def _event_conduct_message(
     )
 
 
+def _event_landing_item(actor: TenantContext, event_id: str):
+    snapshot = resolve_events_snapshot(
+        actor=actor,
+        business_name=_business_name(actor),
+        limit=30,
+    )
+    item = next(
+        (
+            row
+            for row in tuple(getattr(snapshot, "items", ()))
+            if str(getattr(row, "id", "")) == event_id
+        ),
+        None,
+    )
+    if item is None:
+        raise ValueError("webinar was not found")
+    return item
+
+
+def _event_landing_status_text(item: object, profile: object) -> str:
+    draft = profile.draft
+    if profile.is_published and profile.has_unpublished_changes:
+        status = "🟡 Опубликована предыдущая версия; в черновике есть изменения."
+    elif profile.is_published:
+        status = "🟢 Опубликован продающий лендинг."
+    else:
+        status = "⚪️ Публично работает простой лендинг; продающая версия пока в черновике."
+    source = {
+        "template": "автоверсия",
+        "ai": "AI-черновик",
+        "owner": "Ваши правки",
+    }.get(str(profile.draft_source or ""), "черновик")
+    theme = {
+        EventLandingTheme.CALM: "спокойный",
+        EventLandingTheme.BOLD: "яркий",
+        EventLandingTheme.MINIMAL: "минималистичный",
+    }[draft.theme]
+    subtitle = draft.hero_subtitle[:320]
+    if len(draft.hero_subtitle) > 320:
+        subtitle += "…"
+    return (
+        f"🌐 Продающий лендинг\n\n{item.title}\n\n"
+        f"{status}\nЧерновик: {source}, ревизия {profile.revision}\n"
+        f"Стиль: {theme}\n\nЗаголовок: {draft.hero_title}\n"
+        + (f"{subtitle}\n" if subtitle else "")
+        + f"\nДля кого: {len(draft.audience_points)} · "
+        f"Польза: {len(draft.outcome_points)} · "
+        f"Программа: {len(draft.agenda_points)} · FAQ: {len(draft.faq)}\n\n"
+        "AI и ручные правки меняют только черновик. Публичная страница меняется "
+        "только после «🚀 Опубликовать». Кнопка AI запускает один текстовый AI-вызов; "
+        "повтор той же ревизии защищён от второго платного вызова."
+    )
+
+
+def _event_landing_message(
+    actor: TenantContext,
+    event_id: str,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    item = _event_landing_item(actor, event_id)
+    profile = get_event_landing_editor_state(actor=actor, event_id=event_id)
+    rows: list[tuple[CustomerInteractionButton, ...]] = [
+        (_button("✨ Создать AI-версию", f"cpm:event-landing-ai:{event_id}"),),
+        (_button("✏️ Тексты лендинга", f"cpm:event-landing-texts:{event_id}"),),
+        (_button("🎨 Стиль лендинга", f"cpm:event-landing-style:{event_id}"),),
+        (_button("👁 Предпросмотр", f"cpm:event-landing-preview:{event_id}"),),
+        (_button("🚀 Опубликовать", f"cpm:event-landing-publish:{event_id}"),),
+    ]
+    if profile.is_published:
+        rows.append(
+            (_button("↩️ Вернуть простой лендинг", f"cpm:event-landing-simple:{event_id}"),)
+        )
+    rows.append((_button("🗓 К контент-плану", f"cpm:event-content:{event_id}"),))
+    return CustomerInteractionMessage(
+        text=_event_landing_status_text(item, profile),
+        rows=tuple(rows),
+    )
+
+
+def _event_landing_texts_message(
+    actor: TenantContext,
+    event_id: str,
+    *,
+    more: bool = False,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    _event_landing_item(actor, event_id)
+    if more:
+        rows = (
+            (_button("👤 Организатор", f"cpm:event-landing-edit:speaker:{event_id}"),),
+            (_button("❓ FAQ", f"cpm:event-landing-edit:faq:{event_id}"),),
+            (_button("📣 Призыв", f"cpm:event-landing-edit:cta:{event_id}"),),
+            (_button("♻️ Вернуть автоверсию", f"cpm:event-landing-reset:{event_id}"),),
+            (_button("🌐 К лендингу", f"cpm:event-landing:{event_id}"),),
+        )
+        text = "✏️ Тексты лендинга · дополнительные блоки\n\nВыберите блок."
+    else:
+        rows = (
+            (_button("🧲 Заголовок и оффер", f"cpm:event-landing-edit:hero:{event_id}"),),
+            (_button("👥 Для кого", f"cpm:event-landing-edit:audience:{event_id}"),),
+            (_button("🎯 Польза", f"cpm:event-landing-edit:outcomes:{event_id}"),),
+            (_button("🗓 Программа", f"cpm:event-landing-edit:agenda:{event_id}"),),
+            (_button("Ещё блоки →", f"cpm:event-landing-more:{event_id}"),),
+            (_button("🌐 К лендингу", f"cpm:event-landing:{event_id}"),),
+        )
+        text = "✏️ Тексты лендинга\n\nВыберите блок для ручной правки."
+    return CustomerInteractionMessage(text=text, rows=rows)
+
+
+def _event_landing_style_message(
+    actor: TenantContext,
+    event_id: str,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    _event_landing_item(actor, event_id)
+    return CustomerInteractionMessage(
+        text="🎨 Стиль лендинга\n\nВыберите визуальную подачу. Содержание и форма регистрации не меняются.",
+        rows=(
+            (_button("🌿 Спокойный", f"cpm:event-landing-theme:calm:{event_id}"),),
+            (_button("🔥 Яркий", f"cpm:event-landing-theme:bold:{event_id}"),),
+            (_button("◻️ Минималистичный", f"cpm:event-landing-theme:minimal:{event_id}"),),
+            (_button("🌐 К лендингу", f"cpm:event-landing:{event_id}"),),
+        ),
+    )
+
+
+def _event_landing_edit_message(
+    actor: TenantContext,
+    *,
+    event_id: str,
+    section: str,
+    current_platform: ConnectionPlatform,
+    input_surface: str,
+) -> CustomerInteractionMessage:
+    prompts = {
+        "hero": "Первая строка — главный заголовок. Следующие строки — подзаголовок.",
+        "audience": "Каждый пункт «для кого» отправьте с новой строки. До 6 пунктов.",
+        "outcomes": "Каждый полезный результат отправьте с новой строки. До 6 пунктов, без гарантий.",
+        "agenda": "Каждый пункт программы отправьте с новой строки. До 6 пунктов.",
+        "speaker": "Пришлите короткое описание организатора. Только подтверждённые факты.",
+        "faq": "Каждая строка: Вопрос | Ответ. До 6 строк.",
+        "cta": "Первая строка — призыв к регистрации. Следующие строки — пояснение.",
+    }
+    prompt = prompts.get(str(section or "").strip().casefold())
+    if prompt is None:
+        raise ValueError("unknown event landing section")
+    _event_landing_item(actor, event_id)
+    begin_owner_input(
+        actor=actor,
+        platform=current_platform.value,
+        surface=input_surface,
+        action="event_landing_section",
+        context={"event_id": event_id, "section": section},
+    )
+    return CustomerInteractionMessage(
+        text=f"✏️ Редактирование лендинга\n\n{prompt}\n\nДля выхода без изменений: Отмена.",
+        rows=((_button("🌐 К лендингу", f"cpm:event-landing:{event_id}"),),),
+    )
+
+
+def _event_landing_edit_result(
+    actor: TenantContext,
+    *,
+    event_id: str,
+    section: str,
+    text: str,
+) -> CustomerInteractionMessage:
+    update_event_landing_section(
+        actor=actor,
+        event_id=event_id,
+        section=section,
+        text=text,
+    )
+    return _event_landing_message(actor, event_id)
+
+
+def _event_landing_ai_result(
+    actor: TenantContext,
+    event_id: str,
+) -> CustomerInteractionMessage:
+    try:
+        generate_event_landing_ai(actor=actor, event_id=event_id)
+    except EventLandingAIUnavailable as exc:
+        return CustomerInteractionMessage(
+            text=f"AI-версия не создана.\n\n{str(exc)}",
+            rows=((_button("🌐 К лендингу", f"cpm:event-landing:{event_id}"),),),
+        )
+    return _event_landing_message(actor, event_id)
+
+
+def _event_landing_theme_result(
+    actor: TenantContext,
+    *,
+    event_id: str,
+    theme: str,
+) -> CustomerInteractionMessage:
+    set_event_landing_theme(
+        actor=actor,
+        event_id=event_id,
+        theme=EventLandingTheme(theme),
+    )
+    return _event_landing_message(actor, event_id)
+
+
+def _event_landing_reset_result(
+    actor: TenantContext,
+    event_id: str,
+) -> CustomerInteractionMessage:
+    reset_event_landing_template(actor=actor, event_id=event_id)
+    return _event_landing_message(actor, event_id)
+
+
+def _event_landing_preview_message(
+    actor: TenantContext,
+    event_id: str,
+) -> CustomerInteractionMessage:
+    public_base = str(getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "") or "").strip()
+    preview = issue_event_landing_preview(
+        actor=actor,
+        event_id=event_id,
+        public_base_url=public_base,
+    )
+    return CustomerInteractionMessage(
+        text=(
+            "👁 Предпросмотр черновика\n\n"
+            f"{preview.url}\n\n"
+            "Ссылка временная, привязана к текущей ревизии и не индексируется. "
+            "Форма регистрации в предпросмотре отключена."
+        ),
+        rows=((_button("🌐 К лендингу", f"cpm:event-landing:{event_id}"),),),
+    )
+
+
+def _event_landing_publish_result(
+    actor: TenantContext,
+    event_id: str,
+) -> CustomerInteractionMessage:
+    publish_event_landing(actor=actor, event_id=event_id)
+    return _event_landing_message(actor, event_id)
+
+
+def _event_landing_simple_result(
+    actor: TenantContext,
+    event_id: str,
+) -> CustomerInteractionMessage:
+    restore_simple_event_landing(actor=actor, event_id=event_id)
+    return _event_landing_message(actor, event_id)
+
+
 def _event_content_message(
     actor: TenantContext,
     event_id: str,
@@ -2816,6 +3065,7 @@ def _event_content_message(
         warmup_text = "не настроен"
     rows.extend(
         [
+            (_button("🌐 Продающий лендинг", f"cpm:event-landing:{event_id}"),),
             (_button("✨ Анонс", f"cpm:event-announce:{event_id}"),),
             (_button("💬 Тексты дожима", f"cpm:event-content-followups:{event_id}"),),
             (_button("⚙️ Автосообщения", "cpm:event-settings"),),
