@@ -70,10 +70,15 @@ def get_event_promotion_snapshot(
             )
         except sqlite3.OperationalError as exc:
             detail = str(exc).casefold()
-            if (
-                "no such table" not in detail
-                or "clientplatform_event_landing_profiles" not in detail
-            ):
+            landing_storage_missing = (
+                "clientplatform_event_landing_profiles" in detail
+                and (
+                    "no such table" in detail
+                    or "does not exist" in detail
+                    or "undefined table" in detail
+                )
+            )
+            if not landing_storage_missing:
                 raise
             landing = None
         row = conn.execute(
