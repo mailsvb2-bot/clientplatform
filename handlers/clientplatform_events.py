@@ -403,6 +403,7 @@ def _content_plan_rows(
         rows.append([("📨 Настроить сообщения до вебинара", f"cpev:ws:{event_token}:{business_token}")])
     rows.extend(
         [
+            [("🌐 Продающий лендинг", f"cpev:landing:{event_token}:{business_token}")],
             [("✨ Анонс", f"cpev:announce:{event_token}:{business_token}")],
             [("💬 Тексты дожима", f"cpev:fp:{event_token}:{business_token}")],
             [("⚙️ Автосообщения", f"cpev:settings:{business_token}")],
