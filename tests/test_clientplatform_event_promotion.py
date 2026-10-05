@@ -1,0 +1,95 @@
+from __future__ import annotations
+
+from contextlib import contextmanager
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+from uuid import uuid4
+
+from clientplatform.application import event_promotion
+
+
+def test_event_advertising_url_is_event_scoped_and_attributable() -> None:
+    event_id = "33333333-3333-4333-8333-333333333333"
+    url = event_promotion.event_advertising_url(
+        public_base_url="https://client.example.test/",
+        public_slug="AbCdEf0123456789_slug-demo",
+        event_id=event_id,
+    )
+
+    assert url.startswith(
+        "https://client.example.test/e/AbCdEf0123456789_slug-demo?"
+    )
+    assert "source=ads" in url
+    assert f"campaign_ref=event%3A{event_id}" in url
+    assert "/clientplatform/acquire" not in url
+
+
+def test_event_promotion_snapshot_keeps_event_funnel_separate_from_booking_slots() -> None:
+    business_id = str(uuid4())
+    event_id = str(uuid4())
+    actor = SimpleNamespace(
+        business_id=business_id,
+        user_id=101,
+        membership_id=str(uuid4()),
+        assert_can_manage_business=Mock(),
+    )
+    event = SimpleNamespace(
+        id=event_id,
+        title="Вебинар",
+        public_slug="AbCdEf0123456789_slug-demo",
+        provider_label="Webinar.ru",
+        provider_key="external",
+        join_is_ready=True,
+    )
+    landing = SimpleNamespace(is_published=True)
+
+    class FakeConn:
+        def execute(self, sql: str, params: tuple[str, str]):
+            assert "clientplatform_event_registrations" in sql
+            assert params == (business_id, event_id)
+            return SimpleNamespace(
+                fetchone=lambda: {
+                    "registrations": 9,
+                    "registrations_from_ads": 4,
+                }
+            )
+
+    @contextmanager
+    def fake_db():
+        yield FakeConn()
+
+    class FakeEventRepository:
+        def __init__(self, _conn):
+            pass
+
+        def get(self, *, actor, event_id):
+            return event
+
+    class FakeLandingRepository:
+        def __init__(self, _conn):
+            pass
+
+        def get(self, *, actor, event_id):
+            return landing
+
+    with (
+        patch.object(event_promotion, "get_db_ro", fake_db),
+        patch.object(event_promotion, "EventRepository", FakeEventRepository),
+        patch.object(event_promotion, "EventLandingRepository", FakeLandingRepository),
+    ):
+        snapshot = event_promotion.get_event_promotion_snapshot(
+            actor=actor,
+            event_id=event_id,
+            public_base_url="https://client.example.test",
+        )
+
+    actor.assert_can_manage_business.assert_called_once()
+    assert snapshot.event_id == event_id
+    assert snapshot.title == "Вебинар"
+    assert snapshot.provider_label == "Webinar.ru"
+    assert snapshot.join_ready is True
+    assert snapshot.landing_published is True
+    assert snapshot.registrations == 9
+    assert snapshot.registrations_from_ads == 4
+    assert "source=ads" in snapshot.advertising_url
+    assert "campaign_ref=event%3A" in snapshot.advertising_url
