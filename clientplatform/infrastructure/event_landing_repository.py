@@ -15,6 +15,9 @@ from clientplatform.domain.tenancy import TenantContext, normalize_uuid
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 
 
+_AI_PLANNING_STALE_AFTER = timedelta(minutes=5)
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -259,6 +262,206 @@ class EventLandingRepository:
         return stored
 
 
+    @staticmethod
+    def _normalize_ai_digest(claim_digest: str) -> str:
+        digest = str(claim_digest or "").strip().lower()
+        if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+            raise ValueError("event landing AI claim digest is invalid")
+        return digest
+
+    def _expire_stale_planning(
+        self,
+        *,
+        current: TenantContext,
+        event_id: str,
+        base_revision: int,
+        claim_digest: str,
+        ai_updated_at: object,
+        now: datetime,
+    ) -> bool:
+        try:
+            updated = _parse_utc(ai_updated_at)
+        except (TypeError, ValueError):
+            updated = datetime.min.replace(tzinfo=timezone.utc)
+        if now - updated < _AI_PLANNING_STALE_AFTER:
+            return False
+        cursor = self._conn.execute(
+            """
+            UPDATE clientplatform_event_landing_profiles
+            SET ai_status='ambiguous',ai_updated_at=?,
+                updated_by_member_id=?,updated_at=?
+            WHERE business_id=? AND event_id=? AND ai_status='planning'
+              AND ai_base_revision=? AND ai_claim_digest=?
+            """,
+            (
+                now.replace(microsecond=0).isoformat(),
+                current.membership_id,
+                now.replace(microsecond=0).isoformat(),
+                current.business_id,
+                event_id,
+                int(base_revision),
+                claim_digest,
+            ),
+        )
+        return int(getattr(cursor, "rowcount", 0) or 0) == 1
+
+    def prepare_ai_confirmation(
+        self,
+        *,
+        actor: TenantContext,
+        event_id: str,
+        expected_revision: int,
+        claim_digest: str,
+        now: str | None = None,
+    ) -> EventLandingAIClaim:
+        current, normalized = self._event(actor=actor, event_id=event_id)
+        digest = self._normalize_ai_digest(claim_digest)
+        revision = int(expected_revision)
+        if revision < 1:
+            raise ValueError("event landing AI base revision is invalid")
+        current_time = _parse_utc(now or _utc_now()).replace(microsecond=0)
+        timestamp = current_time.isoformat()
+        row = self._conn.execute(
+            """
+            SELECT revision,ai_status,ai_base_revision,ai_claim_digest,ai_updated_at
+            FROM clientplatform_event_landing_profiles
+            WHERE business_id=? AND event_id=? LIMIT 1
+            """,
+            (current.business_id, normalized),
+        ).fetchone()
+        if row is None:
+            raise ValueError("event landing draft is missing")
+        actual_revision = int(_value(row, "revision", 0))
+        if actual_revision != revision:
+            raise RuntimeError("event landing changed; refresh before AI confirmation")
+        status = str(_value(row, "ai_status", 1) or "")
+        base = _value(row, "ai_base_revision", 2)
+        stored_digest = str(_value(row, "ai_claim_digest", 3) or "")
+        ai_updated_at = _value(row, "ai_updated_at", 4)
+
+        if base is not None and int(base) == revision:
+            if status == "planning":
+                if self._expire_stale_planning(
+                    current=current,
+                    event_id=normalized,
+                    base_revision=revision,
+                    claim_digest=stored_digest,
+                    ai_updated_at=ai_updated_at,
+                    now=current_time,
+                ):
+                    status = "ambiguous"
+                return EventLandingAIClaim(
+                    created=False,
+                    status=status,
+                    base_revision=revision,
+                    claim_digest=stored_digest or digest,
+                )
+            if status == "ambiguous":
+                return EventLandingAIClaim(
+                    created=False,
+                    status="ambiguous",
+                    base_revision=revision,
+                    claim_digest=stored_digest or digest,
+                )
+            if status == "confirming" and stored_digest == digest:
+                self._conn.execute(
+                    """
+                    UPDATE clientplatform_event_landing_profiles
+                    SET ai_updated_at=?,updated_by_member_id=?,updated_at=?
+                    WHERE business_id=? AND event_id=? AND revision=?
+                      AND ai_status='confirming' AND ai_base_revision=?
+                      AND ai_claim_digest=?
+                    """,
+                    (
+                        timestamp,
+                        current.membership_id,
+                        timestamp,
+                        current.business_id,
+                        normalized,
+                        revision,
+                        revision,
+                        digest,
+                    ),
+                )
+                return EventLandingAIClaim(
+                    created=False,
+                    status="confirming",
+                    base_revision=revision,
+                    claim_digest=digest,
+                )
+
+        cursor = self._conn.execute(
+            """
+            UPDATE clientplatform_event_landing_profiles
+            SET ai_status='confirming',ai_base_revision=?,ai_claim_digest=?,
+                ai_updated_at=?,updated_by_member_id=?,updated_at=?
+            WHERE business_id=? AND event_id=? AND revision=?
+            """,
+            (
+                revision,
+                digest,
+                timestamp,
+                current.membership_id,
+                timestamp,
+                current.business_id,
+                normalized,
+                revision,
+            ),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            raise RuntimeError("event landing changed; refresh before AI confirmation")
+        return EventLandingAIClaim(
+            created=True,
+            status="confirming",
+            base_revision=revision,
+            claim_digest=digest,
+        )
+
+    def ai_generation_state(
+        self,
+        *,
+        actor: TenantContext,
+        event_id: str,
+        base_revision: int,
+        now: str | None = None,
+    ) -> EventLandingAIClaim | None:
+        current, normalized = self._event(actor=actor, event_id=event_id)
+        revision = int(base_revision)
+        if revision < 1:
+            raise ValueError("event landing AI base revision is invalid")
+        current_time = _parse_utc(now or _utc_now()).replace(microsecond=0)
+        row = self._conn.execute(
+            """
+            SELECT ai_status,ai_base_revision,ai_claim_digest,ai_updated_at
+            FROM clientplatform_event_landing_profiles
+            WHERE business_id=? AND event_id=? LIMIT 1
+            """,
+            (current.business_id, normalized),
+        ).fetchone()
+        if row is None:
+            return None
+        status = str(_value(row, "ai_status", 0) or "")
+        base = _value(row, "ai_base_revision", 1)
+        digest = str(_value(row, "ai_claim_digest", 2) or "")
+        ai_updated_at = _value(row, "ai_updated_at", 3)
+        if not status or base is None or int(base) != revision or len(digest) != 64:
+            return None
+        if status == "planning" and self._expire_stale_planning(
+            current=current,
+            event_id=normalized,
+            base_revision=revision,
+            claim_digest=digest,
+            ai_updated_at=ai_updated_at,
+            now=current_time,
+        ):
+            status = "ambiguous"
+        return EventLandingAIClaim(
+            created=False,
+            status=status,
+            base_revision=revision,
+            claim_digest=digest,
+        )
+
     def claim_ai_generation(
         self,
         *,
@@ -269,16 +472,15 @@ class EventLandingRepository:
         now: str | None = None,
     ) -> EventLandingAIClaim:
         current, normalized = self._event(actor=actor, event_id=event_id)
-        digest = str(claim_digest or "").strip().lower()
-        if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
-            raise ValueError("event landing AI claim digest is invalid")
+        digest = self._normalize_ai_digest(claim_digest)
         revision = int(expected_revision)
         if revision < 1:
             raise ValueError("event landing AI base revision is invalid")
-        timestamp = str(now or _utc_now())
+        current_time = _parse_utc(now or _utc_now()).replace(microsecond=0)
+        timestamp = current_time.isoformat()
         row = self._conn.execute(
             """
-            SELECT revision,ai_status,ai_base_revision,ai_claim_digest
+            SELECT revision,ai_status,ai_base_revision,ai_claim_digest,ai_updated_at
             FROM clientplatform_event_landing_profiles
             WHERE business_id=? AND event_id=? LIMIT 1
             """,
@@ -287,41 +489,60 @@ class EventLandingRepository:
         if row is None:
             raise ValueError("event landing draft is missing")
         actual_revision = int(_value(row, "revision", 0))
+        status = str(_value(row, "ai_status", 1) or "")
+        base = _value(row, "ai_base_revision", 2)
+        stored_digest = str(_value(row, "ai_claim_digest", 3) or "")
+        ai_updated_at = _value(row, "ai_updated_at", 4)
+
+        if base is not None and int(base) == revision:
+            if status == "ready":
+                return EventLandingAIClaim(
+                    created=False,
+                    status="ready",
+                    base_revision=revision,
+                    claim_digest=stored_digest,
+                )
+            if status == "ambiguous":
+                return EventLandingAIClaim(
+                    created=False,
+                    status="ambiguous",
+                    base_revision=revision,
+                    claim_digest=stored_digest,
+                )
+            if status == "planning":
+                if self._expire_stale_planning(
+                    current=current,
+                    event_id=normalized,
+                    base_revision=revision,
+                    claim_digest=stored_digest,
+                    ai_updated_at=ai_updated_at,
+                    now=current_time,
+                ):
+                    status = "ambiguous"
+                return EventLandingAIClaim(
+                    created=False,
+                    status=status,
+                    base_revision=revision,
+                    claim_digest=stored_digest,
+                )
+
         if actual_revision != revision:
-            raise RuntimeError("event landing changed; refresh before AI generation")
-        prior_status = _value(row, "ai_status", 1)
-        prior_base = _value(row, "ai_base_revision", 2)
-        prior_digest = _value(row, "ai_claim_digest", 3)
-        if (
-            prior_status in {"planning", "ambiguous"}
-            and prior_base is not None
-            and int(prior_base) == revision
-            and str(prior_digest or "") == digest
-        ):
-            return EventLandingAIClaim(
-                created=False,
-                status=str(prior_status),
-                base_revision=revision,
-                claim_digest=digest,
-            )
+            raise RuntimeError("event landing AI confirmation is stale")
+        if status != "confirming" or base is None or int(base) != revision:
+            raise RuntimeError("event landing AI confirmation is missing")
+        if stored_digest != digest:
+            raise RuntimeError("event landing AI confirmation is stale")
+
         cursor = self._conn.execute(
             """
             UPDATE clientplatform_event_landing_profiles
-            SET ai_status='planning',ai_base_revision=?,ai_claim_digest=?,
-                ai_updated_at=?,updated_by_member_id=?,updated_at=?
+            SET ai_status='planning',ai_updated_at=?,
+                updated_by_member_id=?,updated_at=?
             WHERE business_id=? AND event_id=? AND revision=?
-              AND (
-                ai_status IS NULL
-                OR ai_base_revision IS NULL
-                OR ai_claim_digest IS NULL
-                OR ai_status NOT IN ('planning','ambiguous')
-                OR ai_base_revision<>?
-                OR ai_claim_digest<>?
-              )
+              AND ai_status='confirming' AND ai_base_revision=?
+              AND ai_claim_digest=?
             """,
             (
-                revision,
-                digest,
                 timestamp,
                 current.membership_id,
                 timestamp,
@@ -333,32 +554,15 @@ class EventLandingRepository:
             ),
         )
         if int(getattr(cursor, "rowcount", 0) or 0) != 1:
-            row = self._conn.execute(
-                """
-                SELECT ai_status,ai_base_revision,ai_claim_digest
-                FROM clientplatform_event_landing_profiles
-                WHERE business_id=? AND event_id=? AND revision=? LIMIT 1
-                """,
-                (current.business_id, normalized, revision),
-            ).fetchone()
-            if row is None:
-                raise RuntimeError("event landing changed; refresh before AI generation")
-            status = str(_value(row, "ai_status", 0) or "")
-            base = _value(row, "ai_base_revision", 1)
-            stored_digest = str(_value(row, "ai_claim_digest", 2) or "")
-            if (
-                status in {"planning", "ambiguous"}
-                and base is not None
-                and int(base) == revision
-                and stored_digest == digest
-            ):
-                return EventLandingAIClaim(
-                    created=False,
-                    status=status,
-                    base_revision=revision,
-                    claim_digest=digest,
-                )
-            raise RuntimeError("event landing AI claim changed concurrently")
+            state = self.ai_generation_state(
+                actor=current,
+                event_id=normalized,
+                base_revision=revision,
+                now=timestamp,
+            )
+            if state is not None:
+                return state
+            raise RuntimeError("event landing AI confirmation changed concurrently")
         return EventLandingAIClaim(
             created=True,
             status="planning",
