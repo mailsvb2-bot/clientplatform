@@ -143,6 +143,7 @@ jobs:
 
           from services.yandex_iam_token import get_yandex_art_iam_token
           from visual_provider_gateway.engine import build_provider
+          from visual_provider_gateway.providers import _yandex_art_pipeline
 
           provider = build_provider("yandexart")
           primary = provider._primary_authorization()
@@ -185,12 +186,18 @@ jobs:
           paths = {
               "native": base + "/foundationModels/v1/imageGenerationAsync",
               "compat": base + "/v1/images/generations",
+              "responses": base + "/v1/responses",
           }
+          pipeline = _yandex_art_pipeline()
           safe = {
+              "pipeline": pipeline,
+              "responses_required": pipeline == "responses",
               "primary_native": probe(paths["native"], primary),
               "primary_compat": probe(paths["compat"], primary, project=True),
+              "primary_responses": probe(paths["responses"], primary, project=True),
               "renewable_native": probe(paths["native"], renewable),
               "renewable_compat": probe(paths["compat"], renewable, project=True),
+              "renewable_responses": probe(paths["responses"], renewable, project=True),
               "renewable_configured": bool(renewable_result.configured),
               "renewable_available": bool(renewable_result.available),
               "renewable_auth_mode": str(renewable_result.auth_mode or ""),
@@ -230,7 +237,14 @@ jobs:
               + json.dumps(safe, ensure_ascii=False, sort_keys=True)
           )
           accepted = {400, 422}
-          if not any(
+          if safe["responses_required"]:
+              if not any(
+                  safe[key] in accepted
+                  for key in ("primary_responses", "renewable_responses")
+              ):
+                  print("CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:responses_not_authorized")
+                  raise SystemExit(29)
+          elif not any(
               safe[key] in accepted
               for key in (
                   "primary_native",
@@ -239,6 +253,7 @@ jobs:
                   "renewable_compat",
               )
           ):
+              print("CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:direct_not_authorized")
               raise SystemExit(29)
           PY
 

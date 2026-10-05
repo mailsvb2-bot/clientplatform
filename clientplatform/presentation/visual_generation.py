@@ -25,10 +25,13 @@ def visual_failure_message(job) -> str:
     if code in {
         "visual_provider_submit_http_401",
         "visual_provider_submit_http_403",
+        "visual_provider_submit_yandex_responses_not_authorized",
+        "yandex_responses_not_authorized",
     }:
         return (
-            "Провайдер генерации отклонил авторизацию. Нужно восстановить его ключ "
-            "или доступ; повторять платный запрос вслепую ClientPlatform не будет."
+            "Yandex Responses не принял текущую авторизацию. Нужны права для Responses "
+            "и текстовой модели; ClientPlatform не переключается молча на упрощённый "
+            "direct API и не запускает повторную платную генерацию вслепую."
         )
     if code == "visual_gateway_quota_rejected":
         return (

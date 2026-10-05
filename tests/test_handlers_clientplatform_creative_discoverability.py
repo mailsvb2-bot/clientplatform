@@ -497,8 +497,10 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
         cases = (
             ("no_visual_provider_available", "нет подключённого рабочего генератора"),
             ("visual_creative_disabled", "нет подключённого рабочего генератора"),
-            ("visual_provider_submit_http_401", "отклонил авторизацию"),
-            ("visual_provider_submit_http_403", "отклонил авторизацию"),
+            ("visual_provider_submit_http_401", "Yandex Responses не принял текущую авторизацию"),
+            ("visual_provider_submit_http_403", "Yandex Responses не принял текущую авторизацию"),
+            ("visual_provider_submit_yandex_responses_not_authorized", "Yandex Responses не принял текущую авторизацию"),
+            ("yandex_responses_not_authorized", "Yandex Responses не принял текущую авторизацию"),
             ("visual_gateway_quota_rejected", "по лимиту"),
             ("visual_provider_submit_timeout", "сетевой ошибки"),
             ("visual_provider_submit_transport", "сетевой ошибки"),
@@ -549,7 +551,7 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
             for b in row
         ]
         self.assertIn("🤖 AI-авто — подготовить постановку", labels_)
-        self.assertIn("🎬 Сгенерировать 5 AI-вариантов", labels_)
+        self.assertIn("🎬 Подготовить 5 вариантов постановки", labels_)
         self.assertIn("🎨 Уточнить стиль", labels_)
         self.assertIn(
             "явно разрешает один текстовый AI-вызов",

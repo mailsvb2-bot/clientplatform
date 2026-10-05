@@ -91,6 +91,26 @@ def test_each_scene_variant_has_choose_and_supplement_buttons(monkeypatch) -> No
     assert "cpc:sv:auto:business-token" in callbacks
 
 
+def test_deterministic_variants_explain_distinct_semantic_staging(monkeypatch) -> None:
+    monkeypatch.setenv("VISUAL_SCENE_VARIANTS_ENABLED", "0")
+    data = _data()
+    variants = studio._scene_variants_from_state(data)
+
+    assert [item.title for item in variants] == [
+        "Причина и результат в одном кадре",
+        "История через ключевой момент",
+        "Три связанных этапа",
+        "Крупный фокус на изменении",
+        "Последовательность без подписей",
+    ]
+    descriptions = " ".join(item.description for item in variants)
+    directions = " ".join(item.direction for item in variants)
+    assert "ёж" in descriptions
+    assert "слушает ресурсное аудио" in descriptions
+    assert "ёж, который слушает ресурсное аудио" in directions
+    assert len({item.description for item in variants}) == 5
+
+
 def test_supplement_flow_updates_only_selected_variant(monkeypatch) -> None:
     monkeypatch.setenv("VISUAL_SCENE_VARIANTS_ENABLED", "0")
     state = FakeState(_data())
@@ -169,7 +189,10 @@ def test_scene_variant_helpers_roundtrip_cached_state_and_reject_corruption(monk
     variants = studio._scene_variants_from_state(data)
     text = studio._scene_variant_text(variants)
     assert "Варианты постановки" in text
-    assert "1. Ясная сюжетная сцена" in text
+    assert "1. Причина и результат в одном кадре" in text
+    assert "ёж" in text
+    assert "слушает ресурсное аудио" in text
+    assert "AI-режиссёр сейчас недоступен" in text
     assert "5." in text
 
     contract, source, cached = asyncio.run(
