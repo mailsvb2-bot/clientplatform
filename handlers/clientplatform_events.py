@@ -57,6 +57,7 @@ from clientplatform.application.event_landing_builder import (
     generate_event_landing_ai,
     get_event_landing_editor_state,
     issue_event_landing_preview,
+    prepare_event_landing_ai_confirmation,
     publish_event_landing,
     reset_event_landing_template,
     restore_simple_event_landing,
@@ -1027,6 +1028,15 @@ async def confirm_event_landing_ai(callback: CallbackQuery) -> None:
     try:
         actor = await control._actor(int(callback.from_user.id), business_id)
         actor.assert_can_manage_business()
+        confirmation = await asyncio.to_thread(
+            prepare_event_landing_ai_confirmation,
+            actor=actor,
+            event_id=event_id,
+        )
+    except EventLandingAIUnavailable as exc:
+        await callback.answer()
+        await control._callback_message(callback).answer(str(exc))
+        return
     except (TenantPermissionDenied, ValueError, RuntimeError):
         await callback.answer("AI-генерация недоступна", show_alert=True)
         return
@@ -1043,7 +1053,12 @@ async def confirm_event_landing_ai(callback: CallbackQuery) -> None:
         "Повторный callback для той же ревизии защищён от второго платного вызова.",
         reply_markup=control._keyboard(
             [
-                [("✅ Запустить AI", f"cpev:laok:{event_token}:{business_token}")],
+                [
+                    (
+                        "✅ Запустить AI",
+                        f"cpev:laok:{event_token}:{business_token}:{confirmation.revision}",
+                    )
+                ],
                 [("🌐 К конструктору", f"cpev:landing:{event_token}:{business_token}")],
             ]
         ),
@@ -1052,12 +1067,17 @@ async def confirm_event_landing_ai(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("cpev:laok:"))
 async def generate_event_landing(callback: CallbackQuery) -> None:
-    parts = str(callback.data or "").split(":", 3)
-    if len(parts) != 4:
+    parts = str(callback.data or "").split(":", 4)
+    if len(parts) != 5:
         await callback.answer("Кнопка устарела", show_alert=True)
         return
     event_id = control._token_uuid(parts[2])
     business_id = control._token_uuid(parts[3])
+    try:
+        expected_revision = int(parts[4])
+    except (TypeError, ValueError):
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
     await callback.answer("Готовлю AI-черновик…")
     target = control._callback_message(callback)
     try:
@@ -1066,6 +1086,7 @@ async def generate_event_landing(callback: CallbackQuery) -> None:
             generate_event_landing_ai,
             actor=actor,
             event_id=event_id,
+            expected_revision=expected_revision,
         )
     except EventLandingAIUnavailable as exc:
         await target.answer(str(exc))
