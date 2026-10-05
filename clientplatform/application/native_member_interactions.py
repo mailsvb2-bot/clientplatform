@@ -70,6 +70,7 @@ from clientplatform.application.event_landing_builder import (
     generate_event_landing_ai,
     get_event_landing_editor_state,
     issue_event_landing_preview,
+    prepare_event_landing_ai_confirmation,
     publish_event_landing,
     reset_event_landing_template,
     restore_simple_event_landing,
@@ -2953,6 +2954,16 @@ def _event_landing_ai_confirm_message(
 ) -> CustomerInteractionMessage:
     actor.assert_can_manage_business()
     _event_landing_item(actor, event_id)
+    try:
+        confirmation = prepare_event_landing_ai_confirmation(
+            actor=actor,
+            event_id=event_id,
+        )
+    except EventLandingAIUnavailable as exc:
+        return CustomerInteractionMessage(
+            text=f"AI-версия сейчас не может быть запущена.\n\n{str(exc)}",
+            rows=((_button("🌐 К лендингу", f"cpm:event-landing:{event_id}"),),),
+        )
     return CustomerInteractionMessage(
         text=(
             "✨ AI-версия лендинга\n\n"
@@ -2961,10 +2972,15 @@ def _event_landing_ai_confirm_message(
             "расписание и подтверждённые данные профиля бизнеса; данные зарегистрированных "
             "участников не передаются. Результат сохранится только как черновик и "
             "не станет публичным без отдельного «🚀 Опубликовать».\n\n"
-            "Повтор той же ревизии защищён от второго платного вызова."
+            "Повтор этого подтверждения защищён от второго платного вызова."
         ),
         rows=(
-            (_button("✅ Запустить AI", f"cpm:event-landing-ai-confirm:{event_id}"),),
+            (
+                _button(
+                    "✅ Запустить AI",
+                    f"cpm:event-landing-ai-confirm:{event_id}:{confirmation.revision}",
+                ),
+            ),
             (_button("🌐 К лендингу", f"cpm:event-landing:{event_id}"),),
         ),
     )
@@ -2973,9 +2989,14 @@ def _event_landing_ai_confirm_message(
 def _event_landing_ai_result(
     actor: TenantContext,
     event_id: str,
+    expected_revision: int,
 ) -> CustomerInteractionMessage:
     try:
-        generate_event_landing_ai(actor=actor, event_id=event_id)
+        generate_event_landing_ai(
+            actor=actor,
+            event_id=event_id,
+            expected_revision=expected_revision,
+        )
     except EventLandingAIUnavailable as exc:
         return CustomerInteractionMessage(
             text=f"AI-версия не создана.\n\n{str(exc)}",
@@ -8088,9 +8109,17 @@ def _render(
                 return _stale_message()
             return _event_landing_ai_confirm_message(actor, parsed.args[0])
         if parsed.action == "event-landing-ai-confirm":
-            if len(parsed.args) != 1:
+            if len(parsed.args) != 2:
                 return _stale_message()
-            return _event_landing_ai_result(actor, parsed.args[0])
+            try:
+                expected_revision = int(parsed.args[1])
+            except (TypeError, ValueError):
+                return _stale_message()
+            return _event_landing_ai_result(
+                actor,
+                parsed.args[0],
+                expected_revision,
+            )
         if parsed.action == "event-landing-texts":
             if len(parsed.args) != 1:
                 return _stale_message()
