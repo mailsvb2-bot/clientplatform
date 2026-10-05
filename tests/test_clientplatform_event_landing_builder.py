@@ -93,7 +93,7 @@ def _landing(title: str = "Как вернуть энергию") -> EventLandin
         agenda_title="Программа",
         agenda_points=("Вводная часть", "Практический разбор"),
         speaker_title="Организатор",
-        speaker_text="Практика «Метротерапия».",
+        speaker_text="Практика «Практика Баланс».",
         faq_title="Вопросы",
         faq=(
             EventLandingFaq(
@@ -571,7 +571,7 @@ class EventLandingApplicationTests(unittest.TestCase):
             return_value=(
                 event,
                 sessions,
-                "Метротерапия",
+                "Практика Баланс",
                 SimpleNamespace(
                     activity_description=(
                         "Психологические образовательные программы"
@@ -590,7 +590,7 @@ class EventLandingApplicationTests(unittest.TestCase):
             landing.audience_points,
             ("Мужчины 35–50 лет",),
         )
-        self.assertIn("Метротерапия", landing.speaker_text)
+        self.assertIn("Практика Баланс", landing.speaker_text)
         self.assertFalse(
             any(
                 "гарант" in item.casefold()
