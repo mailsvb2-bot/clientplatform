@@ -108,16 +108,24 @@ def test_provider_snapshot_does_not_expose_credentials(monkeypatch):
 def test_provider_snapshot_reports_yandex_responses_pipeline_and_orchestrator(monkeypatch):
     monkeypatch.setenv("YANDEX_ART_FOLDER_ID", "folder")
     monkeypatch.delenv("YANDEX_ART_PIPELINE", raising=False)
+    monkeypatch.delenv("YANDEX_ART_ALLOW_DIRECT_FALLBACK", raising=False)
 
     snapshot = provider_snapshot("RU")
     yandex = snapshot["models"]["yandexart"]
 
     assert yandex["api_family"] == "responses_image_generation"
+    assert yandex["responses_required"] is True
+    assert yandex["direct_fallback_allowed"] is False
     assert yandex["orchestrator_model"] == "gpt://folder/aliceai-llm"
+
+    monkeypatch.setenv("YANDEX_ART_ALLOW_DIRECT_FALLBACK", "1")
+    snapshot = provider_snapshot("RU")
+    assert snapshot["models"]["yandexart"]["direct_fallback_allowed"] is True
 
     monkeypatch.setenv("YANDEX_ART_PIPELINE", "images")
     snapshot = provider_snapshot("RU")
     assert snapshot["models"]["yandexart"]["api_family"] == "openai_images"
+    assert snapshot["models"]["yandexart"]["responses_required"] is False
 
 
 def test_gigachat_semantic_qa_is_non_generative_and_cleans_uploaded_file(
@@ -471,7 +479,42 @@ def test_yandex_responses_derives_folder_from_explicit_art_model_uri(monkeypatch
     assert observed["payload"]["model"] == "gpt://folder-from-uri/aliceai-llm"
 
 
-def test_yandex_responses_403_falls_back_to_direct_images_for_image_only_key(monkeypatch, tmp_path):
+def test_yandex_responses_403_fails_closed_by_default(monkeypatch):
+    from visual_provider_gateway.providers import YandexArtProvider
+
+    calls = []
+
+    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0, ca_bundle_file=""):
+        calls.append((url, payload))
+        raise providers.ProviderTransportError("http_403")
+
+    monkeypatch.delenv("YANDEX_ART_PIPELINE", raising=False)
+    monkeypatch.delenv("YANDEX_ART_ALLOW_DIRECT_FALLBACK", raising=False)
+    monkeypatch.setenv("YANDEX_API_KEY", "image-only-key")
+    monkeypatch.setattr(providers, "_json_request", fake_json_request)
+
+    provider = YandexArtProvider(
+        ProviderConfig(
+            name="yandexart",
+            base_url="https://ai.api.cloud.yandex.net",
+            api_key="image-only-key",
+            folder_id="folder",
+            model_image="art://folder/aliceai-image-art-3.0",
+        )
+    )
+
+    with pytest.raises(
+        providers.ProviderTransportError,
+        match="yandex_responses_not_authorized",
+    ):
+        provider.submit(CreativeBrief(kind="image", prompt="hedgehog"))
+
+    assert [url for url, _ in calls] == [
+        "https://ai.api.cloud.yandex.net/v1/responses",
+    ]
+
+
+def test_yandex_responses_403_can_use_direct_only_with_operator_opt_in(monkeypatch, tmp_path):
     from visual_provider_gateway.providers import YandexArtProvider
 
     encoded = base64.b64encode(b"direct-fallback-image").decode("ascii")
@@ -485,6 +528,7 @@ def test_yandex_responses_403_falls_back_to_direct_images_for_image_only_key(mon
         return {"data": [{"b64_json": encoded}]}
 
     monkeypatch.delenv("YANDEX_ART_PIPELINE", raising=False)
+    monkeypatch.setenv("YANDEX_ART_ALLOW_DIRECT_FALLBACK", "1")
     monkeypatch.setenv("YANDEX_API_KEY", "image-only-key")
     monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
     monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
@@ -508,7 +552,6 @@ def test_yandex_responses_403_falls_back_to_direct_images_for_image_only_key(mon
         "https://ai.api.cloud.yandex.net/v1/images/generations",
     ]
     assert job.provider_payload["transport"] == "openai_compat"
-
 
 def test_yandex_responses_ambiguous_error_never_falls_back_to_direct_images(monkeypatch):
     from visual_provider_gateway.providers import YandexArtProvider

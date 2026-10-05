@@ -359,6 +359,10 @@ def provider_snapshot(country_code: str = "") -> dict[str, object]:
             "yandexart": {
                 **_model_lifecycle(yandex.model_image),
                 "api_family": _yandex_image_api_family(),
+                "responses_required": _yandex_image_api_family() == "responses_image_generation",
+                "direct_fallback_allowed": str(
+                    os.getenv("YANDEX_ART_ALLOW_DIRECT_FALLBACK", "0") or "0"
+                ).strip().lower() in {"1", "true", "yes", "on"},
                 "orchestrator_model": yandex.model_orchestrator,
                 "catalog_configured": catalog.configured,
                 "catalog_available": catalog.available,
