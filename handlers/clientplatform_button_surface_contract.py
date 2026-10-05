@@ -223,6 +223,7 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpev:edit:",
         "cpev:le:",
         "cpev:la:",
+        "cpev:laok:",
         "cpev:lt:",
         "cpev:lr:",
         "cpev:lp:",
