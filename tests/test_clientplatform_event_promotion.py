@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import sqlite3
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from uuid import uuid4
@@ -41,6 +42,69 @@ def test_event_advertising_url_fails_closed_without_https_or_slug() -> None:
             pass
         else:
             raise AssertionError("unsafe event advertising URL must fail closed")
+
+
+def test_event_promotion_tolerates_only_missing_optional_landing_schema() -> None:
+    business_id = str(uuid4())
+    event_id = str(uuid4())
+    actor = SimpleNamespace(
+        business_id=business_id,
+        user_id=101,
+        membership_id=str(uuid4()),
+        assert_can_manage_business=Mock(),
+    )
+    event = SimpleNamespace(
+        id=event_id,
+        title="Вебинар",
+        public_slug="AbCdEf0123456789_slug-demo",
+        provider_label=None,
+        provider_key="external",
+        join_is_ready=False,
+    )
+
+    class FakeConn:
+        def execute(self, sql: str, params: tuple[str, str]):
+            return SimpleNamespace(
+                fetchone=lambda: {
+                    "registrations": 0,
+                    "registrations_from_ads": 0,
+                }
+            )
+
+    @contextmanager
+    def fake_db():
+        yield FakeConn()
+
+    class FakeEventRepository:
+        def __init__(self, _conn):
+            pass
+
+        def get(self, *, actor, event_id):
+            return event
+
+    class MissingLandingRepository:
+        def __init__(self, _conn):
+            pass
+
+        def get(self, *, actor, event_id):
+            raise sqlite3.OperationalError(
+                "no such table: clientplatform_event_landing_profiles"
+            )
+
+    with (
+        patch.object(event_promotion, "get_db_ro", fake_db),
+        patch.object(event_promotion, "EventRepository", FakeEventRepository),
+        patch.object(event_promotion, "EventLandingRepository", MissingLandingRepository),
+    ):
+        snapshot = event_promotion.get_event_promotion_snapshot(
+            actor=actor,
+            event_id=event_id,
+            public_base_url="https://client.example.test",
+        )
+
+    assert snapshot.landing_published is False
+    assert snapshot.join_ready is False
+    assert snapshot.provider_label == "external"
 
 
 def test_event_promotion_snapshot_keeps_event_funnel_separate_from_booking_slots() -> None:
