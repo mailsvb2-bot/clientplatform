@@ -371,6 +371,7 @@ class YandexArtProvider:
         return isinstance(exc, ProviderTransportError) and str(exc or "").strip() in {
             "http_401",
             "http_403",
+            "yandex_responses_not_authorized",
         }
 
     def _headers(self, authorization: str = "") -> dict[str, str]:
