@@ -121,6 +121,10 @@ def ensure(c: sqlite3.Connection) -> None:
             preview_token_digest TEXT,
             preview_revision INTEGER,
             preview_expires_at TEXT,
+            ai_status TEXT,
+            ai_base_revision INTEGER,
+            ai_claim_digest TEXT,
+            ai_updated_at TEXT,
             updated_by_member_id TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
@@ -134,6 +138,19 @@ def ensure(c: sqlite3.Connection) -> None:
             CHECK(revision >= 1),
             CHECK(published_revision IS NULL OR published_revision >= 1),
             CHECK(preview_revision IS NULL OR preview_revision >= 1),
+            CHECK(ai_status IS NULL OR ai_status IN ('planning','ready','ambiguous')),
+            CHECK(ai_base_revision IS NULL OR ai_base_revision >= 1),
+            CHECK(
+                (ai_status IS NULL
+                    AND ai_base_revision IS NULL
+                    AND ai_claim_digest IS NULL
+                    AND ai_updated_at IS NULL)
+                OR
+                (ai_status IS NOT NULL
+                    AND ai_base_revision IS NOT NULL
+                    AND length(ai_claim_digest)=64
+                    AND ai_updated_at IS NOT NULL)
+            ),
             CHECK(
                 (preview_token_digest IS NULL
                     AND preview_revision IS NULL
@@ -170,6 +187,25 @@ def ensure(c: sqlite3.Connection) -> None:
         )
         """
     )
+
+    landing_columns = {
+        str(row[1])
+        for row in c.execute(
+            "PRAGMA table_info(clientplatform_event_landing_profiles)"
+        ).fetchall()
+    }
+    landing_additions = {
+        "ai_status": "TEXT",
+        "ai_base_revision": "INTEGER",
+        "ai_claim_digest": "TEXT",
+        "ai_updated_at": "TEXT",
+    }
+    for column, sql_type in landing_additions.items():
+        if column not in landing_columns:
+            c.execute(
+                f"ALTER TABLE clientplatform_event_landing_profiles "
+                f"ADD COLUMN {column} {sql_type}"
+            )
 
     message_columns = {
         str(row[1])
