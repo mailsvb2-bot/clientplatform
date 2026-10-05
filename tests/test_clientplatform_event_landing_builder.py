@@ -598,6 +598,29 @@ class EventLandingApplicationTests(unittest.TestCase):
             )
         )
 
+    def test_public_landing_missing_optional_table_falls_back_to_simple_layer(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            with patch.object(
+                event_landing_builder,
+                "get_db_ro",
+                return_value=nullcontext(conn),
+            ):
+                self.assertIsNone(
+                    event_landing_builder.get_public_event_landing(
+                        public_slug="missing-schema",
+                    )
+                )
+                self.assertIsNone(
+                    event_landing_builder.get_public_event_landing_preview(
+                        public_slug="missing-schema",
+                        token="preview-token-that-is-long-enough",
+                    )
+                )
+        finally:
+            conn.close()
+
     def test_editor_projection_open_is_read_only(self) -> None:
         actor = SimpleNamespace()
         template = _landing("Виртуальная автоверсия")
