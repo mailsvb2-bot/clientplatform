@@ -579,7 +579,11 @@ def build_visual_scene_variants(
 ) -> tuple[VisualSceneVariant, ...]:
     """Return exactly five safe presentation alternatives in one text-AI call."""
 
-    fallback = _fallback_variants(contract=scene_contract, style=style_intent)
+    fallback = _fallback_variants(
+        contract=scene_contract,
+        style=style_intent,
+        owner_request=request,
+    )
     if str(os.getenv("VISUAL_SCENE_VARIANTS_ENABLED", "1")).strip().lower() not in {
         "1", "true", "yes", "on",
     }:
