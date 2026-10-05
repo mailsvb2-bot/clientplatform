@@ -202,3 +202,119 @@ def test_event_promotion_snapshot_keeps_event_funnel_separate_from_booking_slots
     assert snapshot.registrations_from_ads == 4
     assert "source=ads" in snapshot.advertising_url
     assert "campaign_ref=event%3A" in snapshot.advertising_url
+
+
+def test_event_promotion_snapshot_handles_empty_registration_row_and_provider_fallback() -> None:
+    business_id = str(uuid4())
+    event_id = str(uuid4())
+    actor = SimpleNamespace(
+        business_id=business_id,
+        user_id=101,
+        membership_id=str(uuid4()),
+        assert_can_manage_business=Mock(),
+    )
+    event = SimpleNamespace(
+        id=event_id,
+        title="Вебинар без провайдера",
+        public_slug="AbCdEf0123456789_empty",
+        provider_label=None,
+        provider_key=None,
+        join_is_ready=False,
+    )
+
+    class FakeConn:
+        def execute(self, sql: str, params: tuple[str, str]):
+            assert params == (business_id, event_id)
+            return SimpleNamespace(fetchone=lambda: None)
+
+    @contextmanager
+    def fake_db():
+        yield FakeConn()
+
+    class FakeEventRepository:
+        def __init__(self, _conn):
+            pass
+
+        def get(self, *, actor, event_id):
+            return event
+
+    class FakeLandingRepository:
+        def __init__(self, _conn):
+            pass
+
+        def get(self, *, actor, event_id):
+            return None
+
+    with (
+        patch.object(event_promotion, "get_db_ro", fake_db),
+        patch.object(event_promotion, "EventRepository", FakeEventRepository),
+        patch.object(event_promotion, "EventLandingRepository", FakeLandingRepository),
+    ):
+        snapshot = event_promotion.get_event_promotion_snapshot(
+            actor=actor,
+            event_id=event_id,
+            public_base_url="https://client.example.test",
+        )
+
+    assert snapshot.provider_label == "площадка"
+    assert snapshot.registrations == 0
+    assert snapshot.registrations_from_ads == 0
+    assert snapshot.landing_published is False
+
+
+def test_event_promotion_snapshot_accepts_positional_registration_row() -> None:
+    business_id = str(uuid4())
+    event_id = str(uuid4())
+    actor = SimpleNamespace(
+        business_id=business_id,
+        user_id=101,
+        membership_id=str(uuid4()),
+        assert_can_manage_business=Mock(),
+    )
+    event = SimpleNamespace(
+        id=event_id,
+        title="Вебинар",
+        public_slug="AbCdEf0123456789_tuple",
+        provider_label=None,
+        provider_key="external",
+        join_is_ready=True,
+    )
+
+    class FakeConn:
+        def execute(self, sql: str, params: tuple[str, str]):
+            assert params == (business_id, event_id)
+            return SimpleNamespace(fetchone=lambda: (7, None))
+
+    @contextmanager
+    def fake_db():
+        yield FakeConn()
+
+    class FakeEventRepository:
+        def __init__(self, _conn):
+            pass
+
+        def get(self, *, actor, event_id):
+            return event
+
+    class FakeLandingRepository:
+        def __init__(self, _conn):
+            pass
+
+        def get(self, *, actor, event_id):
+            return SimpleNamespace(is_published=False)
+
+    with (
+        patch.object(event_promotion, "get_db_ro", fake_db),
+        patch.object(event_promotion, "EventRepository", FakeEventRepository),
+        patch.object(event_promotion, "EventLandingRepository", FakeLandingRepository),
+    ):
+        snapshot = event_promotion.get_event_promotion_snapshot(
+            actor=actor,
+            event_id=event_id,
+            public_base_url="https://client.example.test",
+        )
+
+    assert snapshot.provider_label == "external"
+    assert snapshot.registrations == 7
+    assert snapshot.registrations_from_ads == 0
+    assert snapshot.landing_published is False
