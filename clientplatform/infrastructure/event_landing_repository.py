@@ -60,6 +60,14 @@ class IssuedEventLandingPreview:
     expires_at: str
 
 
+@dataclass(frozen=True, slots=True)
+class EventLandingAIClaim:
+    created: bool
+    status: str
+    base_revision: int
+    claim_digest: str
+
+
 _COLUMNS = (
     "business_id,event_id,draft_json,published_json,draft_source,revision,"
     "published_revision,updated_by_member_id,created_at,updated_at,published_at"
@@ -186,12 +194,17 @@ class EventLandingRepository:
                 UPDATE clientplatform_event_landing_profiles
                 SET draft_json=?,draft_source=?,revision=revision+1,
                     preview_token_digest=NULL,preview_revision=NULL,preview_expires_at=NULL,
+                    ai_status=CASE WHEN ai_status='planning' THEN 'ambiguous' ELSE NULL END,
+                    ai_base_revision=CASE WHEN ai_status='planning' THEN ai_base_revision ELSE NULL END,
+                    ai_claim_digest=CASE WHEN ai_status='planning' THEN ai_claim_digest ELSE NULL END,
+                    ai_updated_at=CASE WHEN ai_status='planning' THEN ? ELSE NULL END,
                     updated_by_member_id=?,updated_at=?
                 WHERE business_id=? AND event_id=? AND revision=?
                 """,
                 (
                     body,
                     source_value,
+                    timestamp,
                     current.membership_id,
                     timestamp,
                     current.business_id,
@@ -243,6 +256,193 @@ class EventLandingRepository:
         stored = self.get(actor=current, event_id=normalized)
         if stored is None:
             raise RuntimeError("event landing draft was not persisted")
+        return stored
+
+
+    def claim_ai_generation(
+        self,
+        *,
+        actor: TenantContext,
+        event_id: str,
+        expected_revision: int,
+        claim_digest: str,
+        now: str | None = None,
+    ) -> EventLandingAIClaim:
+        current, normalized = self._event(actor=actor, event_id=event_id)
+        digest = str(claim_digest or "").strip().lower()
+        if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+            raise ValueError("event landing AI claim digest is invalid")
+        revision = int(expected_revision)
+        if revision < 1:
+            raise ValueError("event landing AI base revision is invalid")
+        timestamp = str(now or _utc_now())
+        row = self._conn.execute(
+            """
+            SELECT revision,ai_status,ai_base_revision,ai_claim_digest
+            FROM clientplatform_event_landing_profiles
+            WHERE business_id=? AND event_id=? LIMIT 1
+            """,
+            (current.business_id, normalized),
+        ).fetchone()
+        if row is None:
+            raise ValueError("event landing draft is missing")
+        actual_revision = int(_value(row, "revision", 0))
+        if actual_revision != revision:
+            raise RuntimeError("event landing changed; refresh before AI generation")
+        prior_status = _value(row, "ai_status", 1)
+        prior_base = _value(row, "ai_base_revision", 2)
+        prior_digest = _value(row, "ai_claim_digest", 3)
+        if (
+            prior_status in {"planning", "ambiguous"}
+            and prior_base is not None
+            and int(prior_base) == revision
+            and str(prior_digest or "") == digest
+        ):
+            return EventLandingAIClaim(
+                created=False,
+                status=str(prior_status),
+                base_revision=revision,
+                claim_digest=digest,
+            )
+        cursor = self._conn.execute(
+            """
+            UPDATE clientplatform_event_landing_profiles
+            SET ai_status='planning',ai_base_revision=?,ai_claim_digest=?,
+                ai_updated_at=?,updated_by_member_id=?,updated_at=?
+            WHERE business_id=? AND event_id=? AND revision=?
+              AND NOT (
+                ai_status IN ('planning','ambiguous')
+                AND ai_base_revision=?
+                AND ai_claim_digest=?
+              )
+            """,
+            (
+                revision,
+                digest,
+                timestamp,
+                current.membership_id,
+                timestamp,
+                current.business_id,
+                normalized,
+                revision,
+                revision,
+                digest,
+            ),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            row = self._conn.execute(
+                """
+                SELECT ai_status,ai_base_revision,ai_claim_digest
+                FROM clientplatform_event_landing_profiles
+                WHERE business_id=? AND event_id=? AND revision=? LIMIT 1
+                """,
+                (current.business_id, normalized, revision),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("event landing changed; refresh before AI generation")
+            status = str(_value(row, "ai_status", 0) or "")
+            base = _value(row, "ai_base_revision", 1)
+            stored_digest = str(_value(row, "ai_claim_digest", 2) or "")
+            if (
+                status in {"planning", "ambiguous"}
+                and base is not None
+                and int(base) == revision
+                and stored_digest == digest
+            ):
+                return EventLandingAIClaim(
+                    created=False,
+                    status=status,
+                    base_revision=revision,
+                    claim_digest=digest,
+                )
+            raise RuntimeError("event landing AI claim changed concurrently")
+        return EventLandingAIClaim(
+            created=True,
+            status="planning",
+            base_revision=revision,
+            claim_digest=digest,
+        )
+
+    def mark_ai_generation_ambiguous(
+        self,
+        *,
+        actor: TenantContext,
+        event_id: str,
+        base_revision: int,
+        claim_digest: str,
+        now: str | None = None,
+    ) -> None:
+        current, normalized = self._event(actor=actor, event_id=event_id)
+        timestamp = str(now or _utc_now())
+        self._conn.execute(
+            """
+            UPDATE clientplatform_event_landing_profiles
+            SET ai_status='ambiguous',ai_updated_at=?,
+                updated_by_member_id=?,updated_at=?
+            WHERE business_id=? AND event_id=? AND ai_status='planning'
+              AND ai_base_revision=? AND ai_claim_digest=?
+            """,
+            (
+                timestamp,
+                current.membership_id,
+                timestamp,
+                current.business_id,
+                normalized,
+                int(base_revision),
+                str(claim_digest or "").strip().lower(),
+            ),
+        )
+
+    def complete_ai_generation(
+        self,
+        *,
+        actor: TenantContext,
+        event_id: str,
+        base_revision: int,
+        claim_digest: str,
+        content: EventLandingContent,
+        now: str | None = None,
+    ) -> EventLandingProfile:
+        current, normalized = self._event(actor=actor, event_id=event_id)
+        digest = str(claim_digest or "").strip().lower()
+        body = event_landing_content_to_json(content)
+        timestamp = str(now or _utc_now())
+        cursor = self._conn.execute(
+            """
+            UPDATE clientplatform_event_landing_profiles
+            SET draft_json=?,draft_source='ai',revision=revision+1,
+                preview_token_digest=NULL,preview_revision=NULL,preview_expires_at=NULL,
+                ai_status='ready',ai_updated_at=?,
+                updated_by_member_id=?,updated_at=?
+            WHERE business_id=? AND event_id=? AND revision=?
+              AND ai_status='planning' AND ai_base_revision=? AND ai_claim_digest=?
+            """,
+            (
+                body,
+                timestamp,
+                current.membership_id,
+                timestamp,
+                current.business_id,
+                normalized,
+                int(base_revision),
+                int(base_revision),
+                digest,
+            ),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            self.mark_ai_generation_ambiguous(
+                actor=current,
+                event_id=normalized,
+                base_revision=base_revision,
+                claim_digest=digest,
+                now=timestamp,
+            )
+            raise RuntimeError(
+                "event landing changed while AI generation was in progress"
+            )
+        stored = self.get(actor=current, event_id=normalized)
+        if stored is None:
+            raise RuntimeError("event landing AI draft was not persisted")
         return stored
 
 
@@ -431,6 +631,7 @@ def get_preview_event_landing(
 
 
 __all__ = [
+    "EventLandingAIClaim",
     "EventLandingProfile",
     "EventLandingRepository",
     "IssuedEventLandingPreview",
