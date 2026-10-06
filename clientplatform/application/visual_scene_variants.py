@@ -588,7 +588,7 @@ def build_visual_scene_bundle(
             },
         ],
         temperature=0.55,
-        max_tokens=2200,
+        max_tokens=1800,
     )
 
     value = _json_object_from_model(raw or "")
