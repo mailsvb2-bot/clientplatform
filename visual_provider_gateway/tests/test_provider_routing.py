@@ -1542,14 +1542,15 @@ def test_submit_preserves_detailed_http_400_as_definitive_safe_failure(monkeypat
     )
     monkeypatch.delenv("VISUAL_ALLOW_PROVIDER_FAILOVER_AFTER_ERROR", raising=False)
 
-    job = VisualCreativeEngine(enabled=True).submit(
-        CreativeBrief(kind="image", prompt="x")
-    )
+    engine = VisualCreativeEngine(enabled=True)
+    job = engine.submit(CreativeBrief(kind="image", prompt="x"))
 
     assert job.provider == "second"
     assert job.status == "queued"
     assert calls == ["broken", "second"]
-    assert job.provider_payload["attempts"] == (
+    runtime = engine.runtime_snapshot()["image"]
+    assert runtime["provider"] == "second"
+    assert runtime["attempts"] == (
         "broken:visual_provider_submit_http_400_error_code_invalid_tool_schema",
     )
 
