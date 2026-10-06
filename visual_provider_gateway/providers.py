@@ -70,8 +70,24 @@ def _safe_http_error_code(status: int, raw: bytes) -> str:
         return base
     if not isinstance(decoded, dict):
         return base
-    for field in ("param", "type"):
-        value = str(decoded.get(field) or "").strip()
+
+    candidates: list[tuple[str, object]] = [
+        ("param", decoded.get("param")),
+        ("type", decoded.get("type")),
+        ("code", decoded.get("code")),
+    ]
+    nested = decoded.get("error")
+    if isinstance(nested, dict):
+        candidates.extend(
+            (
+                ("error_param", nested.get("param")),
+                ("error_type", nested.get("type")),
+                ("error_code", nested.get("code")),
+            )
+        )
+
+    for field, raw_value in candidates:
+        value = str(raw_value or "").strip()
         if not value or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", value):
             continue
         normalized = re.sub(r"[^A-Za-z0-9]+", "_", value).strip("_").lower()
@@ -592,12 +608,15 @@ class YandexArtProvider:
             raise ProviderTransportError("invalid_yandex_prompt")
         if len(prompt) > 500:
             raise ProviderTransportError("yandex_prompt_too_long")
+        folder_id = _yandex_folder_for_model(self.config, model_uri)
+        if not folder_id:
+            raise ProviderTransportError("provider_not_configured")
         data = _json_request(
             "POST",
             self.config.base_url.rstrip("/") + "/v1/images/generations",
             headers={
                 "Authorization": authorization,
-                "OpenAI-Project": self.config.folder_id,
+                "OpenAI-Project": folder_id,
             },
             payload={
                 "model": model_uri,
