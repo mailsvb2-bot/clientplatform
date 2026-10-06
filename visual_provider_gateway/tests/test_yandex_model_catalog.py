@@ -28,6 +28,7 @@ def _config() -> ProviderConfig:
         api_key="api-key",
         folder_id="folder",
         model_image="art://folder/aliceai-image-art-3.0",
+        model_orchestrator="gpt://folder/aliceai-llm/latest",
         timeout_seconds=5,
     )
 
@@ -67,11 +68,13 @@ def test_catalog_reads_available_art_models_and_current_presence(monkeypatch):
 
     assert snapshot.available is True
     assert snapshot.current_model_present is True
+    assert snapshot.orchestrator_model_present is True
     assert snapshot.all_model_count == 3
     assert snapshot.art_models == (
         "art://folder/aliceai-image-art-3.0",
         "art://folder/aliceai-image-art-4.0@rc1",
     )
+    assert snapshot.gpt_models == ("gpt://folder/aliceai-llm/latest",)
     assert observed["url"].endswith("/v1/models")
     assert observed["authorization"] == "Api-Key api-key"
     assert observed["project"] == "folder"
@@ -224,6 +227,25 @@ def test_catalog_reports_missing_current_model(monkeypatch):
     assert snapshot.available is True
     assert snapshot.current_model_present is False
     assert snapshot.art_models == ("art://folder/aliceai-image-art-4.0",)
+
+
+def test_catalog_reports_missing_responses_orchestrator_separately(monkeypatch):
+    catalog.clear_yandex_model_catalog_cache()
+    monkeypatch.setenv("YANDEX_API_KEY", "api-key")
+    monkeypatch.setattr(
+        catalog.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _Response(
+            b'{"data":[{"id":"art://folder/aliceai-image-art-3.0"},'
+            b'{"id":"gpt://folder/qwen3.6-35b-a3b"}]}'
+        ),
+    )
+
+    snapshot = catalog.refresh_yandex_model_catalog(_config())
+
+    assert snapshot.current_model_present is True
+    assert snapshot.orchestrator_model_present is False
+    assert snapshot.gpt_models == ("gpt://folder/qwen3.6-35b-a3b",)
 
 
 def test_catalog_normalizes_http_and_invalid_response_failures(monkeypatch):
