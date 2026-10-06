@@ -88,7 +88,7 @@ def _safe_http_error_code(status: int, raw: bytes) -> str:
 
     for field, raw_value in candidates:
         value = str(raw_value or "").strip()
-        if not value or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", value):
+        if not value or not re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", value):
             continue
         normalized = re.sub(r"[^A-Za-z0-9]+", "_", value).strip("_").lower()
         if normalized:
