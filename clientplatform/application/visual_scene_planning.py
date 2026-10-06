@@ -122,19 +122,33 @@ def grounded_scene_contract_from_mapping(
         for action in resolved_actions[:3]:
             required_evidence.append("requested action visibly readable: " + action)
     elif topology == "transformation":
-        required_evidence.extend(
-            [
-                "same subject identity across stages",
-                "causal action connected to the visible change",
-                "requested final state visibly different from the opening",
-            ]
-        )
-        forbidden.extend(
-            [
-                "unrelated characters used as transformation stages",
-                "single final-state portrait when change was requested",
-            ]
-        )
+        if "storyboard" in set(semantic_flags):
+            required_evidence.extend(
+                [
+                    "same subject identity across stages",
+                    "causal action connected to the visible change",
+                    "requested final state visibly different from the opening",
+                ]
+            )
+            forbidden.extend(
+                [
+                    "unrelated characters used as transformation stages",
+                    "single final-state portrait when change was requested",
+                ]
+            )
+        else:
+            required_evidence.extend(
+                [
+                    "same subject identity across stages",
+                    "causal action visible in the same frame as the changed qualities",
+                    "requested changed qualities visibly readable",
+                ]
+            )
+            forbidden.extend(
+                [
+                    "identical repeated portraits standing in for the requested change",
+                ]
+            )
     elif topology == "sequence":
         required_evidence.append("requested chronology visibly readable")
     elif topology == "replacement":
