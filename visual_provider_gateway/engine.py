@@ -409,7 +409,7 @@ def _submit_failure_code(exc: BaseException) -> str:
         normalized = raw.casefold()
         if normalized in {"timeouterror", "timeout", "socket_timeout"}:
             return "visual_provider_submit_timeout"
-        if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", normalized):
+        if re.fullmatch(r"[a-z][a-z0-9_]{0,95}", normalized):
             return f"visual_provider_submit_{normalized}"
         return "visual_provider_submit_transport"
     if isinstance(exc, (ValueError, TypeError)):
