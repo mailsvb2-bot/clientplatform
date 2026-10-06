@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-
-import pytest
+import unittest
 
 from clientplatform.domain.creative_generation import (
     MAX_CREATIVE_GENERATION_PROVIDER_PAYLOAD_CHARS,
@@ -10,11 +9,13 @@ from clientplatform.domain.creative_generation import (
 from services.migrations import clientplatform_creative_generation_payload_budget_v1 as migration
 
 
-def test_sqlite_migration_expands_legacy_creative_payload_check(monkeypatch) -> None:
-    monkeypatch.setattr(migration, "is_postgres_enabled", lambda: False)
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    try:
+class CreativePayloadBudgetMigrationTests(unittest.TestCase):
+    def test_sqlite_migration_expands_legacy_creative_payload_check(self) -> None:
+        original = migration.is_postgres_enabled
+        migration.is_postgres_enabled = lambda: False
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
         conn.execute(
             """
             CREATE TABLE creative_generation_receipts(
@@ -48,7 +49,7 @@ def test_sqlite_migration_expands_legacy_creative_payload_check(monkeypatch) -> 
             "VALUES(?, ?)",
             ("expanded", "x" * (10_000 + 1)),
         )
-        with pytest.raises(sqlite3.IntegrityError):
+        with self.assertRaises(sqlite3.IntegrityError):
             conn.execute(
                 "INSERT INTO creative_generation_receipts(id, provider_payload_json) "
                 "VALUES(?, ?)",
@@ -57,5 +58,10 @@ def test_sqlite_migration_expands_legacy_creative_payload_check(monkeypatch) -> 
                     "x" * (MAX_CREATIVE_GENERATION_PROVIDER_PAYLOAD_CHARS + 1),
                 ),
             )
-    finally:
-        conn.close()
+        finally:
+            conn.close()
+            migration.is_postgres_enabled = original
+
+
+if __name__ == "__main__":
+    unittest.main()
