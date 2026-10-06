@@ -40,6 +40,10 @@ class VisualProviderGatewayProductionContractTests(unittest.TestCase):
         self.assertIn('VISUAL_TRANSIENT_OUTPUT_REQUIRED: "1"', provider_section)
         self.assertIn("VISUAL_TRANSIENT_ASSET_TTL_SECONDS:", provider_section)
         self.assertIn("VISUAL_TRANSIENT_ASSET_CLEANUP_LIMIT:", provider_section)
+        self.assertIn(
+            "YANDEX_ART_PIPELINE: ${CLIENTPLATFORM_YANDEX_ART_PIPELINE:-images}",
+            provider_section,
+        )
         self.assertIn("/tmp:size=256m,mode=1777", provider_section)
         self.assertNotIn("VISUAL_CREATIVE_OUTPUT_DIR: /data/output", provider_section)
 
