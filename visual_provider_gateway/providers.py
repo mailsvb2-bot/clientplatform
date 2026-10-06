@@ -360,7 +360,10 @@ class YandexArtProvider:
         if not base_ready:
             return False
         if _yandex_art_pipeline() == "responses":
-            return bool(str(self.config.model_orchestrator or "").strip())
+            return bool(
+                str(self.config.model_orchestrator or "").strip()
+                or _yandex_folder_for_model(self.config, self.config.model_image)
+            )
         return True
 
     def _primary_authorization(self) -> str:
