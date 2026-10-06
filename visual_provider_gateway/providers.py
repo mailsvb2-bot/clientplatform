@@ -60,6 +60,26 @@ def _read_limited(stream: Any, max_bytes: int) -> bytes:
     return b"".join(chunks)
 
 
+def _safe_http_error_code(status: int, raw: bytes) -> str:
+    base = f"http_{int(status or 0)}"
+    if int(status or 0) != 400 or not raw:
+        return base
+    try:
+        decoded = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return base
+    if not isinstance(decoded, dict):
+        return base
+    for field in ("param", "type"):
+        value = str(decoded.get(field) or "").strip()
+        if not value or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", value):
+            continue
+        normalized = re.sub(r"[^A-Za-z0-9]+", "_", value).strip("_").lower()
+        if normalized:
+            return f"{base}_{field}_{normalized}"
+    return base
+
+
 def _request(
     method: str,
     url: str,
@@ -84,11 +104,14 @@ def _request(
                 _read_limited(response, max_bytes),
             )
     except urllib.error.HTTPError as exc:
+        raw_error = b""
         try:
-            _read_limited(exc, 64 * 1024)
+            raw_error = _read_limited(exc, 64 * 1024)
         except (OSError, ProviderTransportError):
-            pass
-        raise ProviderTransportError(f"http_{getattr(exc, 'code', 0)}") from None
+            raw_error = b""
+        raise ProviderTransportError(
+            _safe_http_error_code(int(getattr(exc, "code", 0) or 0), raw_error)
+        ) from None
     except urllib.error.URLError as exc:
         reason = exc.reason
         if isinstance(reason, (ConnectionRefusedError, socket.gaierror)):
@@ -313,13 +336,11 @@ def _yandex_folder_for_model(config: ProviderConfig, model_uri: str) -> str:
 def _definitive_model_rejection(exc: BaseException) -> bool:
     if not isinstance(exc, ProviderTransportError):
         return False
-    return str(exc or "").strip() in {
-        "http_400",
-        "http_403",
-        "http_404",
-        "http_410",
-        "http_422",
-    }
+    code = str(exc or "").strip()
+    return (
+        code.startswith("http_400")
+        or code in {"http_403", "http_404", "http_410", "http_422"}
+    )
 
 
 class YandexArtProvider:
@@ -490,7 +511,7 @@ class YandexArtProvider:
                         "output_format": "png",
                     }
                 ],
-                "tool_choice": {"type": "image_generation"},
+                "tool_choice": "required",
                 "max_tool_calls": 1,
                 "parallel_tool_calls": False,
             },

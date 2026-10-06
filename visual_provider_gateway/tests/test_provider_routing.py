@@ -417,7 +417,7 @@ def test_yandexart_defaults_to_responses_image_generation_tool(monkeypatch, tmp_
     assert payload["model"] == "gpt://folder/aliceai-llm"
     assert payload["store"] is False
     assert payload["input"].startswith("ёж, который слушает")
-    assert payload["tool_choice"] == {"type": "image_generation"}
+    assert payload["tool_choice"] == "required"
     assert payload["max_tool_calls"] == 1
     assert payload["parallel_tool_calls"] is False
     assert payload["tools"] == [
@@ -436,6 +436,18 @@ def test_yandexart_defaults_to_responses_image_generation_tool(monkeypatch, tmp_
     assert job.provider_payload["orchestrator_model"] == "gpt://folder/aliceai-llm"
     assert job.provider_payload["response_id"] == "response-123"
     assert job.provider_payload["file_id"] == "file-123"
+
+
+def test_yandex_http_400_keeps_safe_validation_param_only():
+    assert providers._safe_http_error_code(
+        400,
+        b'{"type":"invalid_request_error","param":"tool_choice","message":"details"}',
+    ) == "http_400_param_tool_choice"
+    assert providers._safe_http_error_code(
+        400,
+        b'{"param":"unsafe value with spaces","message":"secret-ish details"}',
+    ) == "http_400"
+    assert providers._safe_http_error_code(403, b'{"param":"tool_choice"}') == "http_403"
 
 
 def test_yandex_responses_derives_folder_from_explicit_art_model_uri(monkeypatch, tmp_path):
