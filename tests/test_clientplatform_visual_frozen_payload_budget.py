@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from clientplatform.application.visual_creatives import freeze_business_image_payload
 from clientplatform.application.visual_scene_variants import (
+    VisualSceneVariant,
     deterministic_visual_scene_bundle,
     recommended_scene_variant,
+)
+from clientplatform.domain.creative_generation import (
+    MAX_CREATIVE_GENERATION_PROVIDER_PAYLOAD_CHARS,
 )
 from clientplatform.domain.visual_prompt_compiler import semantic_flags_for_request
 from clientplatform.domain.visual_style_intent import VisualStyleIntent
@@ -35,14 +39,14 @@ def _hedgehog_auto_payload(*, brand_context: str) -> str:
 
 def test_production_hedgehog_auto_payload_fits_durable_receipt_budget() -> None:
     frozen = _hedgehog_auto_payload(brand_context="")
-    assert len(frozen) <= 10_000, len(frozen)
+    assert len(frozen) <= MAX_CREATIVE_GENERATION_PROVIDER_PAYLOAD_CHARS, len(frozen)
 
 
 def test_supported_brand_context_still_fits_durable_receipt_budget() -> None:
     frozen = _hedgehog_auto_payload(
         brand_context=("Спокойный поддерживающий бренд. " * 40)[:1200],
     )
-    assert len(frozen) <= 10_000, len(frozen)
+    assert len(frozen) <= MAX_CREATIVE_GENERATION_PROVIDER_PAYLOAD_CHARS, len(frozen)
 
 
 def test_supported_ai_scene_variant_can_exceed_legacy_budget_but_is_durable() -> None:
