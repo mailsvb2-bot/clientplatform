@@ -85,7 +85,7 @@ def provider_configs() -> dict[str, ProviderConfig]:
             base_url=_env("YANDEX_ART_BASE_URL", "https://ai.api.cloud.yandex.net:443"),
             api_key=_env("YANDEX_API_KEY", _env("YANDEX_ART_IAM_TOKEN", "")),
             model_image=_env("YANDEX_ART_MODEL_URI", f"art://{yandex_folder}/aliceai-image-art-3.0" if yandex_folder else ""),
-            model_orchestrator=_env("YANDEX_IMAGE_ORCHESTRATOR_MODEL", f"gpt://{yandex_folder}/aliceai-llm" if yandex_folder else ""),
+            model_orchestrator=_yandex_orchestrator_model(yandex_folder),
             folder_id=yandex_folder,
             timeout_seconds=timeout,
             max_json_bytes=max_json,
