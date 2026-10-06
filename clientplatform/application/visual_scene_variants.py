@@ -329,6 +329,26 @@ def _fallback_variants(
     return tuple(variants)
 
 
+_UNSAFE_DIRECTION_PHRASES = (
+    "replace ",
+    "remove ",
+    "ignore ",
+    "instead of",
+    "different animal",
+    "different subject",
+    "different object",
+    "swap ",
+    "substitute ",
+)
+
+
+def _safe_ai_direction_text(direction: str) -> str | None:
+    folded = " ".join(direction.casefold().split())
+    if any(phrase in folded for phrase in _UNSAFE_DIRECTION_PHRASES):
+        return None
+    return direction
+
+
 def _parse_variant_items(
     items: object,
     *,
@@ -360,10 +380,15 @@ def _parse_variant_items(
             return None
         seen_compositions.add(composition)
         semantic_guard = _safe_direction_for_composition(contract, composition)
+        safe_ai_direction = _safe_ai_direction_text(ai_direction)
         direction = (
-            ai_direction.rstrip(".")
-            + ". "
-            + semantic_guard
+            (
+                safe_ai_direction.rstrip(".")
+                + ". "
+                + semantic_guard
+            )
+            if safe_ai_direction
+            else semantic_guard
         )[:1400]
         variants.append(
             VisualSceneVariant(
@@ -512,35 +537,87 @@ def build_visual_scene_bundle(
     style_intent: VisualStyleIntent,
     client: OpenAIClient | None = None,
 ) -> tuple[VisualSceneContract, str, tuple[VisualSceneVariant, ...]]:
-    """Build a grounded contract first, then ask AI only for presentation variants.
+    """Build one grounded scene bundle with at most one text-AI call.
 
-    The semantic contract is deterministic and remains the source of truth.  AI
-    never has to reconstruct that contract, so a harmless formatting difference
-    cannot discard otherwise useful art-direction work.
+    The deterministic contract is always available as the semantic safety net.
+    AI may improve the grounded contract when it returns exact owner spans and may
+    propose staging variants, but a malformed contract no longer discards otherwise
+    valid presentation work.
     """
 
     owner_request = " ".join(str(request or "").replace("\x00", " ").split()).strip()
-    contract, _fallback_source, fallback_variants = deterministic_visual_scene_bundle(
+    fallback_contract, _fallback_source, fallback_variants = deterministic_visual_scene_bundle(
         request=owner_request,
         semantic_flags=semantic_flags,
         style_intent=style_intent,
     )
     if client is None and not visual_scene_ai_planning_available():
-        return contract, "deterministic", fallback_variants
+        return fallback_contract, "deterministic", fallback_variants
 
     selected = client or OpenAIClient.from_settings()
     if selected is None:
-        return contract, "deterministic", fallback_variants
+        return fallback_contract, "deterministic", fallback_variants
 
-    variants = build_visual_scene_variants(
-        request=owner_request,
-        scene_contract=contract,
-        style_intent=style_intent,
-        client=selected,
+    system = (
+        "You are ClientPlatform's visual scene director. Return JSON with a variants "
+        "array of exactly five genuinely different presentation directions for the "
+        "same owner meaning. You may also return scene_contract. If scene_contract is "
+        "returned, its textual semantic values must be exact contiguous spans copied "
+        "from the owner request; never invent synonyms or facts. Each variant has "
+        "title, description, direction, composition. composition must use each value "
+        "exactly once: clear_story, cinematic, editorial, focused, sequential. "
+        "direction may change only camera, staging, lighting, atmosphere, visual "
+        "rhythm and composition; never replace, remove, ignore or contradict the "
+        "requested subject/action/result. Return JSON only."
     )
-    source = "ai" if variants and all(item.source == "ai" for item in variants) else "deterministic"
-    return contract, source, variants
+    raw = selected.chat(
+        [
+            {"role": "system", "content": system},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "owner_request": owner_request[:1500],
+                        "semantic_flags": list(semantic_flags),
+                        "scene_contract": fallback_contract.to_mapping(),
+                        "style": style_intent.to_mapping(),
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            },
+        ],
+        temperature=0.55,
+        max_tokens=2200,
+    )
 
+    value = _json_object_from_model(raw or "")
+    if value is None:
+        return fallback_contract, "deterministic", fallback_variants
+
+    contract = fallback_contract
+    raw_contract = value.get("scene_contract")
+    if isinstance(raw_contract, dict):
+        grounded = grounded_scene_contract_from_mapping(
+            owner_request=owner_request,
+            semantic_flags=semantic_flags,
+            value=raw_contract,
+        )
+        if grounded is not None:
+            contract = grounded
+
+    variants = _parse_variant_items(
+        value.get("variants"),
+        contract=contract,
+        style=style_intent,
+    )
+    if variants is None:
+        return contract, "deterministic", _fallback_variants(
+            contract=contract,
+            style=style_intent,
+            owner_request=owner_request,
+        )
+    return contract, "ai", variants
 
 def build_visual_scene_variants(
     *,
