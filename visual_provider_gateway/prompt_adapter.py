@@ -13,7 +13,7 @@ import re
 from .models import CreativeBrief
 
 
-PROMPT_ADAPTER_VERSION = 12
+PROMPT_ADAPTER_VERSION = 13
 
 _RUNWAY_PROMPT_LIMIT = 1000
 _YANDEX_PROMPT_LIMIT = 500
@@ -329,17 +329,16 @@ def _scene_contract_yandex_parts(
     cues: list[str] = []
 
     if topology == "transformation":
-        start = ", ".join(opening) or "исходное состояние"
-        middle_parts = [*actions]
-        if cause and cause not in middle_parts:
-            middle_parts.append(cause)
-        middle_parts.extend(item for item in transition if item not in middle_parts)
-        middle = ", ".join(middle_parts) or "видимая причина и постепенное изменение"
-        end = ", ".join(final) or "запрошенное финальное состояние"
-        cues.append(
-            "Один и тот же главный объект, три стадии без подписей: "
-            f"сначала {start}; затем {middle}; финал {end}."
-        )
+        # Layout (one scene vs storyboard) is decided from the compiled prompt.
+        # The contract only contributes owner-language meaning. English evidence
+        # ids such as "listening" or "visible progressive change" are not drawable
+        # and previously replaced the owner's sentence.
+        spoken: list[str] = []
+        for token in (*opening, *actions, cause, *transition, *final):
+            if token and _owner_language(token) and token not in spoken:
+                spoken.append(token)
+        if spoken:
+            cues.append("Смыслы кадра: " + ", ".join(spoken) + ".")
     elif topology == "replacement":
         cues.append(
             "Покажи замену в том же окружении: исходный объект, само событие замены "
@@ -358,9 +357,16 @@ def _scene_contract_yandex_parts(
     if explicit_text:
         quoted = " / ".join(f"«{item}»" for item in explicit_text)
         cues.append("Точный запрошенный текст в кадре: " + quoted + ".")
-    if evidence:
-        cues.append("Обязательно видно: " + ", ".join(evidence) + ".")
+    spoken_evidence = [item for item in evidence if _owner_language(item)]
+    if spoken_evidence:
+        cues.append("Обязательно видно: " + ", ".join(spoken_evidence) + ".")
     return subject, tuple(cues)
+
+
+def _owner_language(token: str) -> bool:
+    """True when a contract span is owner wording, not an English control id."""
+
+    return bool(re.search(r"[А-Яа-яЁё]", str(token or "")))
 
 
 def _compiled_style_directives(lines: tuple[str, ...]) -> tuple[str, ...]:
@@ -765,6 +771,37 @@ def _detailed_transformation_stage_cue(
         + "."
     )
 
+def _single_scene_transformation_cue(
+    owner_request: str,
+    *,
+    listening: bool,
+) -> str:
+    """Describe a state change as one picture, not three copies of the subject."""
+
+    parsed = _parsed_transformation_evidence(owner_request) if owner_request else None
+    initial: tuple[str, ...] = ()
+    final: tuple[str, ...] = ()
+    if parsed is not None:
+        initial, final = parsed
+    details: list[str] = []
+    if listening:
+        details.append("явно слушает аудио в заметных наушниках, не символом волны")
+    if initial and final:
+        details.append("от " + ", ".join(initial) + " к " + ", ".join(final))
+    elif final:
+        details.append(", ".join(final))
+    if details:
+        return (
+            "Одна сцена, герой один раз: "
+            + "; ".join(details)
+            + ". Без повторов, панелей и триптиха."
+        )
+    return (
+        "Одна сцена, герой один раз: действие и запрошенное изменение видны вместе. "
+        "Без повторов, панелей и триптиха."
+    )
+
+
 def _compiled_semantic_visual_cues(
     lines: tuple[str, ...],
     *,
@@ -786,6 +823,7 @@ def _compiled_semantic_visual_cues(
     transformation = has("the transformation is mandatory") or has(
         "the transformation is a mandatory"
     )
+    storyboard = has("compact visual storyboard") or has("transformation stage detail")
     detailed_stages = has("transformation stage detail")
     visible_state = has("visible-state translation")
     listening = has("if the subject is listening")
@@ -796,7 +834,14 @@ def _compiled_semantic_visual_cues(
     # its causal interaction. Compiler v5+ receives concrete stage descriptions;
     # frozen older compiler prompts are normalized too, so internal stage labels
     # cannot leak into newly submitted provider prompts.
-    if transformation:
+    if transformation and not storyboard and str(kind or "").strip().lower() != "video":
+        cues.append(
+            _single_scene_transformation_cue(
+                owner_request,
+                listening=listening,
+            )
+        )
+    elif transformation:
         if str(kind or "").strip().lower() == "video":
             cues.append(
                 "Тот же герой проходит видимое изменение: исходное состояние → "
@@ -940,15 +985,40 @@ def _bounded_yandex_prompt(
         cue.startswith("Один герой, три стадии")
         or cue.startswith("Три сцены")
         or cue.startswith("Один и тот же главный объект, три стадии")
+        or cue.startswith("Одна сцена, герой один раз")
         for cue in semantic_cues
     )
     normalized_scene_head = " ".join(str(scene_head or "").split()).strip()
 
+    if stage_priority and len(normalized_scene_head) <= 200:
+        # A short owner sentence is the scene. Do not spend the 500-character
+        # budget on cue/safety reserves and then clip "становится добрым".
+        style_block = _bounded_join(list(style_cues), limit=125)
+        safety_reserve = _bounded_join(list(safety), limit=160)
+        fixed = (
+            len(style_block)
+            + len(safety_reserve)
+            + (1 if style_block else 0)
+            + (1 if safety_reserve else 0)
+        )
+        bounded_scene_head = normalized_scene_head
+        semantic_limit = max(
+            80,
+            _YANDEX_PROMPT_LIMIT - len(bounded_scene_head) - fixed - 1,
+        )
+        bounded_semantics = _bounded_join(list(semantic_cues), limit=semantic_limit)
+        core = [part for part in (bounded_scene_head, bounded_semantics, style_block) if part]
+        used = sum(len(part) for part in core) + max(0, len(core) - 1)
+        remaining = max(0, _YANDEX_PROMPT_LIMIT - used - (1 if safety else 0))
+        safety_block = _bounded_join(list(safety), limit=remaining)
+        return _bounded_join(
+            [*core, safety_block, *extras],
+            limit=_YANDEX_PROMPT_LIMIT,
+        )
+
     if stage_priority:
-        # Transformation prompts are the failure-prone case: never let secondary
-        # safety/style bookkeeping truncate the final-state evidence. Keep a compact
-        # but useful style budget, reserve the first anti-lettering clauses, and let
-        # the owner scene use whatever remains.
+        # Long storyboard requests still protect stage evidence first. The owner
+        # sentence is clipped only after the stages, style and safety reserves.
         bounded_semantics = _bounded_join(list(semantic_cues), limit=300)
         style_block = _bounded_join(list(style_cues), limit=125)
         # Reserve the whole compact safety block when it fits. Only in an
@@ -1065,7 +1135,7 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
     # bypassed transformation topology, causal action and identity continuity.
     # Keep the wording natural (no compiler meta-language) while preserving the
     # canonical scene contract and selected art direction.
-    responses_scene = contract_head or owner_request
+    responses_scene = owner_request or contract_head
     responses_input = _bounded_join(
         [
             responses_scene,
@@ -1079,16 +1149,7 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
     if responses_input:
         metadata["yandex_responses_input"] = responses_input
     folded = tuple(line.casefold() for line in lines)
-    if contract_head:
-        # Compiler v6+: the bounded scene contract is the provider-facing source of
-        # truth. It protects the actual subject from being clipped by Alice's
-        # 500-character ceiling while the full owner request remains frozen for QA.
-        scene_head = contract_head
-    elif any(line.startswith("the transformation is mandatory") for line in folded):
-        # Legacy compiler receipts keep the natural owner request and never expose
-        # internal BEFORE/ACTION/AFTER labels to generated pixels.
-        scene_head = owner_request
-    elif any(
+    if any(
         line.startswith("treat object replacement as a constrained")
         for line in folded
     ):
@@ -1096,6 +1157,9 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
             "Покажи именно событие замены, сохрани то же окружение. " + owner_request
         )
     else:
+        # The owner's sentence is the scene. A contract subject such as "Ёж"
+        # must not replace it: Alice then draws a generic portrait and ignores
+        # the action and the change.
         scene_head = owner_request
     prompt = _bounded_yandex_prompt(
         scene_head=scene_head,

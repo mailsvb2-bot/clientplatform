@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from clientplatform.domain.visual_prompt_compiler import compile_visual_prompt
-from clientplatform.domain.visual_scene_contract import VisualSceneContract
+from clientplatform.domain.visual_prompt_compiler import (
+    compile_visual_prompt,
+    semantic_flags_for_request,
+)
+from clientplatform.domain.visual_scene_contract import (
+    VisualSceneContract,
+    fallback_scene_contract,
+)
 from clientplatform.domain.visual_style_intent import VisualStyleIntent
 from visual_provider_gateway import engine
 from visual_provider_gateway.models import CreativeBrief, CreativeJob
@@ -80,8 +86,9 @@ def test_yandex_v11_compiles_scene_contract_before_verbose_prompt() -> None:
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert len(adapted.prompt) <= 500
-    assert adapted.prompt.startswith("ёж")
-    assert "Один и тот же главный объект, три стадии без подписей" in adapted.prompt
+    assert adapted.prompt.startswith("ёж, который слушает")
+    assert "Одна сцена, герой один раз" in adapted.prompt
+    assert "три стадии" not in adapted.prompt
     assert "слушает ресурсное аудио" in adapted.prompt
     assert "добрым" in adapted.prompt
     assert "пушистым" in adapted.prompt
@@ -168,7 +175,7 @@ def test_yandex_scene_contract_is_generic_for_object_replacement() -> None:
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert len(adapted.prompt) <= 500
-    assert adapted.prompt.startswith("раковину")
+    assert "замени старую раковину" in adapted.prompt
     assert "Покажи замену в том же окружении" in adapted.prompt
     assert "физически правдоподобный результат" in adapted.prompt
 
@@ -179,7 +186,8 @@ def test_yandex_adapter_uses_natural_owner_description_without_compiler_meta() -
     assert adapted.prompt.startswith(
         "a prickly hedgehog listens to an audio session and becomes gentle"
     )
-    assert "Один герой, три стадии без подписей" in adapted.prompt
+    assert "Одна сцена, герой один раз" in adapted.prompt
+    assert "три стадии" not in adapted.prompt
     assert "ДО →" not in adapted.prompt
     assert "ДЕЙСТВИЕ/ПРИЧИНА" not in adapted.prompt
     assert "Owner request" not in adapted.prompt
@@ -215,8 +223,9 @@ def test_yandex_adapter_expands_resource_audio_transformation_into_visual_stages
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert adapted.prompt.startswith(request)
-    assert "Один герой, три стадии без подписей" in adapted.prompt
-    assert "сначала обычный" in adapted.prompt
+    assert "Одна сцена, герой один раз" in adapted.prompt
+    assert "три стадии" not in adapted.prompt
+    assert "сначала обычный" not in adapted.prompt
     assert "слушает аудио" in adapted.prompt
     assert "наушниках" in adapted.prompt
     assert "не символом волны" in adapted.prompt
@@ -226,6 +235,54 @@ def test_yandex_adapter_expands_resource_audio_transformation_into_visual_stages
     assert "Owner request" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
     assert len(adapted.prompt) <= 500
+
+
+def test_yandex_production_contract_keeps_one_scene_for_gradual_change() -> None:
+    """The paid path always attaches a fallback scene contract.
+
+    That contract used to replace the owner sentence with the noun "Ёж" and
+    tell Alice to draw the same subject three times. A gradual change is one
+    scene: the action and the resulting state together.
+    """
+
+    request = (
+        "Ёж, который слушает ресурсные аудиотрансы "
+        "и постепенно становится добрым и пушистым"
+    )
+    flags = semantic_flags_for_request(request)
+    contract = fallback_scene_contract(request=request, semantic_flags=flags)
+    compiled = compile_visual_prompt(
+        request=request,
+        kind="image",
+        scene_contract=contract,
+    )
+    adapted = adapt_visual_brief_for_provider(
+        CreativeBrief(
+            kind="image",
+            prompt=compiled.prompt,
+            country_code="RU",
+            aspect_ratio="4:5",
+            negative_prompt=compiled.negative_prompt,
+            scene_contract=contract.to_mapping(),
+        ),
+        provider="yandexart",
+    )
+
+    assert "storyboard" not in flags
+    assert adapted.prompt.startswith(request)
+    assert "ресурсные аудиотрансы" in adapted.prompt
+    assert "Одна сцена, герой один раз" in adapted.prompt
+    assert "наушниках" in adapted.prompt
+    assert "доброжелательный расслабленный взгляд" in adapted.prompt
+    assert "пушистый мех" in adapted.prompt
+    assert "три стадии" not in adapted.prompt
+    assert "visible progressive change" not in adapted.prompt
+    assert "исходное состояние" not in adapted.prompt
+    assert len(adapted.prompt) <= 500
+    responses = str(adapted.metadata["yandex_responses_input"])
+    assert responses.startswith(request)
+    assert "три стадии" not in responses
+    assert "Одна сцена, герой один раз" in responses
 
 def test_yandex_responses_input_preserves_scene_semantics_without_compiler_meta() -> None:
     request = (
@@ -250,7 +307,8 @@ def test_yandex_responses_input_preserves_scene_semantics_without_compiler_meta(
 
     responses_input = str(adapted.metadata["yandex_responses_input"])
     assert responses_input.startswith(request)
-    assert "Один герой, три стадии без подписей" in responses_input
+    assert "Одна сцена, герой один раз" in responses_input
+    assert "три стадии" not in responses_input
     assert "слушает аудио" in responses_input
     assert "наушниках" in responses_input
     assert "доброжелательный расслабленный взгляд" in responses_input
@@ -345,7 +403,8 @@ def test_yandex_stage_prompt_keeps_final_state_and_artistic_style_with_brand_con
 
     assert len(adapted.prompt) <= 500
     assert adapted.prompt.startswith(request)
-    assert "Один герой, три стадии без подписей" in adapted.prompt
+    assert "Одна сцена, герой один раз" in adapted.prompt
+    assert "три стадии" not in adapted.prompt
     assert "слушает аудио в заметных наушниках" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
     assert "заметно более густой пушистый мех" in adapted.prompt
@@ -564,7 +623,8 @@ def test_yandex_adapter_preserves_multiple_selected_styles_with_semantics() -> N
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert "явно слушает аудио" in adapted.prompt
-    assert "Один герой, три стадии без подписей" in adapted.prompt
+    assert "Одна сцена, герой один раз" in adapted.prompt
+    assert "три стадии" not in adapted.prompt
     assert "ДО →" not in adapted.prompt
     assert "Стиль:" in adapted.prompt
     assert "тёплый дружелюбный" in adapted.prompt
@@ -625,7 +685,8 @@ def test_yandex_adapter_keeps_all_safety_clauses_for_long_owner_request() -> Non
     assert adapted.prompt.startswith(
         "a hedgehog listens to a guided audio wellness session"
     )
-    assert "Один герой, три стадии без подписей" in adapted.prompt
+    assert "Одна сцена, герой один раз" in adapted.prompt
+    assert "три стадии" not in adapted.prompt
     assert "явно слушает аудио" in adapted.prompt
     assert "ДО →" not in adapted.prompt
     assert "Без водяных знаков" in adapted.prompt
@@ -669,8 +730,9 @@ def test_gigachat_adapter_preserves_listening_transformation_without_compiler_me
     adapted = adapt_visual_brief_for_provider(brief, provider="gigachat")
 
     assert adapted.prompt.startswith(request)
-    assert "Один герой, три стадии без подписей" in adapted.prompt
-    assert "сначала обычный" in adapted.prompt
+    assert "Одна сцена, герой один раз" in adapted.prompt
+    assert "три стадии" not in adapted.prompt
+    assert "сначала обычный" not in adapted.prompt
     assert "слушает аудио" in adapted.prompt
     assert "не символом волны" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
@@ -784,7 +846,8 @@ def test_gigachat_adapter_reserves_safety_for_near_limit_owner_request() -> None
 
     assert len(adapted.prompt) <= 1800
     assert adapted.prompt.startswith("ёж слушает ресурсное аудио")
-    assert "Один герой, три стадии без подписей" in adapted.prompt
+    assert "Одна сцена, герой один раз" in adapted.prompt
+    assert "три стадии" not in adapted.prompt
     assert "слушает аудио" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
     assert "заметно более густой пушистый мех" in adapted.prompt
@@ -879,7 +942,7 @@ def test_engine_applies_adapter_only_after_provider_selection(monkeypatch) -> No
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 12
+    assert result.provider_payload["prompt_adapter_version"] == 13
     assert "Owner request" not in captured["brief"].prompt
     assert "hedgehog listens to an audio session" in captured["brief"].prompt
 
@@ -1000,12 +1063,13 @@ def test_engine_applies_meaning_adapter_to_gigachat_fallback(monkeypatch) -> Non
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 12
+    assert result.provider_payload["prompt_adapter_version"] == 13
     prompt = captured["brief"].prompt
     assert prompt.startswith(
         "a prickly hedgehog listens to an audio session and becomes gentle"
     )
-    assert "Один герой, три стадии без подписей" in prompt
+    assert "Одна сцена, герой один раз" in prompt
+    assert "три стадии" not in prompt
     assert "ДО →" not in prompt
     assert "ДЕЙСТВИЕ/ПРИЧИНА" not in prompt
     assert "Owner request" not in prompt
@@ -1042,7 +1106,8 @@ def test_yandex_adapter_prioritizes_owner_request_before_style_and_brand_context
     assert adapted.prompt.startswith(
         "a prickly hedgehog listens to an audio session and becomes gentle"
     )
-    assert "Один герой, три стадии без подписей" in adapted.prompt
+    assert "Одна сцена, герой один раз" in adapted.prompt
+    assert "три стадии" not in adapted.prompt
     assert "ДО →" not in adapted.prompt
     assert "Example brand context" not in adapted.prompt
     assert "не печатать" in adapted.prompt

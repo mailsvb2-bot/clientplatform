@@ -135,6 +135,29 @@ _PORTRAIT_RE = re.compile(
     r"(?:\bпортрет\w*|\bхедшот\w*|\bportrait\b|\bheadshot\b)",
     re.IGNORECASE,
 )
+# A state change ("становится добрым") is one scene. A storyboard is only the
+# layout the owner actually asked for: staged chronology, before/after, or an
+# explicit from-to pair. Bare "после" is not enough: it often means "after a
+# shower", not "draw three panels".
+_EXPLICIT_STORYBOARD_RE = re.compile(
+    r"(?:"
+    r"\bсначала\b|\bзатем\b|\bпотом\b|\bвначале\b|\bв\s+конце\b|"
+    r"\bв\s+финальн\w*|"
+    r"\bfirst\b|\bthen\b|\bfinally\b|\bat\s+the\s+end\b|"
+    r"до\s*(?:и|/|→|->)\s*после|"
+    r"\bbefore\s*(?:and|/|→|->)\s*after\b|"
+    r"\bколлаж\w*|\bтриптих\w*|\bсториборд\w*|\bstoryboard\b"
+    r")",
+    re.IGNORECASE,
+)
+_FROM_TO_STORYBOARD_RE = re.compile(
+    r"(?:"
+    r"\b(?:меня\w*|изменя\w*)\b[^.!?;]{0,80}?\bиз\s+\S.{0,80}?\s+\bв\s+\S|"
+    r"\b(?:меня\w*|изменя\w*)\b[^.!?;]{0,80}?\bс\s+\S.{0,80}?\s+\bна\s+\S|"
+    r"\bchanges?\s+from\s+\S.{0,80}?\s+to\s+\S"
+    r")",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +187,7 @@ _SEMANTIC_QA_FLAGS = frozenset(
         "explicit_text",
         "portrait",
         "visible_state",
+        "storyboard",
     }
 )
 
@@ -295,6 +319,11 @@ def _semantic_flags(request: str) -> tuple[str, ...]:
     # a transformation, so autopilot does not invent a character-state narrative.
     if "transformation" in flags and _VISIBLE_STATE_RE.search(request):
         flags.append("visible_state")
+    if "transformation" in flags and (
+        _EXPLICIT_STORYBOARD_RE.search(request)
+        or _FROM_TO_STORYBOARD_RE.search(request)
+    ):
+        flags.append("storyboard")
     return tuple(flags)
 
 
@@ -428,26 +457,37 @@ def _transformation_directives(kind: str, flags: tuple[str, ...]) -> list[str]:
             "Use the 8-second timeline efficiently: opening state, interaction or "
             "transition, then a clearly readable final state.",
         ]
+    if "storyboard" in flags:
+        return [
+            "The transformation is mandatory visual evidence, not optional mood. In a "
+            "single image, deliberately repeat the same subject as a compact visual "
+            "storyboard: BEFORE, the causal action or interaction, then AFTER. Repetition "
+            "of the same subject is intentional; never collapse the request to one "
+            "final-state portrait.",
+            "If the owner did not define an initial state, use a neutral ordinary baseline "
+            "instead of inventing an extreme opposite. Keep identity continuity across "
+            "stages. Make every requested changed quality visibly stronger in the AFTER "
+            "state through expression, posture, texture, material condition or grooming, "
+            "and keep the causal action spatially connected to the transition.",
+            "Transformation stage detail: make every stage independently readable as a "
+            "visual scene. The opening stage shows the stated initial condition, or a "
+            "neutral ordinary baseline when none was stated. The middle stage shows the "
+            "concrete cause/action plus the first visible signs of change. The final stage "
+            "shows every requested changed quality through concrete expression, posture, "
+            "texture, material condition or grooming. Stage names are prompt structure "
+            "only. Do not render BEFORE/AFTER words, panel labels, arrows, numbers or "
+            "captions unless the owner explicitly requested those exact elements as "
+            "visible text.",
+        ]
     return [
-        "The transformation is mandatory visual evidence, not optional mood. In a "
-        "single image, deliberately repeat the same subject as a compact visual "
-        "storyboard: BEFORE, the causal action or interaction, then AFTER. Repetition "
-        "of the same subject is intentional; never collapse the request to one "
-        "final-state portrait.",
-        "If the owner did not define an initial state, use a neutral ordinary baseline "
-        "instead of inventing an extreme opposite. Keep identity continuity across "
-        "stages. Make every requested changed quality visibly stronger in the AFTER "
-        "state through expression, posture, texture, material condition or grooming, "
-        "and keep the causal action spatially connected to the transition.",
-        "Transformation stage detail: make every stage independently readable as a "
-        "visual scene. The opening stage shows the stated initial condition, or a "
-        "neutral ordinary baseline when none was stated. The middle stage shows the "
-        "concrete cause/action plus the first visible signs of change. The final stage "
-        "shows every requested changed quality through concrete expression, posture, "
-        "texture, material condition or grooming. Stage names are prompt structure "
-        "only. Do not render BEFORE/AFTER words, panel labels, arrows, numbers or "
-        "captions unless the owner explicitly requested those exact elements as "
-        "visible text.",
+        "The transformation is mandatory visual evidence in one coherent scene, not "
+        "a repeated storyboard. Show the subject once, performing the causal action, "
+        "while every requested changed quality is already visible through expression, "
+        "posture, texture, material condition or grooming. Do not tile duplicate "
+        "portraits.",
+        "If the owner did not define an initial state, do not invent a separate "
+        "BEFORE panel or an extreme opposite. A gradual change stays inside the same "
+        "frame as an in-progress softening or enrichment, not as copies of the subject.",
     ]
 
 
@@ -530,7 +570,7 @@ def _autonomous_scene_directives(
                 "real surrounding context as a complete installed result. Keep the "
                 "environment stable so the changed object is immediately identifiable."
             )
-        elif kind == "image" and "transformation" in flags:
+        elif kind == "image" and "transformation" in flags and "storyboard" in flags:
             directives.append(
                 "Autonomous composition default: use a compact storyboard, triptych "
                 "or paired transformation composition. The same subject may appear "
@@ -668,6 +708,17 @@ def compile_visual_prompt(
         raise ValueError("visual purpose is invalid")
 
     flags = _semantic_flags(owner_request)
+    resolved_style = resolve_visual_style_intent(
+        request=owner_request,
+        selected=style_intent,
+    )
+    layout_flags = flags
+    if (
+        "transformation" in flags
+        and resolved_style.composition == "before_after"
+        and "storyboard" not in flags
+    ):
+        layout_flags = (*flags, "storyboard")
     selected_scene_direction = (
         _clean(
             scene_direction,
@@ -676,10 +727,6 @@ def compile_visual_prompt(
         )
         if str(scene_direction or "").strip()
         else ""
-    )
-    resolved_style = resolve_visual_style_intent(
-        request=owner_request,
-        selected=style_intent,
     )
     explicit_text = "explicit_text" in flags
     if visual_kind == "video":
@@ -718,12 +765,12 @@ def compile_visual_prompt(
         "Never collapse a multi-action request into a generic portrait of the main "
         "noun. Show visual evidence for the requested verbs and relationships.",
         *_interaction_directives(flags),
-        *_transformation_directives(visual_kind, flags),
+        *_transformation_directives(visual_kind, layout_flags),
         *_replacement_directives(visual_kind, flags),
         *_sequence_directives(visual_kind, flags),
         *_autonomous_scene_directives(
             kind=visual_kind,
-            flags=flags,
+            flags=layout_flags,
             style=resolved_style,
         ),
         *_business_context_directive(brand),
@@ -819,13 +866,24 @@ def compile_visual_prompt(
                 "floating or disconnected installed fixture",
             ]
         )
-    if "transformation" not in flags:
+    if "storyboard" not in layout_flags:
         negatives.append("duplicate main subject by accident")
-    if "transformation" in flags:
+    if "storyboard" in layout_flags:
         negatives.extend(
             [
                 "single-state image with no visible transformation",
                 "before and after shown as unrelated characters",
+                "unchanged final state",
+                "state change conveyed only by text or a generic symbol",
+            ]
+        )
+        if not explicit_text:
+            negatives.append("storyboard stage labels, arrows, numbers or captions")
+    elif "transformation" in layout_flags:
+        negatives.extend(
+            [
+                "identical repeated portraits of the same subject",
+                "triptych or comic panels when one scene was requested",
                 "unchanged final state",
                 "state change conveyed only by text or a generic symbol",
             ]
