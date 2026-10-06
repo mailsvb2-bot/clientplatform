@@ -1177,7 +1177,9 @@ def test_provider_snapshot_reports_motion_fallback_mode(monkeypatch):
         configured = True
         available = True
         current_model_present = True
+        orchestrator_model_present = False
         art_models = ("art://folder/aliceai-image-art-3.0",)
+        gpt_models = ()
         all_model_count = 1
         error_code = ""
 
@@ -1503,6 +1505,7 @@ def test_submit_preserves_safe_http_failure_code_without_provider_body(monkeypat
 
 def test_submit_preserves_detailed_http_400_as_definitive_safe_failure(monkeypatch):
     from visual_provider_gateway.engine import VisualCreativeEngine
+    from visual_provider_gateway.models import CreativeJob
 
     calls = []
 
@@ -1512,7 +1515,9 @@ def test_submit_preserves_detailed_http_400_as_definitive_safe_failure(monkeypat
 
         def submit(self, brief):
             calls.append("broken")
-            raise providers.ProviderTransportError("http_400_error_code_invalid_tool_schema")
+            raise providers.ProviderTransportError(
+                "http_400_error_code_invalid_tool_schema"
+            )
 
     class SecondProvider:
         def configured(self, kind):
@@ -1520,7 +1525,12 @@ def test_submit_preserves_detailed_http_400_as_definitive_safe_failure(monkeypat
 
         def submit(self, brief):
             calls.append("second")
-            raise AssertionError("automatic failover must remain disabled by default")
+            return CreativeJob(
+                provider="second",
+                kind=brief.kind,
+                status="queued",
+                external_id="second-1",
+            )
 
     monkeypatch.setattr(
         "visual_provider_gateway.engine.provider_order",
@@ -1536,9 +1546,12 @@ def test_submit_preserves_detailed_http_400_as_definitive_safe_failure(monkeypat
         CreativeBrief(kind="image", prompt="x")
     )
 
-    assert job.status == "failed"
-    assert job.error_code == "visual_provider_submit_http_400_error_code_invalid_tool_schema"
-    assert calls == ["broken"]
+    assert job.provider == "second"
+    assert job.status == "queued"
+    assert calls == ["broken", "second"]
+    assert job.provider_payload["attempts"] == (
+        "broken:visual_provider_submit_http_400_error_code_invalid_tool_schema",
+    )
 
 
 def test_submit_normalizes_ambiguous_timeout_and_does_not_failover(monkeypatch):
