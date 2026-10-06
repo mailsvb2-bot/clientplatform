@@ -52,6 +52,14 @@ def _output_dir() -> str:
     return _env("VISUAL_CREATIVE_OUTPUT_DIR", "data/visual_creatives")
 
 
+def _yandex_orchestrator_model(folder_id: str) -> str:
+    default = f"gpt://{folder_id}/aliceai-llm/latest" if folder_id else ""
+    raw = str(_env("YANDEX_IMAGE_ORCHESTRATOR_MODEL", default) or "").strip().rstrip("/")
+    if re.fullmatch(r"gpt://[^/]+/aliceai-llm", raw):
+        return raw + "/latest"
+    return raw
+
+
 def provider_configs() -> dict[str, ProviderConfig]:
     timeout = _timeout()
     output_dir = _output_dir()
@@ -64,7 +72,7 @@ def provider_configs() -> dict[str, ProviderConfig]:
             base_url=_env("YANDEX_ART_BASE_URL", "https://ai.api.cloud.yandex.net:443"),
             api_key=_env("YANDEX_API_KEY", _env("YANDEX_ART_IAM_TOKEN", "")),
             model_image=_env("YANDEX_ART_MODEL_URI", f"art://{yandex_folder}/aliceai-image-art-3.0" if yandex_folder else ""),
-            model_orchestrator=_env("YANDEX_IMAGE_ORCHESTRATOR_MODEL", f"gpt://{yandex_folder}/aliceai-llm" if yandex_folder else ""),
+            model_orchestrator=_yandex_orchestrator_model(yandex_folder),
             folder_id=yandex_folder,
             timeout_seconds=timeout,
             max_json_bytes=max_json,
@@ -320,7 +328,7 @@ def _model_lifecycle(model_uri: str) -> dict[str, object]:
 
 
 def _yandex_image_api_family() -> str:
-    raw = str(_env("YANDEX_ART_PIPELINE", "responses") or "responses").strip().lower()
+    raw = str(_env("YANDEX_ART_PIPELINE", "images") or "images").strip().lower()
     if raw in {"images", "direct", "openai_images"}:
         return "openai_images"
     return "responses_image_generation"
