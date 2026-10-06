@@ -761,7 +761,9 @@ def test_snapshot_hides_providers_with_open_circuits(tmp_path, monkeypatch):
         configured = True
         available = True
         current_model_present = True
+        orchestrator_model_present = False
         art_models = ("art://folder/aliceai-image-art-3.0",)
+        gpt_models = ()
         all_model_count = 1
         error_code = ""
 
