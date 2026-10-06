@@ -310,7 +310,9 @@ def _is_alice_image_model(model_uri: str) -> bool:
     return str(model_uri or "").strip().rsplit("/", 1)[-1] == "aliceai-image-art-3.0"
 
 
-def _yandex_art_pipeline() -> str:
+def yandex_art_pipeline() -> str:
+    """Return the single canonical Yandex image execution mode."""
+
     raw = str(os.getenv("YANDEX_ART_PIPELINE", "images") or "images").strip().lower()
     aliases = {
         "agent": "responses",
@@ -321,6 +323,12 @@ def _yandex_art_pipeline() -> str:
     }
     normalized = aliases.get(raw, raw)
     return normalized if normalized in {"responses", "images"} else "images"
+
+
+def _yandex_art_pipeline() -> str:
+    """Backward-compatible internal alias for older tests/imports."""
+
+    return yandex_art_pipeline()
 
 
 def _yandex_allow_direct_fallback() -> bool:
