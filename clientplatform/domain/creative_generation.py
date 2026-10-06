@@ -4,7 +4,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 
-MAX_CREATIVE_GENERATION_PROVIDER_PAYLOAD_CHARS = 32_768\n\n\nclass CreativeGenerationReceiptStatus(StrEnum):
+MAX_CREATIVE_GENERATION_PROVIDER_PAYLOAD_CHARS = 32_768
+
+
+class CreativeGenerationReceiptStatus(StrEnum):
     PREPARED = "prepared"
     SUBMITTING = "submitting"
     QUEUED = "queued"
@@ -46,4 +49,8 @@ class CreativeGenerationReceipt:
         return self.status in _ACTIVE_STATUSES
 
 
-__all__ = [\n    "CreativeGenerationReceipt",\n    "CreativeGenerationReceiptStatus",\n    "MAX_CREATIVE_GENERATION_PROVIDER_PAYLOAD_CHARS",\n]
+__all__ = [
+    "CreativeGenerationReceipt",
+    "CreativeGenerationReceiptStatus",
+    "MAX_CREATIVE_GENERATION_PROVIDER_PAYLOAD_CHARS",
+]
