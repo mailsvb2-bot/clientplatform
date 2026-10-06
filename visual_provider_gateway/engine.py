@@ -538,15 +538,17 @@ class VisualCreativeEngine:
             # Only definitive pre-acceptance failures are safe for an automatic
             # paid-provider failover. Timeouts/5xx remain fail-closed because the
             # first provider may already have accepted and billed the job.
-            definitive_rejection = submit_failure_code in {
-                "visual_provider_submit_http_400",
-                "visual_provider_submit_http_401",
-                "visual_provider_submit_http_403",
-                "visual_provider_submit_http_404",
-                "visual_provider_submit_http_410",
-                "visual_provider_submit_http_422",
-                "visual_provider_submit_connect_unreachable",
-            }
+            definitive_rejection = (
+                submit_failure_code.startswith("visual_provider_submit_http_400")
+                or submit_failure_code in {
+                    "visual_provider_submit_http_401",
+                    "visual_provider_submit_http_403",
+                    "visual_provider_submit_http_404",
+                    "visual_provider_submit_http_410",
+                    "visual_provider_submit_http_422",
+                    "visual_provider_submit_connect_unreachable",
+                }
+            )
             safe_policy_failover = (
                 definitive_rejection and not normalized.preferred_provider
             )
