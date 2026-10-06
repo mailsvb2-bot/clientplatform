@@ -449,6 +449,10 @@ def test_yandex_http_400_keeps_safe_validation_param_only():
         400,
         b'{"param":"unsafe value with spaces","message":"secret-ish details"}',
     ) == "http_400"
+    assert providers._safe_http_error_code(
+        400,
+        b'{"error":{"code":"invalid_tool_schema","message":"do not expose me"}}',
+    ) == "http_400_error_code_invalid_tool_schema"
     assert providers._safe_http_error_code(403, b'{"param":"tool_choice"}') == "http_403"
 
 
@@ -714,6 +718,39 @@ def test_alice_ai_art_defaults_to_openai_compatible_images_api(tmp_path, monkeyp
         "size": "1536x1024",
     }
     assert job.provider_payload["transport"] == "openai_compat"
+
+
+def test_alice_images_api_derives_project_from_model_uri(monkeypatch, tmp_path):
+    from visual_provider_gateway.providers import YandexArtProvider
+
+    monkeypatch.delenv("YANDEX_ART_PIPELINE", raising=False)
+    monkeypatch.setenv("YANDEX_API_KEY", "durable-api-key")
+    monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    observed = {}
+    encoded = base64.b64encode(b"derived-project-image").decode("ascii")
+
+    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0, ca_bundle_file=""):
+        observed.update({"url": url, "headers": headers, "payload": payload})
+        return {"data": [{"b64_json": encoded}]}
+
+    monkeypatch.setattr(providers, "_json_request", fake_json_request)
+    provider = YandexArtProvider(
+        ProviderConfig(
+            name="yandexart",
+            base_url="https://ai.api.cloud.yandex.net",
+            api_key="durable-api-key",
+            folder_id="",
+            model_image="art://folder-from-uri/aliceai-image-art-3.0",
+            output_dir=str(tmp_path / "visual"),
+        )
+    )
+
+    job = provider.submit(CreativeBrief(kind="image", prompt="hedgehog"))
+
+    assert job.status == "succeeded"
+    assert observed["headers"]["OpenAI-Project"] == "folder-from-uri"
+    assert observed["payload"]["model"] == "art://folder-from-uri/aliceai-image-art-3.0"
 
 
 def test_alice_images_api_rejects_overlong_prompt_before_network(monkeypatch):
@@ -1462,6 +1499,46 @@ def test_submit_preserves_safe_http_failure_code_without_provider_body(monkeypat
     assert job.provider_payload == {
         "attempts": ("yandexart:visual_provider_submit_http_400",),
     }
+
+
+def test_submit_preserves_detailed_http_400_as_definitive_safe_failure(monkeypatch):
+    from visual_provider_gateway.engine import VisualCreativeEngine
+
+    calls = []
+
+    class BrokenProvider:
+        def configured(self, kind):
+            return True
+
+        def submit(self, brief):
+            calls.append("broken")
+            raise providers.ProviderTransportError("http_400_error_code_invalid_tool_schema")
+
+    class SecondProvider:
+        def configured(self, kind):
+            return True
+
+        def submit(self, brief):
+            calls.append("second")
+            raise AssertionError("automatic failover must remain disabled by default")
+
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.provider_order",
+        lambda *_args, **_kwargs: ("broken", "second"),
+    )
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.build_provider",
+        lambda name: BrokenProvider() if name == "broken" else SecondProvider(),
+    )
+    monkeypatch.delenv("VISUAL_ALLOW_PROVIDER_FAILOVER_AFTER_ERROR", raising=False)
+
+    job = VisualCreativeEngine(enabled=True).submit(
+        CreativeBrief(kind="image", prompt="x")
+    )
+
+    assert job.status == "failed"
+    assert job.error_code == "visual_provider_submit_http_400_error_code_invalid_tool_schema"
+    assert calls == ["broken"]
 
 
 def test_submit_normalizes_ambiguous_timeout_and_does_not_failover(monkeypatch):
