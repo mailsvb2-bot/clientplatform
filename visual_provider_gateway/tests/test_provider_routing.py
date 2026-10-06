@@ -119,7 +119,7 @@ def test_provider_snapshot_defaults_to_direct_images_and_versions_optional_orche
     assert yandex["direct_fallback_allowed"] is False
     assert yandex["orchestrator_model"] == "gpt://folder/aliceai-llm/latest"
 
-    monkeypatch.setenv("YANDEX_IMAGE_ORCHESTRATOR_MODEL", "gpt://folder/aliceai-llm/latest")
+    monkeypatch.setenv("YANDEX_IMAGE_ORCHESTRATOR_MODEL", "gpt://folder/aliceai-llm")
     snapshot = provider_snapshot("RU")
     assert snapshot["models"]["yandexart"]["orchestrator_model"] == (
         "gpt://folder/aliceai-llm/latest"
