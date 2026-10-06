@@ -18,6 +18,7 @@ from .providers import (
     SelfHostedVisualProvider,
     YandexArtMotionVideoProvider,
     YandexArtProvider,
+    yandex_art_pipeline,
 )
 from .yandex_model_catalog import get_yandex_model_catalog
 
@@ -328,10 +329,11 @@ def _model_lifecycle(model_uri: str) -> dict[str, object]:
 
 
 def _yandex_image_api_family() -> str:
-    raw = str(_env("YANDEX_ART_PIPELINE", "images") or "images").strip().lower()
-    if raw in {"images", "direct", "openai_images"}:
-        return "openai_images"
-    return "responses_image_generation"
+    return (
+        "responses_image_generation"
+        if yandex_art_pipeline() == "responses"
+        else "openai_images"
+    )
 
 
 def provider_snapshot(country_code: str = "") -> dict[str, object]:
