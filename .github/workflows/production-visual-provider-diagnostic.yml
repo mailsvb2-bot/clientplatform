@@ -317,14 +317,9 @@ jobs:
               safe["runtime_image_error"] or safe["runtime_video_error"]
           )
           catalog_contract_ready = (
-              not safe["yandex_catalog_available"]
-              or (
-                  safe["yandex_configured_model_present"]
-                  and (
-                      not safe["yandex_responses_required"]
-                      or safe["yandex_orchestrator_model_present"]
-                  )
-              )
+              not safe["yandex_responses_required"]
+              or not safe["yandex_catalog_available"]
+              or safe["yandex_orchestrator_model_present"]
           )
           readiness = (
               "ready"
