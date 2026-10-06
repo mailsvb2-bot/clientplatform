@@ -31,13 +31,10 @@ class VisualPromptCompilerTests(unittest.TestCase):
         self.assertIn("listening unmistakable", compiled.prompt)
         self.assertIn("headphones", compiled.prompt)
         self.assertIn("transformation is mandatory visual evidence", compiled.prompt)
-        self.assertIn("compact visual storyboard", compiled.prompt)
-        self.assertIn("BEFORE", compiled.prompt)
-        self.assertIn("causal action or interaction", compiled.prompt)
-        self.assertIn("AFTER", compiled.prompt)
-        self.assertIn("same subject", compiled.prompt)
-        self.assertIn("neutral ordinary baseline", compiled.prompt)
-        self.assertIn("every requested changed quality visibly stronger", compiled.prompt)
+        self.assertIn("one coherent scene", compiled.prompt)
+        self.assertIn("Show the subject once", compiled.prompt)
+        self.assertIn("Do not tile duplicate portraits", compiled.prompt)
+        self.assertNotIn("compact visual storyboard", compiled.prompt)
         self.assertIn("Brand name: Тишина", compiled.prompt)
         self.assertIn("unfamiliar names", compiled.prompt)
         self.assertLess(
@@ -46,6 +43,10 @@ class VisualPromptCompilerTests(unittest.TestCase):
         )
         self.assertIn("generic isolated portrait", compiled.negative_prompt)
         self.assertIn(
+            "identical repeated portraits of the same subject",
+            compiled.negative_prompt,
+        )
+        self.assertNotIn(
             "single-state image with no visible transformation",
             compiled.negative_prompt,
         )
@@ -190,19 +191,12 @@ class VisualPromptCompilerTests(unittest.TestCase):
         self.assertIn("transformation", compiled.semantic_flags)
         self.assertIn("visible_state", compiled.semantic_flags)
         self.assertIn("visible audio interaction", compiled.prompt)
-        self.assertIn("compact visual storyboard", compiled.prompt)
-        self.assertIn("BEFORE", compiled.prompt)
-        self.assertIn("causal action or interaction", compiled.prompt)
-        self.assertIn("AFTER", compiled.prompt)
-        self.assertIn("neutral ordinary baseline", compiled.prompt)
-        self.assertIn("every requested changed quality visibly stronger", compiled.prompt)
-        self.assertIn("same subject may appear", compiled.prompt)
-        self.assertIn("Transformation stage detail", compiled.prompt)
-        self.assertIn("opening stage", compiled.prompt)
-        self.assertIn("middle stage", compiled.prompt)
-        self.assertIn("final stage", compiled.prompt)
-        self.assertIn("Do not render BEFORE/AFTER words", compiled.prompt)
-        self.assertIn("unless the owner explicitly requested", compiled.prompt)
+        self.assertIn("one coherent scene", compiled.prompt)
+        self.assertIn("Show the subject once", compiled.prompt)
+        self.assertIn("narrative story-scene", compiled.prompt)
+        self.assertIn("in-progress softening", compiled.prompt)
+        self.assertNotIn("compact visual storyboard", compiled.prompt)
+        self.assertNotIn("Transformation stage detail", compiled.prompt)
         self.assertIn("Never rely on captions", compiled.prompt)
         self.assertIn(
             "storyboard stage labels, arrows, numbers or captions",
@@ -314,7 +308,7 @@ class VisualPromptCompilerTests(unittest.TestCase):
             ),
         )
 
-        self.assertIn("Transformation stage detail", compiled.prompt)
+        self.assertIn("one coherent scene", compiled.prompt)
         self.assertIn("Do not add fake awards", compiled.prompt)
         self.assertIn("Do not rely on readable text", compiled.prompt)
         self.assertIn("Names from business grounding are semantic context only", compiled.prompt)
@@ -474,7 +468,7 @@ class VisualPromptCompilerTests(unittest.TestCase):
         self.assertIn("vertical advertising video", brief.prompt)
         self.assertIn("Service or offering: Тишина", brief.prompt)
         self.assertIn("listening unmistakable", brief.prompt)
-        self.assertIn("transformation", brief.negative_prompt)
+        self.assertIn("unchanged final state", brief.negative_prompt)
         self.assertEqual(brief.aspect_ratio, "9:16")
 
 
