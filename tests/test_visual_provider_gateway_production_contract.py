@@ -40,6 +40,10 @@ class VisualProviderGatewayProductionContractTests(unittest.TestCase):
         self.assertIn('VISUAL_TRANSIENT_OUTPUT_REQUIRED: "1"', provider_section)
         self.assertIn("VISUAL_TRANSIENT_ASSET_TTL_SECONDS:", provider_section)
         self.assertIn("VISUAL_TRANSIENT_ASSET_CLEANUP_LIMIT:", provider_section)
+        self.assertIn(
+            "YANDEX_ART_PIPELINE: ${CLIENTPLATFORM_YANDEX_ART_PIPELINE:-images}",
+            provider_section,
+        )
         self.assertIn("/tmp:size=256m,mode=1777", provider_section)
         self.assertNotIn("VISUAL_CREATIVE_OUTPUT_DIR: /data/output", provider_section)
 
@@ -99,6 +103,12 @@ class VisualProviderGatewayProductionContractTests(unittest.TestCase):
         self.assertIn("CLIENTPLATFORM_PRODUCTION_VISUAL_AUTH_PROBE", workflow)
         self.assertIn("get_yandex_art_iam_token", workflow)
         self.assertIn("accepted = {400, 422}", workflow)
+        self.assertIn('"primary_compat"', workflow)
+        self.assertIn('"renewable_compat"', workflow)
+        self.assertIn("images_api_not_authorized", workflow)
+        self.assertIn('"yandex_responses_required"', workflow)
+        self.assertIn('"yandex_orchestrator_model_present"', workflow)
+        self.assertIn("catalog_contract_ready = (", workflow)
         self.assertIn("raise SystemExit(29)", workflow)
         self.assertIn("authorized_key_file", workflow)
         self.assertIn("json_valid_object", workflow)

@@ -70,9 +70,25 @@ def _safe_http_error_code(status: int, raw: bytes) -> str:
         return base
     if not isinstance(decoded, dict):
         return base
-    for field in ("param", "type"):
-        value = str(decoded.get(field) or "").strip()
-        if not value or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", value):
+
+    candidates: list[tuple[str, object]] = [
+        ("param", decoded.get("param")),
+        ("type", decoded.get("type")),
+        ("code", decoded.get("code")),
+    ]
+    nested = decoded.get("error")
+    if isinstance(nested, dict):
+        candidates.extend(
+            (
+                ("error_param", nested.get("param")),
+                ("error_type", nested.get("type")),
+                ("error_code", nested.get("code")),
+            )
+        )
+
+    for field, raw_value in candidates:
+        value = str(raw_value or "").strip()
+        if not value or not re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", value):
             continue
         normalized = re.sub(r"[^A-Za-z0-9]+", "_", value).strip("_").lower()
         if normalized:
@@ -294,8 +310,10 @@ def _is_alice_image_model(model_uri: str) -> bool:
     return str(model_uri or "").strip().rsplit("/", 1)[-1] == "aliceai-image-art-3.0"
 
 
-def _yandex_art_pipeline() -> str:
-    raw = str(os.getenv("YANDEX_ART_PIPELINE", "responses") or "responses").strip().lower()
+def yandex_art_pipeline() -> str:
+    """Return the single canonical Yandex image execution mode."""
+
+    raw = str(os.getenv("YANDEX_ART_PIPELINE", "images") or "images").strip().lower()
     aliases = {
         "agent": "responses",
         "image_tool": "responses",
@@ -304,7 +322,13 @@ def _yandex_art_pipeline() -> str:
         "openai_images": "images",
     }
     normalized = aliases.get(raw, raw)
-    return normalized if normalized in {"responses", "images"} else "responses"
+    return normalized if normalized in {"responses", "images"} else "images"
+
+
+def _yandex_art_pipeline() -> str:
+    """Backward-compatible internal alias for older tests/imports."""
+
+    return yandex_art_pipeline()
 
 
 def _yandex_allow_direct_fallback() -> bool:
@@ -354,9 +378,17 @@ class YandexArtProvider:
         credential_ready = bool(
             self.config.api_key or yandex_art_renewable_auth_configured()
         )
-        return self.supports(kind) and bool(
+        base_ready = self.supports(kind) and bool(
             credential_ready and (self.config.folder_id or self.config.model_image)
         )
+        if not base_ready:
+            return False
+        if _yandex_art_pipeline() == "responses":
+            return bool(
+                str(self.config.model_orchestrator or "").strip()
+                or _yandex_folder_for_model(self.config, self.config.model_image)
+            )
+        return True
 
     def _primary_authorization(self) -> str:
         if not self.config.api_key:
@@ -476,7 +508,7 @@ class YandexArtProvider:
 
         orchestrator = str(self.config.model_orchestrator or "").strip()
         if not orchestrator:
-            orchestrator = f"gpt://{folder_id}/aliceai-llm"
+            orchestrator = f"gpt://{folder_id}/aliceai-llm/latest"
 
         natural_input = str(
             (brief.metadata or {}).get("yandex_responses_input") or brief.prompt
@@ -579,16 +611,24 @@ class YandexArtProvider:
         authorization: str,
         model_uri: str,
     ) -> CreativeJob:
+        prompt = " ".join(str(brief.prompt or "").split()).strip()
+        if not prompt:
+            raise ProviderTransportError("invalid_yandex_prompt")
+        if len(prompt) > 500:
+            raise ProviderTransportError("yandex_prompt_too_long")
+        folder_id = _yandex_folder_for_model(self.config, model_uri)
+        if not folder_id:
+            raise ProviderTransportError("provider_not_configured")
         data = _json_request(
             "POST",
             self.config.base_url.rstrip("/") + "/v1/images/generations",
             headers={
                 "Authorization": authorization,
-                "OpenAI-Project": self.config.folder_id,
+                "OpenAI-Project": folder_id,
             },
             payload={
                 "model": model_uri,
-                "prompt": brief.prompt,
+                "prompt": prompt,
                 "size": _openai_image_size(brief.aspect_ratio),
             },
             timeout=self.config.timeout_seconds,

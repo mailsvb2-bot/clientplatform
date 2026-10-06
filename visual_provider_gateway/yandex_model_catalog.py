@@ -17,7 +17,9 @@ class YandexModelCatalogSnapshot:
     configured: bool
     available: bool
     current_model_present: bool = False
+    orchestrator_model_present: bool = False
     art_models: tuple[str, ...] = ()
+    gpt_models: tuple[str, ...] = ()
     all_model_count: int = 0
     error_code: str = ""
 
@@ -86,6 +88,7 @@ def _cache_key(config: ProviderConfig) -> str:
             str(config.folder_id or ""),
             token_digest,
             _canonical_model_uri(config.model_image),
+            _canonical_model_uri(config.model_orchestrator),
         )
     )
 
@@ -202,16 +205,32 @@ def _fetch(config: ProviderConfig) -> YandexModelCatalogSnapshot:
             )
         )
     )
+    gpt_models = tuple(
+        dict.fromkeys(
+            sorted(
+                model
+                for model in models
+                if _canonical_model_uri(model).startswith("gpt://")
+            )
+        )
+    )
     current = _canonical_model_uri(config.model_image)
     present = bool(
         current
         and any(_canonical_model_uri(model) == current for model in art_models)
     )
+    orchestrator = _canonical_model_uri(config.model_orchestrator)
+    orchestrator_present = bool(
+        orchestrator
+        and any(_canonical_model_uri(model) == orchestrator for model in gpt_models)
+    )
     return YandexModelCatalogSnapshot(
         configured=True,
         available=True,
         current_model_present=present,
+        orchestrator_model_present=orchestrator_present,
         art_models=art_models,
+        gpt_models=gpt_models,
         all_model_count=len(models),
     )
 

@@ -37,6 +37,10 @@ services:
       VISUAL_TRANSIENT_ASSET_CLEANUP_LIMIT: ${VISUAL_TRANSIENT_ASSET_CLEANUP_LIMIT:-200}
       VISUAL_CREATIVE_ENABLED: "1"
       VISUAL_DEPLOYMENT_COUNTRY: ${VISUAL_DEPLOYMENT_COUNTRY:-RU}
+      # Production owns this namespace explicitly so a stale legacy
+      # YANDEX_ART_PIPELINE value from clientplatform.env cannot silently
+      # reactivate the experimental Responses path.
+      YANDEX_ART_PIPELINE: ${CLIENTPLATFORM_YANDEX_ART_PIPELINE:-images}
       YANDEX_BILLING_AUTHORIZED_KEY_FILE: ${YANDEX_BILLING_AUTHORIZED_KEY_FILE:-/run/secrets/clientplatform-yandex-billing/authorized-key.json}
     read_only: true
     tmpfs:

@@ -105,28 +105,30 @@ def test_provider_snapshot_does_not_expose_credentials(monkeypatch):
     assert "secret-selfhost" not in rendered
 
 
-def test_provider_snapshot_reports_yandex_responses_pipeline_and_orchestrator(monkeypatch):
+def test_provider_snapshot_defaults_to_direct_images_and_versions_optional_orchestrator(monkeypatch):
     monkeypatch.setenv("YANDEX_ART_FOLDER_ID", "folder")
     monkeypatch.delenv("YANDEX_ART_PIPELINE", raising=False)
     monkeypatch.delenv("YANDEX_ART_ALLOW_DIRECT_FALLBACK", raising=False)
+    monkeypatch.delenv("YANDEX_IMAGE_ORCHESTRATOR_MODEL", raising=False)
 
     snapshot = provider_snapshot("RU")
     yandex = snapshot["models"]["yandexart"]
 
-    assert yandex["api_family"] == "responses_image_generation"
-    assert yandex["responses_required"] is True
+    assert yandex["api_family"] == "openai_images"
+    assert yandex["responses_required"] is False
     assert yandex["direct_fallback_allowed"] is False
-    assert yandex["orchestrator_model"] == "gpt://folder/aliceai-llm"
+    assert yandex["orchestrator_model"] == "gpt://folder/aliceai-llm/latest"
 
-    monkeypatch.setenv("YANDEX_ART_ALLOW_DIRECT_FALLBACK", "1")
+    monkeypatch.setenv("YANDEX_IMAGE_ORCHESTRATOR_MODEL", "gpt://folder/aliceai-llm")
     snapshot = provider_snapshot("RU")
-    assert snapshot["models"]["yandexart"]["direct_fallback_allowed"] is True
+    assert snapshot["models"]["yandexart"]["orchestrator_model"] == (
+        "gpt://folder/aliceai-llm/latest"
+    )
 
-    monkeypatch.setenv("YANDEX_ART_PIPELINE", "images")
+    monkeypatch.setenv("YANDEX_ART_PIPELINE", "responses")
     snapshot = provider_snapshot("RU")
-    assert snapshot["models"]["yandexart"]["api_family"] == "openai_images"
-    assert snapshot["models"]["yandexart"]["responses_required"] is False
-
+    assert snapshot["models"]["yandexart"]["api_family"] == "responses_image_generation"
+    assert snapshot["models"]["yandexart"]["responses_required"] is True
 
 def test_gigachat_semantic_qa_is_non_generative_and_cleans_uploaded_file(
     tmp_path,
@@ -355,7 +357,7 @@ def test_deprecated_yandex_candidate_requires_explicit_operator_opt_in(monkeypat
     )
 
 
-def test_yandexart_defaults_to_responses_image_generation_tool(monkeypatch, tmp_path):
+def test_yandexart_responses_image_generation_is_explicit_opt_in(monkeypatch, tmp_path):
     from visual_provider_gateway.providers import YandexArtProvider
 
     observed = {}
@@ -376,7 +378,7 @@ def test_yandexart_defaults_to_responses_image_generation_tool(monkeypatch, tmp_
             ],
         }
 
-    monkeypatch.delenv("YANDEX_ART_PIPELINE", raising=False)
+    monkeypatch.setenv("YANDEX_ART_PIPELINE", "responses")
     monkeypatch.setenv("YANDEX_API_KEY", "test")
     monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
     monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
@@ -389,7 +391,7 @@ def test_yandexart_defaults_to_responses_image_generation_tool(monkeypatch, tmp_
             api_key="test",
             folder_id="folder",
             model_image="art://folder/aliceai-image-art-3.0",
-            model_orchestrator="gpt://folder/aliceai-llm",
+            model_orchestrator="gpt://folder/aliceai-llm/latest",
             output_dir=str(tmp_path / "visual"),
         )
     )
@@ -414,7 +416,7 @@ def test_yandexart_defaults_to_responses_image_generation_tool(monkeypatch, tmp_
         "OpenAI-Project": "folder",
     }
     payload = observed["payload"]
-    assert payload["model"] == "gpt://folder/aliceai-llm"
+    assert payload["model"] == "gpt://folder/aliceai-llm/latest"
     assert payload["store"] is False
     assert payload["input"].startswith("ёж, который слушает")
     assert payload["tool_choice"] == "required"
@@ -433,7 +435,7 @@ def test_yandexart_defaults_to_responses_image_generation_tool(monkeypatch, tmp_
     assert job.status == "succeeded"
     assert job.model == "art://folder/aliceai-image-art-3.0"
     assert job.provider_payload["transport"] == "responses_image_generation"
-    assert job.provider_payload["orchestrator_model"] == "gpt://folder/aliceai-llm"
+    assert job.provider_payload["orchestrator_model"] == "gpt://folder/aliceai-llm/latest"
     assert job.provider_payload["response_id"] == "response-123"
     assert job.provider_payload["file_id"] == "file-123"
 
@@ -447,6 +449,10 @@ def test_yandex_http_400_keeps_safe_validation_param_only():
         400,
         b'{"param":"unsafe value with spaces","message":"secret-ish details"}',
     ) == "http_400"
+    assert providers._safe_http_error_code(
+        400,
+        b'{"error":{"code":"invalid_tool_schema","message":"do not expose me"}}',
+    ) == "http_400_error_code_invalid_tool_schema"
     assert providers._safe_http_error_code(403, b'{"param":"tool_choice"}') == "http_403"
 
 
@@ -468,7 +474,7 @@ def test_yandex_responses_derives_folder_from_explicit_art_model_uri(monkeypatch
             }],
         }
 
-    monkeypatch.delenv("YANDEX_ART_PIPELINE", raising=False)
+    monkeypatch.setenv("YANDEX_ART_PIPELINE", "responses")
     monkeypatch.setenv("YANDEX_API_KEY", "test")
     monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
     monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
@@ -488,7 +494,7 @@ def test_yandex_responses_derives_folder_from_explicit_art_model_uri(monkeypatch
 
     assert job.status == "succeeded"
     assert observed["headers"]["OpenAI-Project"] == "folder-from-uri"
-    assert observed["payload"]["model"] == "gpt://folder-from-uri/aliceai-llm"
+    assert observed["payload"]["model"] == "gpt://folder-from-uri/aliceai-llm/latest"
 
 
 def test_yandex_responses_403_fails_closed_by_default(monkeypatch):
@@ -500,7 +506,7 @@ def test_yandex_responses_403_fails_closed_by_default(monkeypatch):
         calls.append((url, payload))
         raise providers.ProviderTransportError("http_403")
 
-    monkeypatch.delenv("YANDEX_ART_PIPELINE", raising=False)
+    monkeypatch.setenv("YANDEX_ART_PIPELINE", "responses")
     monkeypatch.delenv("YANDEX_ART_ALLOW_DIRECT_FALLBACK", raising=False)
     monkeypatch.setenv("YANDEX_API_KEY", "image-only-key")
     monkeypatch.setattr(providers, "_json_request", fake_json_request)
@@ -539,7 +545,7 @@ def test_yandex_responses_403_can_use_direct_only_with_operator_opt_in(monkeypat
         assert url.endswith("/v1/images/generations")
         return {"data": [{"b64_json": encoded}]}
 
-    monkeypatch.delenv("YANDEX_ART_PIPELINE", raising=False)
+    monkeypatch.setenv("YANDEX_ART_PIPELINE", "responses")
     monkeypatch.setenv("YANDEX_ART_ALLOW_DIRECT_FALLBACK", "1")
     monkeypatch.setenv("YANDEX_API_KEY", "image-only-key")
     monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
@@ -588,7 +594,7 @@ def test_yandex_responses_primary_403_retries_renewable_iam_without_direct_fallb
             }],
         }
 
-    monkeypatch.delenv("YANDEX_ART_PIPELINE", raising=False)
+    monkeypatch.setenv("YANDEX_ART_PIPELINE", "responses")
     monkeypatch.delenv("YANDEX_ART_ALLOW_DIRECT_FALLBACK", raising=False)
     monkeypatch.setenv("YANDEX_API_KEY", "image-only-key")
     monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
@@ -635,7 +641,7 @@ def test_yandex_responses_ambiguous_error_never_falls_back_to_direct_images(monk
         calls.append(url)
         raise providers.ProviderTransportError("TimeoutError")
 
-    monkeypatch.delenv("YANDEX_ART_PIPELINE", raising=False)
+    monkeypatch.setenv("YANDEX_ART_PIPELINE", "responses")
     monkeypatch.setenv("YANDEX_API_KEY", "key")
     monkeypatch.setattr(providers, "_json_request", fake_json_request)
 
@@ -655,8 +661,8 @@ def test_yandex_responses_ambiguous_error_never_falls_back_to_direct_images(monk
     assert calls == ["https://ai.api.cloud.yandex.net/v1/responses"]
 
 
-def test_alice_ai_art_uses_openai_compatible_images_api(tmp_path, monkeypatch):
-    monkeypatch.setenv("YANDEX_ART_PIPELINE", "images")
+def test_alice_ai_art_defaults_to_openai_compatible_images_api(tmp_path, monkeypatch):
+    monkeypatch.delenv("YANDEX_ART_PIPELINE", raising=False)
     from visual_provider_gateway.providers import YandexArtProvider
 
     calls = []
@@ -712,6 +718,69 @@ def test_alice_ai_art_uses_openai_compatible_images_api(tmp_path, monkeypatch):
         "size": "1536x1024",
     }
     assert job.provider_payload["transport"] == "openai_compat"
+
+
+def test_alice_images_api_derives_project_from_model_uri(monkeypatch, tmp_path):
+    from visual_provider_gateway.providers import YandexArtProvider
+
+    monkeypatch.delenv("YANDEX_ART_PIPELINE", raising=False)
+    monkeypatch.setenv("YANDEX_API_KEY", "durable-api-key")
+    monkeypatch.setenv("VISUAL_TRANSIENT_OUTPUT_REQUIRED", "1")
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    observed = {}
+    encoded = base64.b64encode(b"derived-project-image").decode("ascii")
+
+    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0, ca_bundle_file=""):
+        observed.update({"url": url, "headers": headers, "payload": payload})
+        return {"data": [{"b64_json": encoded}]}
+
+    monkeypatch.setattr(providers, "_json_request", fake_json_request)
+    provider = YandexArtProvider(
+        ProviderConfig(
+            name="yandexart",
+            base_url="https://ai.api.cloud.yandex.net",
+            api_key="durable-api-key",
+            folder_id="",
+            model_image="art://folder-from-uri/aliceai-image-art-3.0",
+            output_dir=str(tmp_path / "visual"),
+        )
+    )
+
+    job = provider.submit(CreativeBrief(kind="image", prompt="hedgehog"))
+
+    assert job.status == "succeeded"
+    assert observed["headers"]["OpenAI-Project"] == "folder-from-uri"
+    assert observed["payload"]["model"] == "art://folder-from-uri/aliceai-image-art-3.0"
+
+
+def test_alice_images_api_rejects_overlong_prompt_before_network(monkeypatch):
+    from visual_provider_gateway.providers import YandexArtProvider
+
+    monkeypatch.delenv("YANDEX_ART_PIPELINE", raising=False)
+    monkeypatch.setenv("YANDEX_API_KEY", "durable-api-key")
+    calls = []
+    monkeypatch.setattr(
+        providers,
+        "_json_request",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    provider = YandexArtProvider(
+        ProviderConfig(
+            name="yandexart",
+            base_url="https://ai.api.cloud.yandex.net",
+            api_key="durable-api-key",
+            model_image="art://folder/aliceai-image-art-3.0",
+            folder_id="folder",
+        )
+    )
+
+    with pytest.raises(
+        providers.ProviderTransportError,
+        match="yandex_prompt_too_long",
+    ):
+        provider.submit(CreativeBrief(kind="image", prompt="x" * 501))
+
+    assert calls == []
 
 
 def test_yandexart_poll_materializes_native_operation_result(tmp_path, monkeypatch):
@@ -1108,7 +1177,9 @@ def test_provider_snapshot_reports_motion_fallback_mode(monkeypatch):
         configured = True
         available = True
         current_model_present = True
+        orchestrator_model_present = False
         art_models = ("art://folder/aliceai-image-art-3.0",)
+        gpt_models = ()
         all_model_count = 1
         error_code = ""
 
@@ -1430,6 +1501,58 @@ def test_submit_preserves_safe_http_failure_code_without_provider_body(monkeypat
     assert job.provider_payload == {
         "attempts": ("yandexart:visual_provider_submit_http_400",),
     }
+
+
+def test_submit_preserves_detailed_http_400_as_definitive_safe_failure(monkeypatch):
+    from visual_provider_gateway.engine import VisualCreativeEngine
+    from visual_provider_gateway.models import CreativeJob
+
+    calls = []
+
+    class BrokenProvider:
+        def configured(self, kind):
+            return True
+
+        def submit(self, brief):
+            calls.append("broken")
+            raise providers.ProviderTransportError(
+                "http_400_error_code_invalid_tool_schema"
+            )
+
+    class SecondProvider:
+        def configured(self, kind):
+            return True
+
+        def submit(self, brief):
+            calls.append("second")
+            return CreativeJob(
+                provider="second",
+                kind=brief.kind,
+                status="queued",
+                external_id="second-1",
+            )
+
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.provider_order",
+        lambda *_args, **_kwargs: ("broken", "second"),
+    )
+    monkeypatch.setattr(
+        "visual_provider_gateway.engine.build_provider",
+        lambda name: BrokenProvider() if name == "broken" else SecondProvider(),
+    )
+    monkeypatch.delenv("VISUAL_ALLOW_PROVIDER_FAILOVER_AFTER_ERROR", raising=False)
+
+    engine = VisualCreativeEngine(enabled=True)
+    job = engine.submit(CreativeBrief(kind="image", prompt="x"))
+
+    assert job.provider == "second"
+    assert job.status == "queued"
+    assert calls == ["broken", "second"]
+    runtime = engine.runtime_snapshot()["image"]
+    assert runtime["provider"] == "second"
+    assert runtime["attempts"] == (
+        "broken:visual_provider_submit_http_400_error_code_invalid_tool_schema",
+    )
 
 
 def test_submit_normalizes_ambiguous_timeout_and_does_not_failover(monkeypatch):

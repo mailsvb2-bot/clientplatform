@@ -247,13 +247,11 @@ jobs:
           elif not any(
               safe[key] in accepted
               for key in (
-                  "primary_native",
                   "primary_compat",
-                  "renewable_native",
                   "renewable_compat",
               )
           ):
-              print("CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:direct_not_authorized")
+              print("CLIENTPLATFORM_PRODUCTION_VISUAL_DIAGNOSTIC_FAILED:images_api_not_authorized")
               raise SystemExit(29)
           PY
 
@@ -290,7 +288,10 @@ jobs:
               "yandex_catalog_available": bool(yandex.get("catalog_available")),
               "yandex_catalog_error": str(yandex.get("catalog_error") or ""),
               "yandex_configured_model_present": bool(yandex.get("configured_model_present")),
+              "yandex_orchestrator_model_present": bool(yandex.get("orchestrator_model_present")),
               "yandex_available_art_models": list(yandex.get("available_art_models") or ()),
+              "yandex_available_gpt_models": list(yandex.get("available_gpt_models") or ()),
+              "yandex_responses_required": bool(yandex.get("responses_required")),
               "runtime_image_provider": str(image_runtime.get("provider") or ""),
               "runtime_image_error": str(image_runtime.get("error_code") or ""),
               "runtime_video_provider": str(video_runtime.get("provider") or ""),
@@ -315,12 +316,18 @@ jobs:
           historical_runtime_error = bool(
               safe["runtime_image_error"] or safe["runtime_video_error"]
           )
+          catalog_contract_ready = (
+              not safe["yandex_responses_required"]
+              or not safe["yandex_catalog_available"]
+              or safe["yandex_orchestrator_model_present"]
+          )
           readiness = (
               "ready"
               if (
                   safe["enabled"]
                   and safe["configured_image"]
                   and safe["configured_video"]
+                  and catalog_contract_ready
               )
               else "provider_unavailable"
           )
