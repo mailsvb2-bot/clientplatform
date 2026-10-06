@@ -185,21 +185,37 @@ def fallback_scene_contract(
         evidence.append("requested consumption action visible")
     if "transformation" in flags:
         transition.append("visible progressive change")
-        evidence.extend(
-            [
-                "same subject identity across stages",
-                "opening state visible",
-                "causal action connected to change",
-                "requested final state visibly different",
-            ]
-        )
-        forbidden.extend(
-            [
-                "unrelated characters used as stages",
-                "single final-state portrait",
-                "stage labels or arrows unless explicitly requested",
-            ]
-        )
+        if "storyboard" in flags:
+            evidence.extend(
+                [
+                    "same subject identity across stages",
+                    "opening state visible",
+                    "causal action connected to change",
+                    "requested final state visibly different",
+                ]
+            )
+            forbidden.extend(
+                [
+                    "unrelated characters used as stages",
+                    "single final-state portrait",
+                    "stage labels or arrows unless explicitly requested",
+                ]
+            )
+        else:
+            evidence.extend(
+                [
+                    "subject shown once in one coherent scene",
+                    "causal action visible together with the changed qualities",
+                    "requested changed qualities visibly readable",
+                ]
+            )
+            forbidden.extend(
+                [
+                    "identical repeated portraits of the same subject",
+                    "triptych of the same portrait",
+                    "stage labels or arrows unless explicitly requested",
+                ]
+            )
     if "sequence" in flags:
         evidence.append("requested chronology visible")
     if "object_replacement" in flags:
