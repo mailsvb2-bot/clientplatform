@@ -376,7 +376,9 @@ def provider_snapshot(country_code: str = "") -> dict[str, object]:
                 "catalog_available": catalog.available,
                 "catalog_error": catalog.error_code,
                 "configured_model_present": catalog.current_model_present,
+                "orchestrator_model_present": catalog.orchestrator_model_present,
                 "available_art_models": catalog.art_models,
+                "available_gpt_models": catalog.gpt_models,
                 "available_model_count": catalog.all_model_count,
                 "candidate_count": len(
                     tuple(
