@@ -124,13 +124,21 @@ def _staged_transformation(contract: VisualSceneContract) -> bool:
 def _fallback_directions(
     contract: VisualSceneContract,
 ) -> tuple[tuple[str, str, str], ...]:
-    if contract.topology in {"transformation", "sequence", "replacement"}:
+    if contract.topology in {"sequence", "replacement"} or _staged_transformation(contract):
         fifth = (
             "Последовательная история",
             "Смысл читается по этапам слева направо; главный объект сохраняет узнаваемость.",
             "Use a clean left-to-right narrative progression. Preserve the same "
             "primary subject or environment across moments. Keep the causal event "
             "and requested change readable without labels or arrows.",
+        )
+    elif contract.topology == "transformation":
+        fifth = (
+            "Единый визуальный поток",
+            "Причина и изменившиеся качества читаются внутри одного цельного кадра без повторов героя.",
+            "Use one coherent single-frame visual flow from the causal action to the "
+            "changed qualities. Show the primary subject once; never split the scene "
+            "into stages, panels, before/after views or a triptych.",
         )
     else:
         fifth = (
