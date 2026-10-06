@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 from clientplatform.application.visual_scene_variants import (
+    build_visual_scene_bundle,
     build_visual_scene_variants,
     freeze_visual_scene_bundle,
 )
@@ -518,3 +519,56 @@ def test_claimed_scene_plan_failures_never_retry_paid_planner(monkeypatch) -> No
         build.assert_called_once()
         mark.assert_called_once()
         assert state.data["creative_scene_planner_source"] == "deterministic"
+
+
+def test_ai_scene_bundle_preserves_grounded_meaning_and_real_art_direction() -> None:
+    request = "ёж, который слушает ресурсное аудио и становится добрым и пушистым"
+    flags = semantic_flags_for_request(request)
+    compositions = (
+        "clear_story",
+        "cinematic",
+        "editorial",
+        "focused",
+        "sequential",
+    )
+    variants = []
+    for index, composition in enumerate(compositions, start=1):
+        variants.append(
+            {
+                "title": f"Постановка {index}",
+                "description": f"Осмысленный вариант {index} именно про ежа и его изменение.",
+                "direction": (
+                    f"Distinct art direction {index}: keep the hedgehog listening to the "
+                    "resource audio while the visible emotional and fur transformation "
+                    "develops coherently."
+                ),
+                "composition": composition,
+                "provider_note": "harmless extra metadata",
+            }
+        )
+
+    class FakeClient:
+        def chat(self, messages, *, temperature, max_tokens):
+            import json
+
+            assert messages
+            assert temperature == 0.55
+            assert max_tokens == 1800
+            return "```json\n" + json.dumps(
+                {"variants": variants, "meta": {"provider": "yandex"}},
+                ensure_ascii=False,
+            ) + "\n```"
+
+    contract, source, planned = build_visual_scene_bundle(
+        request=request,
+        semantic_flags=flags,
+        style_intent=VisualStyleIntent(),
+        client=FakeClient(),
+    )
+
+    assert source == "ai"
+    assert len(planned) == 5
+    assert all(item.source == "ai" for item in planned)
+    assert all("Distinct art direction" in item.direction for item in planned)
+    assert contract == fallback_scene_contract(request=request, semantic_flags=flags)
+    assert "ёж" in request

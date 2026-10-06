@@ -329,6 +329,26 @@ def _fallback_variants(
     return tuple(variants)
 
 
+_UNSAFE_DIRECTION_PHRASES = (
+    "replace ",
+    "remove ",
+    "ignore ",
+    "instead of",
+    "different animal",
+    "different subject",
+    "different object",
+    "swap ",
+    "substitute ",
+)
+
+
+def _safe_ai_direction_text(direction: str) -> str | None:
+    folded = " ".join(direction.casefold().split())
+    if any(phrase in folded for phrase in _UNSAFE_DIRECTION_PHRASES):
+        return None
+    return direction
+
+
 def _parse_variant_items(
     items: object,
     *,
@@ -341,19 +361,15 @@ def _parse_variant_items(
     variants: list[VisualSceneVariant] = []
     seen_compositions: set[str] = set()
     for index, item in enumerate(items, start=1):
-        if not isinstance(item, dict) or set(item) != {
-            "title", "description", "direction", "composition",
-        }:
+        required = {"title", "description", "direction", "composition"}
+        if not isinstance(item, dict) or not required.issubset(item):
             return None
         try:
             title = _clean(item["title"], limit=80)
             description = _clean(
                 item["description"], limit=_MAX_DESCRIPTION_CHARS,
             )
-            # Validate the model payload shape/size, but never trust provider-facing
-            # prose from an LLM. The actual direction is reconstructed exclusively
-            # from a deterministic composition token after semantic validation.
-            _clean(item["direction"], limit=_MAX_DIRECTION_CHARS)
+            ai_direction = _clean(item["direction"], limit=_MAX_DIRECTION_CHARS)
         except ValueError:
             return None
         composition = str(item["composition"] or "").strip().lower()
@@ -363,18 +379,28 @@ def _parse_variant_items(
         ):
             return None
         seen_compositions.add(composition)
-        safe_direction = _safe_direction_for_composition(contract, composition)
+        semantic_guard = _safe_direction_for_composition(contract, composition)
+        safe_ai_direction = _safe_ai_direction_text(ai_direction)
+        direction = (
+            (
+                safe_ai_direction.rstrip(".")
+                + ". "
+                + semantic_guard
+            )
+            if safe_ai_direction
+            else semantic_guard
+        )[:1400]
         variants.append(
             VisualSceneVariant(
                 id=f"v{index}",
                 title=title,
                 description=description,
-                direction=safe_direction,
+                direction=direction,
                 composition=composition,
                 score=_score_variant(
                     contract=contract,
                     composition=composition,
-                    direction=safe_direction,
+                    direction=direction,
                     style=style,
                     index=index,
                 ),
@@ -384,17 +410,37 @@ def _parse_variant_items(
     return tuple(variants)
 
 
+def _json_object_from_model(raw: str) -> dict[str, Any] | None:
+    text = str(raw or "").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].strip().lower() in {"```", "```json"}:
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    try:
+        value: Any = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            return None
+        try:
+            value = json.loads(text[start : end + 1])
+        except json.JSONDecodeError:
+            return None
+    return value if isinstance(value, dict) else None
+
+
 def _parse_ai_variants(
     raw: str,
     *,
     contract: VisualSceneContract,
     style: VisualStyleIntent,
 ) -> tuple[VisualSceneVariant, ...] | None:
-    try:
-        value: Any = json.loads(str(raw or "").strip())
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(value, dict) or set(value) != {"variants"}:
+    value = _json_object_from_model(raw)
+    if value is None or "variants" not in value:
         return None
     return _parse_variant_items(
         value.get("variants"),
@@ -491,15 +537,19 @@ def build_visual_scene_bundle(
     style_intent: VisualStyleIntent,
     client: OpenAIClient | None = None,
 ) -> tuple[VisualSceneContract, str, tuple[VisualSceneVariant, ...]]:
-    """Build grounded semantics plus five directions with at most one AI call."""
+    """Build one grounded scene bundle with at most one text-AI call.
+
+    The deterministic contract is always available as the semantic safety net.
+    AI may improve the grounded contract when it returns exact owner spans and may
+    propose staging variants, but a malformed contract no longer discards otherwise
+    valid presentation work.
+    """
 
     owner_request = " ".join(str(request or "").replace("\x00", " ").split()).strip()
-    fallback_contract, _fallback_source, fallback_variants = (
-        deterministic_visual_scene_bundle(
-            request=owner_request,
-            semantic_flags=semantic_flags,
-            style_intent=style_intent,
-        )
+    fallback_contract, _fallback_source, fallback_variants = deterministic_visual_scene_bundle(
+        request=owner_request,
+        semantic_flags=semantic_flags,
+        style_intent=style_intent,
     )
     if client is None and not visual_scene_ai_planning_available():
         return fallback_contract, "deterministic", fallback_variants
@@ -509,21 +559,16 @@ def build_visual_scene_bundle(
         return fallback_contract, "deterministic", fallback_variants
 
     system = (
-        "You are ClientPlatform's visual scene director. Return one JSON object with "
-        "exactly two keys: scene_contract and variants. scene_contract has keys "
-        "topology, primary_subject, initial_state, actions, cause, transition, "
-        "final_state, explicit_text. Every textual value inside scene_contract except "
-        "topology MUST be copied verbatim as an exact contiguous span from the owner "
-        "request; use empty string/list when absent. Never add synonyms or facts. "
-        "topology is one of static, action, transformation, sequence, comparison, "
-        "replacement. variants is exactly five presentation directions for that SAME "
-        "meaning. Each variant has title, description, direction, composition. "
-        "composition must use each value exactly once: clear_story, cinematic, "
-        "editorial, focused, sequential. Variants may change only composition, camera, "
-        "lighting, staging, atmosphere and rhythm; they must not remove, replace or "
-        "contradict any semantic element. title/description are concise Russian text "
-        "for the owner; direction is concise English art direction. Do not request "
-        "visible internal labels such as BEFORE, AFTER or ACTION."
+        "You are ClientPlatform's visual scene director. Return JSON with a variants "
+        "array of exactly five genuinely different presentation directions for the "
+        "same owner meaning. You may also return scene_contract. If scene_contract is "
+        "returned, its textual semantic values must be exact contiguous spans copied "
+        "from the owner request; never invent synonyms or facts. Each variant has "
+        "title, description, direction, composition. composition must use each value "
+        "exactly once: clear_story, cinematic, editorial, focused, sequential. "
+        "direction may change only camera, staging, lighting, atmosphere, visual "
+        "rhythm and composition; never replace, remove, ignore or contradict the "
+        "requested subject/action/result. Return JSON only."
     )
     raw = selected.chat(
         [
@@ -534,6 +579,7 @@ def build_visual_scene_bundle(
                     {
                         "owner_request": owner_request[:1500],
                         "semantic_flags": list(semantic_flags),
+                        "scene_contract": fallback_contract.to_mapping(),
                         "style": style_intent.to_mapping(),
                     },
                     ensure_ascii=False,
@@ -541,34 +587,37 @@ def build_visual_scene_bundle(
                 ),
             },
         ],
-        temperature=0.35,
-        max_tokens=2200,
+        temperature=0.55,
+        max_tokens=1800,
     )
-    try:
-        value: Any = json.loads(str(raw or "").strip())
-    except json.JSONDecodeError:
+
+    value = _json_object_from_model(raw or "")
+    if value is None:
         return fallback_contract, "deterministic", fallback_variants
-    if not isinstance(value, dict) or set(value) != {"scene_contract", "variants"}:
-        return fallback_contract, "deterministic", fallback_variants
+
+    contract = fallback_contract
     raw_contract = value.get("scene_contract")
-    if not isinstance(raw_contract, dict):
-        return fallback_contract, "deterministic", fallback_variants
-    contract = grounded_scene_contract_from_mapping(
-        owner_request=owner_request,
-        semantic_flags=semantic_flags,
-        value=raw_contract,
-    )
-    if contract is None:
-        return fallback_contract, "deterministic", fallback_variants
+    if isinstance(raw_contract, dict):
+        grounded = grounded_scene_contract_from_mapping(
+            owner_request=owner_request,
+            semantic_flags=semantic_flags,
+            value=raw_contract,
+        )
+        if grounded is not None:
+            contract = grounded
+
     variants = _parse_variant_items(
         value.get("variants"),
         contract=contract,
         style=style_intent,
     )
     if variants is None:
-        return fallback_contract, "deterministic", fallback_variants
+        return contract, "deterministic", _fallback_variants(
+            contract=contract,
+            style=style_intent,
+            owner_request=owner_request,
+        )
     return contract, "ai", variants
-
 
 def build_visual_scene_variants(
     *,
