@@ -595,5 +595,21 @@ class VisualPromptCompilerTests(unittest.TestCase):
         self.assertIn("presentation_change", compiled.semantic_flags)
         self.assertNotIn("presentation_transition", compiled.semantic_flags)
 
+    def test_subject_transition_survives_and_joined_static_style_clause(self) -> None:
+        request = (
+            "Make a sad cat gradually become happy "
+            "and render it in watercolor style"
+        )
+        compiled = compile_visual_prompt(request=request, kind="image")
+
+        self.assertIn("transformation", compiled.semantic_flags)
+        self.assertIn("visible_state", compiled.semantic_flags)
+        self.assertIn("presentation_change", compiled.semantic_flags)
+        self.assertNotIn("presentation_transition", compiled.semantic_flags)
+        self.assertIn(
+            "The transformation is mandatory visual evidence in one coherent scene",
+            compiled.prompt,
+        )
+
 if __name__ == "__main__":
     unittest.main()
