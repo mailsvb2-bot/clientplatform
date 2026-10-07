@@ -504,7 +504,7 @@ class VisualPromptCompilerTests(unittest.TestCase):
 
         self.assertIn("presentation_change", compiled.semantic_flags)
         self.assertIn("presentation_transition", compiled.semantic_flags)
-        self.assertIn("transformation", compiled.semantic_flags)
+        self.assertNotIn("transformation", compiled.semantic_flags)
         self.assertIn(
             "The requested change is a visual-presentation transition",
             compiled.prompt,
@@ -544,6 +544,56 @@ class VisualPromptCompilerTests(unittest.TestCase):
             "The transformation is mandatory visual evidence in one coherent scene",
             compiled.prompt,
         )
+
+
+    def test_state_adjective_in_subject_does_not_turn_style_transition_physical(self) -> None:
+        request = "The image of a sad dog gradually becomes watercolor"
+        compiled = compile_visual_prompt(request=request, kind="image")
+
+        self.assertIn("presentation_change", compiled.semantic_flags)
+        self.assertIn("presentation_transition", compiled.semantic_flags)
+        self.assertNotIn("transformation", compiled.semantic_flags)
+        self.assertNotIn("visible_state", compiled.semantic_flags)
+        self.assertIn(
+            "The requested change is a visual-presentation transition",
+            compiled.prompt,
+        )
+        self.assertNotIn(
+            "The transformation is mandatory visual evidence",
+            compiled.prompt,
+        )
+
+    def test_subject_transition_does_not_make_static_style_instruction_transition(self) -> None:
+        request = (
+            "A sad cat gradually becomes happy, "
+            "render it in watercolor style"
+        )
+        compiled = compile_visual_prompt(request=request, kind="image")
+
+        self.assertIn("transformation", compiled.semantic_flags)
+        self.assertIn("visible_state", compiled.semantic_flags)
+        self.assertIn("presentation_change", compiled.semantic_flags)
+        self.assertNotIn("presentation_transition", compiled.semantic_flags)
+        self.assertIn(
+            "The transformation is mandatory visual evidence in one coherent scene",
+            compiled.prompt,
+        )
+        self.assertIn(
+            "The owner is editing visual presentation",
+            compiled.prompt,
+        )
+        self.assertNotIn(
+            "The requested change is a visual-presentation transition",
+            compiled.prompt,
+        )
+
+    def test_material_transformation_survives_independent_static_style_clause(self) -> None:
+        request = "A stone statue turns into glass, render it in watercolor style"
+        compiled = compile_visual_prompt(request=request, kind="image")
+
+        self.assertIn("transformation", compiled.semantic_flags)
+        self.assertIn("presentation_change", compiled.semantic_flags)
+        self.assertNotIn("presentation_transition", compiled.semantic_flags)
 
 if __name__ == "__main__":
     unittest.main()
