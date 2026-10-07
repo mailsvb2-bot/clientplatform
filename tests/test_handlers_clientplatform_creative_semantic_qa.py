@@ -146,10 +146,12 @@ async def test_semantic_qa_pass_keeps_normal_ready_caption() -> None:
 
 
 def test_semantic_qa_unavailable_is_not_presented_as_green_success() -> None:
-    warning = studio._semantic_qa_warning(
-        SimpleNamespace(status="unavailable", issues=(), summary="")
-    )
+    qa = SimpleNamespace(status="unavailable", issues=(), summary="")
+    warning = studio._semantic_qa_warning(qa)
+    caption = studio._semantic_qa_caption(qa)
 
     assert "автоматическая проверка соответствия" in warning
     assert "сейчас недоступна" in warning
     assert "Новую генерацию я не запускала" in warning
+    assert caption.startswith("⚠️ Картинка готова")
+    assert "автопроверка смысла сейчас недоступна" in caption
