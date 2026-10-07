@@ -82,7 +82,8 @@ def test_grounded_ai_planner_extracts_hedgehog_meaning_without_inventing() -> No
     assert contract.primary_subject == "ёж"
     assert contract.actions == ("слушает ресурсное аудио",)
     assert contract.final_state == ("добрым", "пушистым")
-    assert "same subject identity across stages" in contract.required_evidence
+    assert "subject shown once in one coherent scene" in contract.required_evidence
+    assert "same subject identity across stages" not in contract.required_evidence
     assert client.calls == 1
 
 
@@ -243,7 +244,7 @@ def test_hybrid_director_returns_five_distinct_options_in_one_ai_call() -> None:
     }
     assert all(item.source == "ai" for item in variants)
     assert client.calls == 1
-    assert recommended_scene_variant(variants).id in {"v1", "v5"}
+    assert recommended_scene_variant(variants).id == "v1"
 
 
 def test_supplement_refines_selected_variant_without_replacing_contract(monkeypatch) -> None:

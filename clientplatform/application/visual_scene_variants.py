@@ -111,16 +111,34 @@ def _clean(value: object, *, limit: int, allow_empty: bool = False) -> str:
     return text
 
 
+def _staged_transformation(contract: VisualSceneContract) -> bool:
+    if contract.topology != "transformation":
+        return False
+    evidence = set(contract.required_evidence)
+    return (
+        "same subject identity across stages" in evidence
+        and "subject shown once in one coherent scene" not in evidence
+    )
+
+
 def _fallback_directions(
     contract: VisualSceneContract,
 ) -> tuple[tuple[str, str, str], ...]:
-    if contract.topology in {"transformation", "sequence", "replacement"}:
+    if contract.topology in {"sequence", "replacement"} or _staged_transformation(contract):
         fifth = (
             "Последовательная история",
             "Смысл читается по этапам слева направо; главный объект сохраняет узнаваемость.",
             "Use a clean left-to-right narrative progression. Preserve the same "
             "primary subject or environment across moments. Keep the causal event "
             "and requested change readable without labels or arrows.",
+        )
+    elif contract.topology == "transformation":
+        fifth = (
+            "Единый визуальный поток",
+            "Причина и изменившиеся качества читаются внутри одного цельного кадра без повторов героя.",
+            "Use one coherent single-frame visual flow from the causal action to the "
+            "changed qualities. Show the primary subject once; never split the scene "
+            "into stages, panels, before/after views or a triptych.",
         )
     else:
         fifth = (
@@ -170,10 +188,21 @@ def _score_variant(
     if composition == "clear_story":
         score += 8
     if (
-        contract.topology in {"transformation", "sequence", "replacement"}
+        (
+            contract.topology in {"sequence", "replacement"}
+            or _staged_transformation(contract)
+        )
         and composition == "sequential"
     ):
         score += 12
+    if (
+        contract.topology == "transformation"
+        and not _staged_transformation(contract)
+    ):
+        if composition == "clear_story":
+            score += 12
+        elif composition == "sequential":
+            score -= 12
     if contract.topology == "static" and composition == "focused":
         score += 8
     if (
@@ -225,7 +254,7 @@ def _fallback_variant_copy(
     subject = str(contract.primary_subject or "").strip() or "главный объект"
     quoted = f"«{concept}»" if concept else "исходный смысл запроса"
 
-    if contract.topology in {"transformation", "sequence", "replacement"}:
+    if contract.topology in {"sequence", "replacement"} or _staged_transformation(contract):
         return (
             (
                 "Причина и результат в одном кадре",
@@ -251,6 +280,35 @@ def _fallback_variant_copy(
                 "Последовательность без подписей",
                 f"Смысл {quoted} читается слева направо без стрелок и поясняющего текста: "
                 "тот же герой, причина изменения и различимый финальный результат.",
+            ),
+        )
+
+    if contract.topology == "transformation":
+        return (
+            (
+                "Причина и результат в одном кадре",
+                f"{subject.capitalize()} показан один раз: действие и уже заметное изменение "
+                f"вместе раскрывают {quoted}.",
+            ),
+            (
+                "История через ключевой момент",
+                f"Один цельный кадр держит главный акцент на действии, которое вызывает "
+                f"изменение {quoted}, без повторов героя.",
+            ),
+            (
+                "Действие и изменение вместе",
+                f"{subject.capitalize()} одновременно совершает причинное действие, а "
+                f"запрошенные изменившиеся качества уже ясно видны в той же сцене {quoted}.",
+            ),
+            (
+                "Крупный фокус на изменении",
+                f"Камера держится ближе к {subject}: действие и физически заметная перемена "
+                f"читаются вместе в одном кадре и подтверждают {quoted}.",
+            ),
+            (
+                "Единый кадр с визуальным потоком",
+                f"Композиция ведёт взгляд от причины к результату внутри одной сцены {quoted}; "
+                "герой не дублируется и не разбивается на панели.",
             ),
         )
 
@@ -654,7 +712,10 @@ def build_visual_scene_variants(
         "each of clear_story, cinematic, editorial, focused, sequential. title and "
         "description are short Russian user-facing text. direction is concise English "
         "provider-facing art direction. Internal labels such as BEFORE, AFTER or ACTION "
-        "must never be requested as visible text."
+        "must never be requested as visible text. If the semantic contract says the "
+        "subject is shown once in one coherent scene, even the sequential composition "
+        "must mean visual flow inside that single frame: never repeat the subject, "
+        "split it into stages, panels, before/after views or a triptych."
     )
     payload = {
         "owner_request": " ".join(str(request or "").split())[:1500],

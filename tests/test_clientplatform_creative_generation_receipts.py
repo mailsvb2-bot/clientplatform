@@ -16,7 +16,10 @@ from clientplatform.application.visual_creatives import (
     freeze_business_visual_payload,
     frozen_business_visual_binding,
 )
-from clientplatform.domain.creative_generation import CreativeGenerationReceiptStatus
+from clientplatform.domain.creative_generation import (
+    CreativeGenerationReceiptStatus,
+    MAX_CREATIVE_GENERATION_PROVIDER_PAYLOAD_CHARS,
+)
 from clientplatform.infrastructure.creative_generation_receipt_repository import (
     CreativeGenerationReceiptRepository,
 )
@@ -456,6 +459,27 @@ class CreativeGenerationReceiptRepositoryTests(unittest.TestCase):
                 source_job_id="provider-job-2",
                 provider_status="running",
             )
+
+    def test_payload_above_legacy_10k_budget_is_persisted(self) -> None:
+        provider_payload = json.dumps(
+            {"version": 4, "padding": "x" * 10_500},
+            separators=(",", ":"),
+        )
+        self.assertGreater(len(provider_payload), 10_000)
+        self.assertLessEqual(
+            len(provider_payload),
+            MAX_CREATIVE_GENERATION_PROVIDER_PAYLOAD_CHARS,
+        )
+
+        receipt = self.repo.prepare(
+            actor=self.actor,
+            request_text="calm office",
+            brand_context="Tone: calm",
+            country_code="RU",
+            provider_payload_json=provider_payload,
+        )
+
+        self.assertEqual(receipt.provider_payload_json, provider_payload)
 
     def test_invalid_frozen_payload_is_rejected_before_persistence(self) -> None:
         with self.assertRaisesRegex(ValueError, "provider payload"):

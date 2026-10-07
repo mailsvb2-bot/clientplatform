@@ -33,6 +33,7 @@ from services.migrations.clientplatform_promotion_channel_max_v1 import apply as
 from services.migrations.clientplatform_email_outbound_v1 import apply as _apply_email_outbound
 from services.migrations.clientplatform_provider_dispatch_event_message_v1 import apply as _apply_provider_event_message
 from services.migrations.clientplatform_event_content_video_mode_v1 import apply as _apply_event_content_video_mode
+from services.migrations.clientplatform_creative_generation_payload_budget_v1 import apply as _apply_creative_generation_payload_budget
 from services.migrations.clientplatform_external_observation_lifecycle_v1 import apply as _apply_external_observation_lifecycle
 from services.migrations.clientplatform_external_observation_feedback_v1 import apply as _apply_external_observation_feedback
 from services.migrations.clientplatform_external_connector_ingress_mode_v1 import apply as _apply_external_connector_ingress_mode
@@ -72,6 +73,7 @@ def apply_all_migrations(conn: sqlite3.Connection) -> None:
     _apply_email_outbound(conn)
     _apply_provider_event_message(conn)
     _apply_event_content_video_mode(conn)
+    _apply_creative_generation_payload_budget(conn)
     _apply_external_observation_lifecycle(conn)
     _apply_external_observation_feedback(conn)
     _apply_external_connector_ingress_mode(conn)

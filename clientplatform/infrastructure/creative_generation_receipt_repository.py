@@ -9,6 +9,7 @@ from typing import Any
 from clientplatform.domain.creative_generation import (
     CreativeGenerationReceipt,
     CreativeGenerationReceiptStatus,
+    MAX_CREATIVE_GENERATION_PROVIDER_PAYLOAD_CHARS,
 )
 from clientplatform.domain.tenancy import TenantContext, normalize_uuid
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
@@ -112,7 +113,11 @@ class CreativeGenerationReceiptRepository:
             raise ValueError("creative generation brand context is invalid")
         if country and (len(country) != 2 or not country.isalpha()):
             raise ValueError("creative generation country code is invalid")
-        if not provider_payload or len(provider_payload) > 10000 or "\x00" in provider_payload:
+        if (
+            not provider_payload
+            or len(provider_payload) > MAX_CREATIVE_GENERATION_PROVIDER_PAYLOAD_CHARS
+            or "\x00" in provider_payload
+        ):
             raise ValueError("creative generation provider payload is invalid")
         existing = self.get_active(actor=current)
         timestamp = str(now or _iso_now())

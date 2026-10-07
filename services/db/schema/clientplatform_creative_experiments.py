@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import sqlite3
 
+from clientplatform.domain.creative_generation import (
+    MAX_CREATIVE_GENERATION_PROVIDER_PAYLOAD_CHARS,
+)
+
 
 def ensure(c: sqlite3.Connection) -> None:
     """Persist the selected creative variant for one tenant-scoped ad draft."""
@@ -52,7 +56,7 @@ def ensure(c: sqlite3.Connection) -> None:
     )
 
     c.execute(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS creative_generation_receipts(
             id TEXT PRIMARY KEY,
             business_id TEXT NOT NULL,
@@ -75,7 +79,7 @@ def ensure(c: sqlite3.Connection) -> None:
             CHECK(length(request_text) BETWEEN 1 AND 1500),
             CHECK(length(brand_context) <= 2500),
             CHECK(country_code='' OR length(country_code)=2),
-            CHECK(length(provider_payload_json) BETWEEN 1 AND 10000),
+            CHECK(length(provider_payload_json) BETWEEN 1 AND {MAX_CREATIVE_GENERATION_PROVIDER_PAYLOAD_CHARS}),
             CHECK(length(idempotency_key) BETWEEN 8 AND 200),
             CHECK(length(source_job_id) <= 128),
             CHECK(status IN (

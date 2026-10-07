@@ -139,7 +139,7 @@ def grounded_scene_contract_from_mapping(
         else:
             required_evidence.extend(
                 [
-                    "same subject identity across stages",
+                    "subject shown once in one coherent scene",
                     "causal action visible in the same frame as the changed qualities",
                     "requested changed qualities visibly readable",
                 ]

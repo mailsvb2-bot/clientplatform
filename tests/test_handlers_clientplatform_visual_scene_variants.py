@@ -100,15 +100,17 @@ def test_deterministic_variants_explain_distinct_semantic_staging(monkeypatch) -
     assert [item.title for item in variants] == [
         "Причина и результат в одном кадре",
         "История через ключевой момент",
-        "Три связанных этапа",
+        "Действие и изменение вместе",
         "Крупный фокус на изменении",
-        "Последовательность без подписей",
+        "Единый кадр с визуальным потоком",
     ]
     descriptions = " ".join(item.description for item in variants)
     directions = " ".join(item.direction for item in variants)
     assert "ёж" in descriptions
     assert "слушает ресурсное аудио" in descriptions
     assert "ёж, который слушает ресурсное аудио" in directions
+    assert "герой не дублируется" in descriptions
+    assert "Три связанных этапа" not in descriptions
     assert len({item.description for item in variants}) == 5
 
 
@@ -179,7 +181,7 @@ def test_auto_scene_variant_uses_recommended_variant(monkeypatch) -> None:
 
     prepared.assert_awaited_once()
     selected = prepared.await_args.kwargs["scene_variant"]
-    assert selected.id in {"v1", "v5"}
+    assert selected.id == "v1"
     assert callback.answer.await_args.args[0] == "Выбран лучший вариант"
 
 def test_scene_variant_helpers_roundtrip_cached_state_and_reject_corruption(monkeypatch) -> None:
