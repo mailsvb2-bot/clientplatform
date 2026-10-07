@@ -883,7 +883,14 @@ def _compiled_semantic_visual_cues(
     listening = has("if the subject is listening")
     explicit_text = has("readable text is explicitly part")
     owner_request = _compiled_owner_request(lines)
-    owner_style = _owner_style_fragment(owner_request)
+    resolved_style_overrides_owner = has(
+        "style precedence: resolved style snapshot overrides owner-authored style wording"
+    )
+    owner_style = (
+        ""
+        if resolved_style_overrides_owner
+        else _owner_style_fragment(owner_request)
+    )
 
     if presentation_change:
         cues.append(_presentation_change_cue(transition=presentation_transition))
