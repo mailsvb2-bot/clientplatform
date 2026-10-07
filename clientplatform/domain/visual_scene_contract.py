@@ -125,7 +125,7 @@ def _topology(flags: tuple[str, ...]) -> str:
     values = set(flags)
     presentation_only = (
         "presentation_change" in values
-        and "visible_state" not in values
+        and "transformation" not in values
         and "object_replacement" not in values
     )
     if "object_replacement" in values:
@@ -188,14 +188,7 @@ def fallback_scene_contract(
     if "eating_or_drinking" in flags:
         actions.append("eating or drinking")
         evidence.append("requested consumption action visible")
-    subject_transformation = (
-        "transformation" in flags
-        and not (
-            "presentation_change" in flags
-            and "visible_state" not in flags
-            and "object_replacement" not in flags
-        )
-    )
+    subject_transformation = "transformation" in flags
     if "presentation_change" in flags:
         evidence.extend(
             [
