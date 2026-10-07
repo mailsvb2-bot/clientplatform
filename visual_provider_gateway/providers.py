@@ -1251,7 +1251,7 @@ class GigaChatImageProvider:
             )
         presentation_only = (
             "presentation_change" in flag_set
-            and "visible_state" not in flag_set
+            and "transformation" not in flag_set
             and "object_replacement" not in flag_set
         )
         if "transformation" in flag_set and not presentation_only:
