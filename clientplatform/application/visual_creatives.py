@@ -118,6 +118,7 @@ def freeze_business_visual_payload(
     scene_contract: VisualSceneContract | None = None,
     scene_planner_source: str = "",
     scene_variant: VisualSceneVariant | None = None,
+    override_owner_style_wording: bool = False,
 ) -> str:
     """Freeze the exact versioned image/video brief before owner paid consent."""
 
@@ -151,6 +152,7 @@ def freeze_business_visual_payload(
         style_intent=resolved_style,
         scene_contract=scene_contract,
         scene_direction=("" if scene_variant is None else scene_variant.direction),
+        override_owner_style_wording=override_owner_style_wording,
     )
     semantic_qa = build_visual_semantic_qa_contract(
         request=owner_request,
@@ -207,6 +209,7 @@ def freeze_business_image_payload(
     scene_contract: VisualSceneContract | None = None,
     scene_planner_source: str = "",
     scene_variant: VisualSceneVariant | None = None,
+    override_owner_style_wording: bool = False,
 ) -> str:
     return freeze_business_visual_payload(
         request=request,
@@ -218,6 +221,7 @@ def freeze_business_image_payload(
         scene_contract=scene_contract,
         scene_planner_source=scene_planner_source,
         scene_variant=scene_variant,
+        override_owner_style_wording=override_owner_style_wording,
     )
 
 
@@ -231,6 +235,7 @@ def freeze_business_video_payload(
     scene_contract: VisualSceneContract | None = None,
     scene_planner_source: str = "",
     scene_variant: VisualSceneVariant | None = None,
+    override_owner_style_wording: bool = False,
 ) -> str:
     return freeze_business_visual_payload(
         request=request,
@@ -242,6 +247,7 @@ def freeze_business_video_payload(
         scene_contract=scene_contract,
         scene_planner_source=scene_planner_source,
         scene_variant=scene_variant,
+        override_owner_style_wording=override_owner_style_wording,
     )
 
 
@@ -460,6 +466,7 @@ def build_business_visual_brief(
     style_intent: VisualStyleIntent | None = None,
     scene_contract: VisualSceneContract | None = None,
     scene_direction: str = "",
+    override_owner_style_wording: bool = False,
 ) -> VisualCreativeBrief:
     owner_request = normalize_business_image_request(request)
     visual_kind = str(kind or "").strip().lower()
@@ -473,6 +480,7 @@ def build_business_visual_brief(
         style_intent=style_intent,
         scene_contract=scene_contract,
         scene_direction=scene_direction,
+        override_owner_style_wording=override_owner_style_wording,
     )
     return VisualCreativeBrief(
         kind=visual_kind,
