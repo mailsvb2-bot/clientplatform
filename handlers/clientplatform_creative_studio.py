@@ -1707,19 +1707,11 @@ async def _finish_visual(
                     output_dir=directory,
                 )
             binding = frozen_business_visual_binding(receipt.provider_payload_json)
-            semantic_qa = None
-            semantic_warning = ""
-            if str(getattr(job, "kind", "") or "") == "image":
-                try:
-                    semantic_qa = await asyncio.to_thread(
-                        review_business_image_semantics_from_frozen_payload,
-                        provider_payload_json=receipt.provider_payload_json,
-                        job=job,
-                    )
-                except (VisualCreativeError, TypeError, ValueError):
-                    semantic_qa = None
-                semantic_warning = _semantic_qa_warning(semantic_qa)
 
+            # Own delivery before any external semantic-QA call. Otherwise two
+            # overlapping completion callbacks can race: one claims QA while the
+            # other observes QA as unavailable, wins delivery, and incorrectly
+            # labels an unreviewed image as a green success.
             claimed = await asyncio.to_thread(
                 claim_creative_generation_delivery,
                 actor=actor,
@@ -1744,6 +1736,20 @@ async def _finish_visual(
                     reply_markup=_delivery_recovery_rows(token, latest, ambiguous=True),
                 )
                 return True
+
+            semantic_qa = None
+            semantic_warning = ""
+            if str(getattr(job, "kind", "") or "") == "image":
+                try:
+                    semantic_qa = await asyncio.to_thread(
+                        review_business_image_semantics_from_frozen_payload,
+                        provider_payload_json=receipt.provider_payload_json,
+                        job=job,
+                    )
+                except (VisualCreativeError, TypeError, ValueError):
+                    semantic_qa = None
+                semantic_warning = _semantic_qa_warning(semantic_qa)
+
             try:
                 if str(getattr(job, "kind", "") or "") == "video":
                     caption = (
