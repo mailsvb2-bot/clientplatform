@@ -1061,6 +1061,7 @@ def _bounded_yandex_prompt(
     style_cues: tuple[str, ...],
     brief: CreativeBrief,
     extras: tuple[str, ...] = (),
+    prioritize_safety: bool = False,
 ) -> str:
     """Preserve owner meaning and style first under Alice's hard 500-char limit."""
 
@@ -1078,10 +1079,45 @@ def _bounded_yandex_prompt(
     normalized_scene_head = " ".join(str(scene_head or "").split()).strip()
 
     if stage_priority and len(normalized_scene_head) <= 200:
+        bounded_scene_head = normalized_scene_head
+        if prioritize_safety:
+            # Motion keyframes have hard framing/lettering/logo constraints that
+            # must survive the provider's 500-character ceiling. Reserve the full
+            # compact safety block first, then preserve as much transformation
+            # evidence as fits; style is a best-effort tail.
+            safety_block = _bounded_join(list(safety), limit=180)
+            fixed = (
+                len(bounded_scene_head)
+                + len(safety_block)
+                + (1 if bounded_scene_head and safety_block else 0)
+            )
+            semantic_budget = max(
+                80,
+                _YANDEX_PROMPT_LIMIT - fixed - (1 if semantic_cues else 0),
+            )
+            bounded_semantics = _bounded_join(
+                list(semantic_cues),
+                limit=semantic_budget,
+            )
+            core = [
+                part
+                for part in (bounded_scene_head, bounded_semantics, safety_block)
+                if part
+            ]
+            used = sum(len(part) for part in core) + max(0, len(core) - 1)
+            remaining = max(
+                0,
+                _YANDEX_PROMPT_LIMIT - used - (1 if style_cues else 0),
+            )
+            style_block = _bounded_join(list(style_cues), limit=remaining)
+            return _bounded_join(
+                [*core, style_block, *extras],
+                limit=_YANDEX_PROMPT_LIMIT,
+            )
+
         # A short owner sentence is the scene. Preserve the complete semantic
         # contract before optional presentation/safety detail so the provider never
         # receives a truncated transformation with a missing final state.
-        bounded_scene_head = normalized_scene_head
         semantic_budget = max(
             80,
             _YANDEX_PROMPT_LIMIT - len(bounded_scene_head) - 1,
@@ -1282,15 +1318,14 @@ def _adapt_yandex_motion(brief: CreativeBrief) -> CreativeBrief:
         )
     # For motion keyframes, semantic continuity and hard production safety
     # (readable-text, watermark/logo and safe-area framing constraints) outrank
-    # decorative style when Alice's 500-character budget is tight. Keep style as
-    # a best-effort tail so it survives whenever space remains without evicting
-    # mandatory framing/safety.
+    # decorative style when Alice's 500-character budget is tight.
     prompt = _bounded_yandex_prompt(
         scene_head=scene,
         semantic_cues=semantic_cues,
-        style_cues=(),
+        style_cues=style_cues,
         brief=brief,
-        extras=tuple((*style_cues, *extras)),
+        extras=tuple(extras),
+        prioritize_safety=True,
     )
     return replace(brief, prompt=prompt)
 
