@@ -13,7 +13,7 @@ import re
 from .models import CreativeBrief
 
 
-PROMPT_ADAPTER_VERSION = 13
+PROMPT_ADAPTER_VERSION = 14
 
 _RUNWAY_PROMPT_LIMIT = 1000
 _YANDEX_PROMPT_LIMIT = 500
@@ -776,29 +776,59 @@ def _single_scene_transformation_cue(
     *,
     listening: bool,
 ) -> str:
-    """Describe a state change as one picture, not three copies of the subject."""
+    """Describe an in-progress change inside one subject, not a static portrait.
+
+    A one-scene transformation still has to look like a transformation. Providers
+    otherwise tend to satisfy only the easiest noun/action (for example, a
+    hedgehog wearing headphones) and collapse "becomes kind and fluffy" into an
+    unchanged portrait. Keep the change spatially visible inside the same subject.
+    """
 
     parsed = _parsed_transformation_evidence(owner_request) if owner_request else None
     initial: tuple[str, ...] = ()
     final: tuple[str, ...] = ()
     if parsed is not None:
         initial, final = parsed
+
     details: list[str] = []
     if listening:
-        details.append("явно слушает аудио в заметных наушниках, не символом волны")
+        details.append("явно слушает аудио в заметных наушниках")
+
     if initial and final:
-        details.append("от " + ", ".join(initial) + " к " + ", ".join(final))
+        details.append(
+            "сам переход виден внутри одного героя: часть исходных признаков ещё "
+            "сохраняется, рядом они уже меняются в " + ", ".join(final)
+        )
     elif final:
-        details.append(", ".join(final))
+        details.append(
+            "покажи именно незавершённый переход внутри одного героя, а не готовый "
+            "статичный портрет: часть внешности уже имеет " + ", ".join(final)
+            + ", соседние участки ещё заметно меняются"
+        )
+
+    final_set = set(final)
+    if "доброжелательный расслабленный взгляд" in final_set:
+        details.append("лицо и поза явно мягкие, доброжелательные и расслабленные")
+    if "заметно более густой пушистый мех" in final_set:
+        details.append(
+            "мягкий густой мех уже появляется на мордочке, груди и боках; "
+            "часть более жёсткой фактуры ещё остаётся, чтобы переход был виден"
+        )
+    if "фактура визуально мягче" in final_set:
+        details.append(
+            "смягчение фактуры видно прямо на поверхности, а не только по освещению"
+        )
+
     if details:
         return (
             "Одна сцена, герой один раз: "
             + "; ".join(details)
-            + ". Без повторов, панелей и триптиха."
+            + ". Без второго героя, панелей и триптиха."
         )
     return (
-        "Одна сцена, герой один раз: действие и запрошенное изменение видны вместе. "
-        "Без повторов, панелей и триптиха."
+        "Одна сцена, герой один раз: действие и сам процесс изменения видны внутри "
+        "одного объекта одновременно. Не статичный итоговый портрет. "
+        "Без второго героя, панелей и триптиха."
     )
 
 
