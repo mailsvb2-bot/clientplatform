@@ -150,6 +150,7 @@ def test_style_only_prepare_reuses_frozen_scene_without_replanning(monkeypatch) 
     assert kwargs["scene_contract"] == _scene()
     assert kwargs["scene_planner_source"] == "deterministic"
     assert kwargs["scene_variant"] == _variant()
+    assert kwargs["override_owner_style_wording"] is True
     assert state.clear.await_count == 1
     assert confirmation.await_count == 1
 
