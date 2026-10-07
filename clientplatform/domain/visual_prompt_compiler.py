@@ -59,6 +59,67 @@ _ABSTRACT_REPLACEMENT_TARGET_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+
+_PRESENTATION_CHANGE_RE = re.compile(
+    r"(?:"
+    r"\b(?:поменя|смен|измен|замен|перерис|стилиз|сдела|примен)\w*\b"
+    r"[^.!?;]{0,120}\b(?:стил|палитр|фон|освещен|контраст|композици|"
+    r"ракурс|атмосфер|рисовк|визуальн\w*\s+подач)\w*|"
+    r"\b(?:сдела|перерис|стилиз)\w*\b[^.!?;]{0,120}\bв\s+стиле\b|"
+    r"\b(?:change|switch|replace|restyle|redraw|stylize|render|make)\w*\b"
+    r"[^.!?;]{0,120}\b(?:style|palette|background|lighting|contrast|"
+    r"composition|camera\s+angle|mood|tone|rendering)\b|"
+    r"\b(?:style|palette|background|lighting|contrast|composition|mood|tone|rendering)\b"
+    r"[^.!?;]{0,80}\b(?:changes?|becomes?|transitions?|switches?)\b"
+    r")",
+    re.IGNORECASE,
+)
+_PRESENTATION_MEDIA_TRANSFORMATION_RE = re.compile(
+    r"(?:"
+    r"\b(?:изображен|картинк|визуал)\w*\b[^.!?;]{0,80}"
+    r"\b(?:станов|превращ|меня|переход)\w*\b[^.!?;]{0,80}"
+    r"\b(?:акварел|масля\w*\s+живопис|карандаш|скетч|комикс|аниме|"
+    r"фотореал|иллюстрац|вектор|пиксел|3d)\w*|"
+    r"\b(?:image|picture|visual)\b[^.!?;]{0,80}"
+    r"\b(?:becomes?|turns?|changes?|transitions?)\b[^.!?;]{0,80}"
+    r"\b(?:watercolor|oil\s+painting|pencil|sketch|comic|anime|"
+    r"photoreal|illustration|vector|pixel\s+art|3d)\b"
+    r")",
+    re.IGNORECASE,
+)
+_PRESENTATION_TRANSITION_RE = re.compile(
+    r"(?:"
+    r"\bпостепенн\w*|\bпереход\w*|\bморф\w*|"
+    r"\bслева\s+направо\b|\bсправа\s+налево\b|"
+    r"\bgradual\w*|\btransition\w*|\bmorph\w*|"
+    r"\bleft[-\s]+to[-\s]+right\b|\bright[-\s]+to[-\s]+left\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _presentation_change_requested(request: str) -> bool:
+    if _PRESENTATION_CHANGE_RE.search(request):
+        return True
+    if _PRESENTATION_MEDIA_TRANSFORMATION_RE.search(request):
+        return True
+    for match in _OBJECT_REPLACEMENT_RE.finditer(request):
+        if _ABSTRACT_REPLACEMENT_TARGET_RE.match(request[match.end() :]):
+            return True
+    return False
+
+
+def _subject_transformation(flags: tuple[str, ...]) -> bool:
+    values = set(flags)
+    if "transformation" not in values:
+        return False
+    return not (
+        "presentation_change" in values
+        and "visible_state" not in values
+        and "object_replacement" not in values
+    )
+
+
 _SEQUENCE_RE = re.compile(
     r"(?:сначала|затем|потом|после|вначале|в\s+конце|"
     r"first|then|after|finally|at\s+the\s+end)",
@@ -188,6 +249,8 @@ _SEMANTIC_QA_FLAGS = frozenset(
         "portrait",
         "visible_state",
         "storyboard",
+        "presentation_change",
+        "presentation_transition",
     }
 )
 
@@ -300,6 +363,11 @@ def _semantic_flags(request: str) -> tuple[str, ...]:
         ("portrait", _PORTRAIT_RE),
     )
     flags = [name for name, pattern in checks if pattern.search(request)]
+    presentation_change = _presentation_change_requested(request)
+    if presentation_change:
+        flags.append("presentation_change")
+        if _PRESENTATION_TRANSITION_RE.search(request):
+            flags.append("presentation_transition")
     replacement_matches = tuple(_OBJECT_REPLACEMENT_RE.finditer(request))
     physical_replacement = any(
         not _ABSTRACT_REPLACEMENT_TARGET_RE.match(request[match.end() :])
@@ -446,7 +514,7 @@ def _interaction_directives(flags: tuple[str, ...]) -> list[str]:
 
 
 def _transformation_directives(kind: str, flags: tuple[str, ...]) -> list[str]:
-    if "transformation" not in flags:
+    if not _subject_transformation(flags):
         return []
     if kind == "video":
         return [
@@ -488,6 +556,46 @@ def _transformation_directives(kind: str, flags: tuple[str, ...]) -> list[str]:
         "If the owner did not define an initial state, do not invent a separate "
         "BEFORE panel or an extreme opposite. A gradual change stays inside the same "
         "frame as an in-progress softening or enrichment, not as copies of the subject.",
+    ]
+
+
+def _presentation_change_directives(
+    kind: str,
+    flags: tuple[str, ...],
+) -> list[str]:
+    if "presentation_change" not in flags:
+        return []
+    transition = "presentation_transition" in flags
+    if kind == "video":
+        if transition:
+            return [
+                "The requested change is in the visual presentation itself. Preserve "
+                "the same subjects, scene geometry, actions and factual content while "
+                "the rendering/style/palette/lighting visibly transitions exactly as "
+                "requested. Do not turn style words into a physical mutation.",
+            ]
+        return [
+            "Apply the requested presentation/style edit consistently to the visual "
+            "while preserving subjects, scene geometry, actions and factual content. "
+            "Do not invent a visible before/after transition unless the owner asks for it.",
+        ]
+    if transition:
+        return [
+            "The requested change is a visual-presentation transition, not a physical "
+            "mutation of the subject. Keep the same scene identity and content while "
+            "the rendering language, style, palette, lighting or other requested "
+            "presentation dimension visibly transitions inside the composition.",
+            "Do not duplicate the main subject, split into panels or invent a physical "
+            "metamorphosis unless the owner explicitly asks for those things.",
+        ]
+    return [
+        "The owner is editing visual presentation. Apply the requested style, palette, "
+        "background, lighting, composition or other presentation change consistently "
+        "to the final image while preserving the requested subjects, actions, geometry "
+        "and factual content.",
+        "Treat style words as rendering instructions, not as physical properties of "
+        "the subject. Do not invent a before/after layout or an in-scene metamorphosis "
+        "unless the owner explicitly requests a visible transition.",
     ]
 
 
@@ -560,6 +668,7 @@ def _autonomous_scene_directives(
         "object_replacement",
         "sequence",
         "transformation",
+        "presentation_transition",
     }
     has_action = bool(dynamic_flags.intersection(flags))
 
@@ -570,6 +679,18 @@ def _autonomous_scene_directives(
                 "real surrounding context as a complete installed result. Keep the "
                 "environment stable so the changed object is immediately identifiable."
             )
+        elif kind == "image" and "presentation_change" in flags:
+            if "presentation_transition" in flags:
+                directives.append(
+                    "Autonomous composition default: keep one stable scene and make the "
+                    "requested visual-language transition readable across that same "
+                    "composition without duplicating the main subject."
+                )
+            else:
+                directives.append(
+                    "Autonomous composition default: keep one stable composition and "
+                    "apply the requested presentation/style edit consistently across it."
+                )
         elif kind == "image" and "transformation" in flags and "storyboard" in flags:
             directives.append(
                 "Autonomous composition default: use a compact storyboard, triptych "
@@ -598,7 +719,7 @@ def _autonomous_scene_directives(
                 "composition with one clear focal subject and no arbitrary empty bands."
             )
 
-    if "visible_state" in flags or "transformation" in flags:
+    if "visible_state" in flags or _subject_transformation(flags):
         directives.append(
             "Visible-state translation: turn abstract qualities, emotions and state "
             "changes into concrete visual evidence such as facial expression, posture, "
@@ -765,6 +886,7 @@ def compile_visual_prompt(
         "Never collapse a multi-action request into a generic portrait of the main "
         "noun. Show visual evidence for the requested verbs and relationships.",
         *_interaction_directives(flags),
+        *_presentation_change_directives(visual_kind, layout_flags),
         *_transformation_directives(visual_kind, layout_flags),
         *_replacement_directives(visual_kind, flags),
         *_sequence_directives(visual_kind, flags),
