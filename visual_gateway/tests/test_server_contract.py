@@ -353,7 +353,6 @@ async def test_semantic_qa_is_proxied_through_canonical_visual_gateway(gateway, 
             "country_code": "RU",
             "owner_request": "тот же объект постепенно меняет визуальный стиль",
             "semantic_flags": [
-                "transformation",
                 "presentation_change",
                 "presentation_transition",
             ],
