@@ -151,6 +151,31 @@ def _topology(flags: tuple[str, ...]) -> str:
     return "static"
 
 
+def _prioritized_required_evidence(
+    evidence: list[str],
+) -> tuple[str, ...]:
+    """Keep the bounded contract while preserving the highest-value semantics."""
+
+    unique = list(dict.fromkeys(evidence))
+    priority = (
+        "requested presentation or style change visibly applied",
+        "subject and scene content preserved across presentation change",
+        "visual presentation transition readable within the same scene",
+        "subject shown once in one coherent scene",
+        "same subject identity across stages",
+        "requested changed qualities visibly readable",
+        "requested final state visibly different",
+        "causal action visible together with the changed qualities",
+        "causal action connected to change",
+        "same environment across replacement",
+        "replacement action or before/after relation visible",
+        "requested chronology visible",
+    )
+    ordered = [item for item in priority if item in unique]
+    ordered.extend(item for item in unique if item not in ordered)
+    return tuple(ordered[:_MAX_ITEMS])
+
+
 def fallback_scene_contract(
     *,
     request: str,
@@ -276,7 +301,7 @@ def fallback_scene_contract(
         transition=tuple(transition),
         final_state=(),
         explicit_text=(),
-        required_evidence=tuple(dict.fromkeys(evidence)),
+        required_evidence=_prioritized_required_evidence(evidence),
         forbidden=tuple(dict.fromkeys(forbidden)),
     )
 
