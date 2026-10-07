@@ -263,11 +263,38 @@ def test_gigachat_semantic_qa_is_non_generative_and_cleans_uploaded_file(
     assert "физической мутации" in presentation_prompt
     assert "изменение одного и того же субъекта или материала" not in presentation_prompt
 
-    assert sum(call["url"].endswith("/files") for call in transport_calls) == 2
+    supported_flags = (
+        "transformation",
+        "object_replacement",
+        "sequence",
+        "listening",
+        "watching",
+        "reading",
+        "using",
+        "holding",
+        "eating_or_drinking",
+        "generic_action",
+        "comparison",
+        "explicit_text",
+        "portrait",
+        "visible_state",
+        "storyboard",
+        "presentation_change",
+        "presentation_transition",
+    )
+    rich_result = provider.review_image_semantics(
+        image_path=image_path,
+        owner_request="сложный визуальный запрос",
+        semantic_flags=supported_flags,
+    )
+    assert rich_result["status"] == "needs_review"
+    assert len(chat_payloads) == 3
+
+    assert sum(call["url"].endswith("/files") for call in transport_calls) == 3
     assert sum(
         call["url"].endswith("/files/qa-file-1/delete")
         for call in transport_calls
-    ) == 2
+    ) == 3
 
 
 def test_selfhosted_forwards_operator_selected_model(monkeypatch):
