@@ -627,8 +627,9 @@ class VisualPromptCompilerTests(unittest.TestCase):
         self.assertIn("visible_state", compiled.semantic_flags)
         self.assertIn("presentation_change", compiled.semantic_flags)
         self.assertNotIn("presentation_transition", compiled.semantic_flags)
+        self.assertIn("storyboard", compiled.semantic_flags)
         self.assertIn(
-            "The transformation is mandatory visual evidence in one coherent scene",
+            "The transformation is mandatory visual evidence, not optional mood",
             compiled.prompt,
         )
 
