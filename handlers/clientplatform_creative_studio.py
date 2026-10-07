@@ -363,6 +363,20 @@ def _semantic_qa_warning(qa) -> str:
     )
 
 
+def _semantic_qa_caption(qa) -> str:
+    if qa is None:
+        return "✅ Картинка готова"
+    status = str(getattr(qa, "status", "") or "").strip().lower()
+    if status == "needs_review":
+        return (
+            "❌ Картинка не прошла автопроверку смысла — "
+            "результат не считаю готовым."
+        )
+    if status == "unavailable":
+        return "⚠️ Картинка готова, но автопроверка смысла сейчас недоступна."
+    return "✅ Картинка готова"
+
+
 def _studio_navigation_rows(token: str) -> list[list[tuple[str, str]]]:
     return [
         [(nav.BACK.label, f"cpo:content:{token}")],
@@ -1827,12 +1841,7 @@ async def _finish_visual(
                         supports_streaming=True,
                     )
                 else:
-                    image_caption = (
-                        "❌ Картинка не прошла автопроверку смысла — "
-                        "результат не считаю готовым."
-                        if semantic_warning
-                        else "✅ Картинка готова"
-                    )
+                    image_caption = _semantic_qa_caption(semantic_qa)
                     await target.answer_photo(FSInputFile(path), caption=image_caption)
             except TelegramAPIError:
                 await target.answer(
