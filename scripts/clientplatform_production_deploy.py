@@ -46,7 +46,7 @@ _CANONICAL_OMNICHANNEL_PROBE_ROUTE_ID = "production-deploy-probe"
 _CANONICAL_OMNICHANNEL_PROVIDERS = ("vk", "max")
 _VISUAL_GATEWAY_CAPABILITIES = {
     "contract_version": "1.0",
-    "capabilities": ["generation", "render_pack", "usage"],
+    "capabilities": ["generation", "semantic_qa", "render_pack", "usage"],
     "render_formats": ["square", "feed", "story", "landscape"],
 }
 _SALES_SMOKE_CONTRACT_VERSION = "u008-u009-sales-operations-v2"
