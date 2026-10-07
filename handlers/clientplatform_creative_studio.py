@@ -79,7 +79,10 @@ from clientplatform.domain.creative_generation import (
 from clientplatform.domain.event_content import EventContentStage
 from clientplatform.domain.programs import ContentKind
 from clientplatform.domain.tenancy import TenantPermissionDenied
-from clientplatform.domain.visual_prompt_compiler import semantic_flags_for_request
+from clientplatform.domain.visual_prompt_compiler import (
+    image_semantic_flags_for_request,
+    semantic_flags_for_request,
+)
 from clientplatform.domain.visual_scene_contract import VisualSceneContract
 from clientplatform.domain.visual_scene_plan import VisualScenePlanStatus
 from clientplatform.domain.visual_style_intent import (
@@ -196,7 +199,12 @@ async def _ensure_scene_variants(
 
     request = normalize_business_image_request(str(data["creative_pending_prompt"]))
     style = _style_intent_from_state(data)
-    flags = semantic_flags_for_request(request)
+    kind = str(data.get("creative_kind") or "image").strip().lower()
+    flags = (
+        image_semantic_flags_for_request(request)
+        if kind == "image"
+        else semantic_flags_for_request(request)
+    )
 
     if not visual_scene_ai_planning_available():
         contract, source, variants = deterministic_visual_scene_bundle(
@@ -344,15 +352,29 @@ def _semantic_qa_warning(qa) -> str:
     )[:3]
     if not issues:
         return (
-            "⚠️ Автопроверка смысла нашла сомнение в соответствии запросу. "
-            "Новую генерацию я не запускала."
+            "❌ Результат не прошёл автопроверку смысла и не считается готовым. "
+            "Новая платная генерация автоматически не запускалась."
         )
     details = "\n".join(f"• {item}" for item in issues)
     return (
-        "⚠️ Автопроверка смысла: картинка может передавать запрос не полностью.\n"
+        "❌ Результат не прошёл автопроверку смысла и не считается готовым.\n"
         + details
-        + "\n\nНовую генерацию я не запускала."
+        + "\n\nНовая платная генерация автоматически не запускалась."
     )
+
+
+def _semantic_qa_caption(qa) -> str:
+    if qa is None:
+        return "✅ Картинка готова"
+    status = str(getattr(qa, "status", "") or "").strip().lower()
+    if status == "needs_review":
+        return (
+            "❌ Картинка не прошла автопроверку смысла — "
+            "результат не считаю готовым."
+        )
+    if status == "unavailable":
+        return "⚠️ Картинка готова, но автопроверка смысла сейчас недоступна."
+    return "✅ Картинка готова"
 
 
 def _studio_navigation_rows(token: str) -> list[list[tuple[str, str]]]:
@@ -1819,12 +1841,7 @@ async def _finish_visual(
                         supports_streaming=True,
                     )
                 else:
-                    image_caption = (
-                        "⚠️ Картинка сгенерирована, но автопроверка смысла просит "
-                        "проверить соответствие исходному запросу."
-                        if semantic_warning
-                        else "✅ Картинка готова"
-                    )
+                    image_caption = _semantic_qa_caption(semantic_qa)
                     await target.answer_photo(FSInputFile(path), caption=image_caption)
             except TelegramAPIError:
                 await target.answer(

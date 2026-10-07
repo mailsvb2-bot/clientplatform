@@ -45,7 +45,7 @@ class FrozenBusinessImagePayloadTests(unittest.TestCase):
         self.assertEqual(value["wait_seconds"], 20)
         self.assertEqual(value["brief"]["kind"], "image")
         self.assertEqual(value["intent"]["style_schema_version"], 2)
-        self.assertEqual(value["intent"]["prompt_compiler_version"], 6)
+        self.assertEqual(value["intent"]["prompt_compiler_version"], 7)
         self.assertEqual(value["intent"]["scene_planner_version"], 1)
         self.assertEqual(value["intent"]["scene_planner_source"], "deterministic")
         self.assertIsNone(value["intent"]["scene_variant"])
