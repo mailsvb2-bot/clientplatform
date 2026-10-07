@@ -140,3 +140,13 @@ async def test_semantic_qa_pass_keeps_normal_ready_caption() -> None:
     assert target.answer_photo.await_args.kwargs["caption"] == "✅ Картинка готова"
     messages = [call.args[0] for call in target.answer.await_args_list]
     assert all("Автопроверка смысла" not in item for item in messages)
+
+
+def test_semantic_qa_unavailable_is_not_presented_as_green_success() -> None:
+    warning = studio._semantic_qa_warning(
+        SimpleNamespace(status="unavailable", issues=(), summary="")
+    )
+
+    assert "автоматическая проверка соответствия" in warning
+    assert "сейчас недоступна" in warning
+    assert "Новую генерацию я не запускала" in warning
