@@ -805,8 +805,8 @@ def _single_scene_transformation_cue(
     details: list[str] = ["Одна сцена, один и тот же главный объект в процессе изменения"]
     if listening:
         details.append(
-            "причина явно видна: субъект реально слушает аудио через заметные "
-            "наушники, колонку или устройство, не символом волны"
+            "причина явно видна: субъект реально слушает аудио в заметных "
+            "наушниках или через колонку/устройство, не символом волны"
         )
 
     if initial and final:
@@ -1101,8 +1101,8 @@ def _bounded_yandex_prompt(
             bounded_scene_head = normalized_scene_head
         else:
             # _bounded_join intentionally refuses tiny fragments. Here even a
-            # short natural subject anchor is semantically valuable (for example
-            # keeping "ёж" instead of leaving only generic "one hero" cues).
+            # short natural subject anchor is semantically valuable instead of
+            # leaving only generic "one hero" cues.
             bounded_scene_head = (
                 normalized_scene_head[:scene_limit]
                 .rsplit(" ", 1)[0]
@@ -1219,8 +1219,8 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
             "Покажи именно событие замены, сохрани то же окружение. " + owner_request
         )
     else:
-        # The owner's sentence is the scene. A contract subject such as "Ёж"
-        # must not replace it: Alice then draws a generic portrait and ignores
+        # The owner's sentence is the scene. A shortened contract subject must
+        # not replace it: the provider may otherwise draw a generic portrait and ignore
         # the action and the change.
         scene_head = owner_request
     prompt = _bounded_yandex_prompt(
