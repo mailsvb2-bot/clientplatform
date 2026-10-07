@@ -82,7 +82,7 @@ def test_frozen_visual_scene_round_trips_exact_contract_and_variant() -> None:
     frozen = visual_creatives.freeze_business_image_payload(
         request="люди идут по городской улице",
         country_code="RU",
-        style_intent=VisualStyleIntent(quick_styles="editorial"),
+        style_intent=VisualStyleIntent(quick_styles="cinematic"),
         scene_contract=scene,
         scene_planner_source="deterministic",
         scene_variant=variant,
@@ -149,7 +149,10 @@ def test_style_only_prepare_reuses_frozen_scene_without_replanning(monkeypatch) 
     kwargs = freeze.call_args.kwargs
     assert kwargs["scene_contract"] == _scene()
     assert kwargs["scene_planner_source"] == "deterministic"
-    assert kwargs["scene_variant"] == _variant()
+    assert kwargs["scene_variant"] is not None
+    assert kwargs["scene_variant"].composition == _variant().composition
+    assert kwargs["scene_variant"].direction != _variant().direction
+    assert "Do not prescribe lighting, palette, atmosphere or rendering style" in kwargs["scene_variant"].direction
     assert kwargs["override_owner_style_wording"] is True
     assert state.clear.await_count == 1
     assert confirmation.await_count == 1
@@ -161,7 +164,7 @@ def test_restyle_result_locks_original_scene_and_hides_scene_variants(monkeypatc
     frozen = visual_creatives.freeze_business_image_payload(
         request="люди идут по городской улице",
         country_code="RU",
-        style_intent=VisualStyleIntent(quick_styles="editorial"),
+        style_intent=VisualStyleIntent(quick_styles="cinematic"),
         scene_contract=scene,
         scene_planner_source="deterministic",
         scene_variant=variant,
