@@ -465,6 +465,24 @@ def _compiled_style_cues(lines: tuple[str, ...]) -> tuple[str, ...]:
     return ("Стиль: " + "; ".join(dict.fromkeys(selected)) + ".",)
 
 
+_OWNER_STYLE_FRAGMENT_RE = re.compile(
+    r"(?:"
+    r"\bв\s+стиле\s+[^,.;!?]{1,90}|"
+    r"\bстил\w*(?:\s+изображен\w*)?\s*(?:[:—-]|на)\s*[^,.;!?]{1,90}|"
+    r"\bin\s+(?:the\s+)?style\s+of\s+[^,.;!?]{1,90}|"
+    r"\bstyle\s*[:—-]\s*[^,.;!?]{1,90}"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _owner_style_fragment(owner_request: str) -> str:
+    match = _OWNER_STYLE_FRAGMENT_RE.search(str(owner_request or ""))
+    if not match:
+        return ""
+    return " ".join(match.group(0).split()).strip()[:120]
+
+
 _TRANSFORMATION_BECOMES_RE = re.compile(
     r"(?:\bстанов\w*|\bпревращ\w*\s+в\b|\bbecomes?\b|"
     r"\bturns?\s+into\b|\btransforms?\s+into\b)\s+"
@@ -860,9 +878,12 @@ def _compiled_semantic_visual_cues(
     listening = has("if the subject is listening")
     explicit_text = has("readable text is explicitly part")
     owner_request = _compiled_owner_request(lines)
+    owner_style = _owner_style_fragment(owner_request)
 
     if presentation_change:
         cues.append(_presentation_change_cue(transition=presentation_transition))
+    if owner_style:
+        cues.append("Обязательный стиль пользователя: " + owner_style + ".")
 
     # Highest priority: one compact cue carries a subject/material state change and,
     # when present, its causal interaction. Presentation edits are handled separately
@@ -1021,6 +1042,7 @@ def _bounded_yandex_prompt(
         or cue.startswith("Одна сцена, один и тот же главный объект")
         or cue.startswith("Одна сцена, тот же объект")
         or cue.startswith("Сохрани объект, сюжет")
+        or cue.startswith("Обязательный стиль пользователя")
         for cue in semantic_cues
     )
     normalized_scene_head = " ".join(str(scene_head or "").split()).strip()
