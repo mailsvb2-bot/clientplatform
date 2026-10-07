@@ -228,9 +228,10 @@ def test_yandex_adapter_expands_resource_audio_transformation_into_visual_stages
     assert "сначала обычный" not in adapted.prompt
     assert "слушает аудио" in adapted.prompt
     assert "наушниках" in adapted.prompt
-        assert "запрошенный результат уже частично проявился" in adapted.prompt
+    assert "не символом волны" in adapted.prompt
+    assert "запрошенный результат уже частично проявился" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
-    assert "заметно более густой пушистый мех" in adapted.prompt
+    assert "явно пушистая объёмная фактура" in adapted.prompt
     assert "Не своди запрос к готовому статичному финалу" in adapted.prompt
     assert "ДО →" not in adapted.prompt
     assert "Owner request" not in adapted.prompt
@@ -276,7 +277,7 @@ def test_yandex_production_contract_keeps_one_scene_for_gradual_change() -> None
     assert "наушниках" in adapted.prompt
     assert "запрошенный результат уже частично проявился" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
-    assert "заметно более густой пушистый мех" in adapted.prompt
+    assert "явно пушистая объёмная фактура" in adapted.prompt
     assert "Не своди запрос к готовому статичному финалу" in adapted.prompt
     assert "три стадии" not in adapted.prompt
     assert "visible progressive change" not in adapted.prompt
@@ -316,7 +317,7 @@ def test_yandex_responses_input_preserves_scene_semantics_without_compiler_meta(
     assert "наушниках" in responses_input
     assert "запрошенный результат уже частично проявился" in responses_input
     assert "доброжелательный расслабленный взгляд" in responses_input
-    assert "заметно более густой пушистый мех" in responses_input
+    assert "явно пушистая объёмная фактура" in responses_input
     assert "Owner request" not in responses_input
     assert "mandatory" not in responses_input.casefold()
     assert "BEFORE" not in responses_input
@@ -364,12 +365,12 @@ def test_yandex_preserves_owner_authored_three_stage_transformation_in_auto_and_
         assert "Один герой, три стадии без подписей" in adapted.prompt
         assert "напряжённая поза" in adapted.prompt
         assert "настороженный взгляд" in adapted.prompt
-        assert "жёсткие колючие иглы" in adapted.prompt
+        assert "колючая жёсткая фактура" in adapted.prompt
         assert "слушает аудио в заметных наушниках" in adapted.prompt
         assert "спокойный взгляд" in adapted.prompt
         assert "иглы/фактура смягчаются" in adapted.prompt
         assert "доброжелательный взгляд" in adapted.prompt
-        assert "густой пушистый мех" in adapted.prompt
+        assert "пушистая объёмная фактура" in adapted.prompt
         assert "ДО →" not in adapted.prompt
         assert "ДЕЙСТВИЕ" not in adapted.prompt
         assert "ПРИЧИНА" not in adapted.prompt
@@ -411,7 +412,7 @@ def test_yandex_stage_prompt_keeps_final_state_and_artistic_style_with_brand_con
     assert "три стадии" not in adapted.prompt
     assert "слушает аудио в заметных наушниках" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
-    assert "заметно более густой пушистый мех" in adapted.prompt
+    assert "явно пушистая объёмная фактура" in adapted.prompt
     assert "тёплый дружелюбный" in adapted.prompt
     assert "премиальный" in adapted.prompt
     assert "художественный" in adapted.prompt
@@ -738,8 +739,9 @@ def test_gigachat_adapter_preserves_listening_transformation_without_compiler_me
     assert "три стадии" not in adapted.prompt
     assert "сначала обычный" not in adapted.prompt
     assert "слушает аудио" in adapted.prompt
-        assert "доброжелательный расслабленный взгляд" in adapted.prompt
-    assert "заметно более густой пушистый мех" in adapted.prompt
+    assert "не символом волны" in adapted.prompt
+    assert "доброжелательный расслабленный взгляд" in adapted.prompt
+    assert "явно пушистая объёмная фактура" in adapted.prompt
     assert "Owner request" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
     assert len(adapted.prompt) <= 1800
@@ -853,7 +855,7 @@ def test_gigachat_adapter_reserves_safety_for_near_limit_owner_request() -> None
     assert "три стадии" not in adapted.prompt
     assert "слушает аудио" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
-    assert "заметно более густой пушистый мех" in adapted.prompt
+    assert "явно пушистая объёмная фактура" in adapted.prompt
     assert "Без водяных знаков" in adapted.prompt
     assert "Без выдуманных логотипов" in adapted.prompt
     assert "полностью в кадре" in adapted.prompt
@@ -1355,4 +1357,48 @@ def test_arbitrary_owner_style_wording_survives_yandex_compaction() -> None:
     assert "Обязательный стиль пользователя" in adapted.prompt
     assert "в стиле современной линогравюры" in adapted.prompt
     assert "главный объект в процессе изменения" not in adapted.prompt
+    assert len(adapted.prompt) <= 500
+
+
+def test_non_animal_fluffy_transformation_does_not_invent_fur_or_needles() -> None:
+    request = "старый плед постепенно становится мягким и пушистым"
+    compiled = compile_visual_prompt(request=request, kind="image")
+    adapted = adapt_visual_brief_for_provider(
+        CreativeBrief(
+            kind="image",
+            prompt=compiled.prompt,
+            country_code="RU",
+            aspect_ratio="4:5",
+            negative_prompt=compiled.negative_prompt,
+        ),
+        provider="yandexart",
+    )
+
+    assert adapted.prompt.startswith(request)
+    assert "пушистая объёмная фактура" in adapted.prompt
+    assert "фактура визуально мягче" in adapted.prompt
+    assert "мех" not in adapted.prompt.casefold()
+    assert "шерст" not in adapted.prompt.casefold()
+    assert "игл" not in adapted.prompt.casefold()
+    assert len(adapted.prompt) <= 500
+
+
+def test_single_scene_transformation_keeps_explicit_initial_evidence() -> None:
+    request = "злой кот постепенно становится добрым"
+    compiled = compile_visual_prompt(request=request, kind="image")
+    adapted = adapt_visual_brief_for_provider(
+        CreativeBrief(
+            kind="image",
+            prompt=compiled.prompt,
+            country_code="RU",
+            aspect_ratio="4:5",
+            negative_prompt=compiled.negative_prompt,
+        ),
+        provider="yandexart",
+    )
+
+    assert "исходные признаки ещё частично видны" in adapted.prompt
+    assert "напряжённый взгляд и жёсткая поза" in adapted.prompt
+    assert "доброжелательный расслабленный взгляд" in adapted.prompt
+    assert "часть исходных признаков ещё видна" not in adapted.prompt
     assert len(adapted.prompt) <= 500
