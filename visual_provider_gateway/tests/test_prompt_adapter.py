@@ -657,6 +657,67 @@ def test_yandex_motion_adapter_marks_keyframe_constraint_without_new_story() -> 
     assert len(adapted.prompt) <= 500
 
 
+def test_yandex_motion_safety_priority_without_style_tail() -> None:
+    prompt = "\n".join(
+        [
+            "1. Create one polished visual.",
+            '2. Owner request, preserve its meaning exactly: "a hedgehog becomes gentle".',
+            "3. The transformation is mandatory visual evidence. Show the initial and final states of the same subject.",
+            "4. Production constraints: No watermarks. Do not invent brand logos or certifications. "
+            "Keep important subjects away from the outer 8 percent safe-area edges. "
+            "No readable text, letters, captions or UI in the generated pixels.",
+        ]
+    )
+    brief = CreativeBrief(
+        kind="video",
+        prompt=prompt,
+        country_code="RU",
+        aspect_ratio="9:16",
+        negative_prompt=(
+            "watermark; invented logo; cropped important subject; "
+            "readable advertising text baked into image"
+        ),
+    )
+
+    adapted = adapt_visual_brief_for_provider(
+        brief,
+        provider="yandexart_motion",
+    )
+
+    assert len(adapted.prompt) <= 500
+    assert adapted.prompt.startswith("Ключевой кадр для короткого вертикального видео:")
+    assert "полностью в кадре" in adapted.prompt
+    assert "Без читаемого текста" in adapted.prompt
+    assert "Без водяных знаков" in adapted.prompt
+    assert "Без выдуманных логотипов" in adapted.prompt
+
+
+def test_yandex_motion_safety_priority_handles_semantic_only_brief() -> None:
+    prompt = "\n".join(
+        [
+            "1. Create one polished visual.",
+            '2. Owner request, preserve its meaning exactly: "a hedgehog becomes gentle".',
+            "3. The transformation is mandatory visual evidence. Show the initial and final states of the same subject.",
+        ]
+    )
+    brief = CreativeBrief(
+        kind="video",
+        prompt=prompt,
+        country_code="RU",
+        aspect_ratio="9:16",
+    )
+
+    adapted = adapt_visual_brief_for_provider(
+        brief,
+        provider="yandexart_motion",
+    )
+
+    assert len(adapted.prompt) <= 500
+    assert adapted.prompt.startswith("Ключевой кадр для короткого вертикального видео:")
+    assert "Одна сцена, один и тот же главный объект" in adapted.prompt
+    assert "Owner request" not in adapted.prompt
+
+
 def _long_owner_brief(*, kind: str) -> CreativeBrief:
     brief = _compiled_brief(kind=kind)
     long_request = " ".join(
