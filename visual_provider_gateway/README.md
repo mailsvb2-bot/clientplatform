@@ -54,6 +54,7 @@ Authenticated endpoints used by the canonical wrapper:
 - `POST /v1/creative/generations`
 - `GET /v1/creative/generations/{id}?scope_id=...`
 - `GET /v1/creative/generations/{id}/content?scope_id=...`
+- `POST /v1/creative/generations/{id}/semantic-qa` (advisory image review against the frozen semantic contract; never regenerates media)
 
 `GET /healthz` is unauthenticated for basic liveness. Production Compose uses the authenticated `/v1/providers` endpoint as its readiness healthcheck so a missing or mismatched service token fails closed before the wrapper is recreated.
 
