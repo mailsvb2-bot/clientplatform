@@ -368,7 +368,7 @@ def test_yandex_preserves_owner_authored_three_stage_transformation_in_auto_and_
         assert "колючая жёсткая фактура" in adapted.prompt
         assert "слушает аудио в заметных наушниках" in adapted.prompt
         assert "спокойный взгляд" in adapted.prompt
-        assert "иглы/фактура смягчаются" in adapted.prompt
+        assert "фактура/форма смягчается" in adapted.prompt
         assert "доброжелательный взгляд" in adapted.prompt
         assert "пушистая объёмная фактура" in adapted.prompt
         assert "ДО →" not in adapted.prompt
