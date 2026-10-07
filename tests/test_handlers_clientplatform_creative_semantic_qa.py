@@ -44,13 +44,21 @@ def _target() -> SimpleNamespace:
 @pytest.mark.asyncio
 async def test_semantic_qa_labels_questionable_image_before_success_caption() -> None:
     target = _target()
-    review = MagicMock(
-        return_value=SimpleNamespace(
+    order: list[str] = []
+
+    def claim(**_kwargs):
+        order.append("claim")
+        return True
+
+    def review_result(**_kwargs):
+        order.append("review")
+        return SimpleNamespace(
             status="needs_review",
             issues=("не видно запрошенного изменения",),
             summary="",
         )
-    )
+
+    review = MagicMock(side_effect=review_result)
 
     def materialize(_job, *, output_dir, **_kwargs):
         path = Path(output_dir) / "result.png"
@@ -65,7 +73,7 @@ async def test_semantic_qa_labels_questionable_image_before_success_caption() ->
         patch.object(studio, "_receipt_kind", return_value="image"),
         patch.object(studio, "materialize_ad_visual", side_effect=materialize),
         patch.object(studio, "frozen_business_visual_binding", return_value=None),
-        patch.object(studio, "claim_creative_generation_delivery", return_value=True),
+        patch.object(studio, "claim_creative_generation_delivery", side_effect=claim),
         patch.object(studio, "mark_creative_generation_delivered"),
         patch.object(
             studio,
@@ -81,6 +89,7 @@ async def test_semantic_qa_labels_questionable_image_before_success_caption() ->
         )
 
     assert completed is True
+    assert order == ["claim", "review"]
     assert review.call_count == 1
     target.answer_photo.assert_awaited_once()
     caption = target.answer_photo.await_args.kwargs["caption"]
