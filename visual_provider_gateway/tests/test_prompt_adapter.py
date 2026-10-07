@@ -1331,3 +1331,28 @@ def test_subject_change_and_selected_rendering_style_are_independent_axes() -> N
     assert "мяг" in adapted.prompt.casefold()
     assert "художественный" in adapted.prompt or "тёплый" in adapted.prompt
     assert len(adapted.prompt) <= 500
+
+
+def test_arbitrary_owner_style_wording_survives_yandex_compaction() -> None:
+    request = (
+        "Большая городская площадь после дождя, люди идут вдоль старых фасадов, "
+        "отражения в лужах, много мелких архитектурных деталей, мягкая перспектива, "
+        "естественная повседневная сцена без рекламных элементов, "
+        "в стиле современной линогравюры"
+    )
+    compiled = compile_visual_prompt(request=request, kind="image")
+    adapted = adapt_visual_brief_for_provider(
+        CreativeBrief(
+            kind="image",
+            prompt=compiled.prompt,
+            country_code="RU",
+            aspect_ratio="4:5",
+            negative_prompt=compiled.negative_prompt,
+        ),
+        provider="yandexart",
+    )
+
+    assert "Обязательный стиль пользователя" in adapted.prompt
+    assert "в стиле современной линогравюры" in adapted.prompt
+    assert "главный объект в процессе изменения" not in adapted.prompt
+    assert len(adapted.prompt) <= 500
