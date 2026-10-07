@@ -472,5 +472,78 @@ class VisualPromptCompilerTests(unittest.TestCase):
         self.assertEqual(brief.aspect_ratio, "9:16")
 
 
+
+    def test_presentation_edit_is_not_a_physical_subject_transformation(self) -> None:
+        request = (
+            "Сделай городскую улицу в стиле акварели, "
+            "сохрани людей, здания и композицию"
+        )
+        compiled = compile_visual_prompt(request=request, kind="image")
+
+        self.assertIn("presentation_change", compiled.semantic_flags)
+        self.assertNotIn("transformation", compiled.semantic_flags)
+        self.assertIn(
+            "The owner is editing visual presentation",
+            compiled.prompt,
+        )
+        self.assertIn(
+            "Treat style words as rendering instructions, not as physical properties",
+            compiled.prompt,
+        )
+        self.assertNotIn(
+            "The transformation is mandatory visual evidence",
+            compiled.prompt,
+        )
+
+    def test_presentation_transition_preserves_content_without_subject_mutation(self) -> None:
+        request = (
+            "Изображение городской улицы постепенно становится акварельным, "
+            "архитектура и люди остаются теми же"
+        )
+        compiled = compile_visual_prompt(request=request, kind="image")
+
+        self.assertIn("presentation_change", compiled.semantic_flags)
+        self.assertIn("presentation_transition", compiled.semantic_flags)
+        self.assertIn("transformation", compiled.semantic_flags)
+        self.assertIn(
+            "The requested change is a visual-presentation transition",
+            compiled.prompt,
+        )
+        self.assertIn(
+            "not a physical mutation of the subject",
+            compiled.prompt,
+        )
+        self.assertNotIn(
+            "The transformation is mandatory visual evidence in one coherent scene",
+            compiled.prompt,
+        )
+
+    def test_static_owner_style_request_does_not_invent_change_event(self) -> None:
+        request = "портрет женщины в стиле линогравюры, мягкий боковой свет"
+        compiled = compile_visual_prompt(request=request, kind="image")
+
+        self.assertNotIn("presentation_change", compiled.semantic_flags)
+        self.assertNotIn("transformation", compiled.semantic_flags)
+        self.assertIn(request, compiled.prompt)
+
+    def test_subject_transformation_and_visual_style_can_coexist(self) -> None:
+        request = (
+            "злой кот постепенно становится добрым, "
+            "а стиль изображения меняется на акварельный"
+        )
+        compiled = compile_visual_prompt(request=request, kind="image")
+
+        self.assertIn("transformation", compiled.semantic_flags)
+        self.assertIn("visible_state", compiled.semantic_flags)
+        self.assertIn("presentation_change", compiled.semantic_flags)
+        self.assertIn(
+            "The owner is editing visual presentation",
+            compiled.prompt,
+        )
+        self.assertIn(
+            "The transformation is mandatory visual evidence in one coherent scene",
+            compiled.prompt,
+        )
+
 if __name__ == "__main__":
     unittest.main()
