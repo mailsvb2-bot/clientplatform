@@ -93,11 +93,14 @@ async def test_semantic_qa_labels_questionable_image_before_success_caption() ->
     assert review.call_count == 1
     target.answer_photo.assert_awaited_once()
     caption = target.answer_photo.await_args.kwargs["caption"]
-    assert caption.startswith("⚠️ Картинка сгенерирована")
-    assert "проверить соответствие исходному запросу" in caption
+    assert caption.startswith("❌ Картинка не прошла автопроверку смысла")
+    assert "результат не считаю готовым" in caption
     messages = [call.args[0] for call in target.answer.await_args_list]
     assert any("не видно запрошенного изменения" in item for item in messages)
-    assert any("Новую генерацию я не запускала" in item for item in messages)
+    assert any(
+        "Новая платная генерация автоматически не запускалась" in item
+        for item in messages
+    )
 
 
 @pytest.mark.asyncio
