@@ -155,12 +155,12 @@ def _yandex_safety_parts(brief: CreativeBrief) -> tuple[str, ...]:
     natural = _natural_safety_parts(brief)
     joined = " ".join(natural)
     clauses: list[str] = []
+    if "названия бренда/услуг/методов" in joined.casefold():
+        clauses.append("Названия бренда/услуг не печатать без явного запроса.")
     if "только явно запрошенный текст" in joined.casefold():
         clauses.append("Только запрошенный текст; без других надписей.")
     elif "Без читаемого текста" in joined:
         clauses.append("Без читаемого текста/UI.")
-    if "названия бренда/услуг/методов" in joined.casefold():
-        clauses.append("Названия бренда/услуг не печатать без явного запроса.")
     if "Без водяных знаков" in joined and "Без выдуманных логотипов" in joined:
         clauses.append("Без водяных знаков. Без выдуманных логотипов.")
     elif "Без водяных знаков" in joined:
@@ -758,6 +758,20 @@ def _detailed_transformation_stage_cue(
         initial_evidence, final_evidence = parsed
         middle_evidence = ()
 
+    if explicit_stages is not None:
+        if len(middle_evidence) > 2 and "расслабленная поза" in middle_evidence:
+            middle_evidence = tuple(
+                item for item in middle_evidence if item != "расслабленная поза"
+            )[:2]
+        else:
+            middle_evidence = middle_evidence[:2]
+        if len(final_evidence) > 2 and "расслабленная поза" in final_evidence:
+            final_evidence = tuple(
+                item for item in final_evidence if item != "расслабленная поза"
+            )[:2]
+        else:
+            final_evidence = final_evidence[:2]
+
     opening = ", ".join(initial_evidence) if initial_evidence else "обычный"
     if listening:
         middle = "слушает аудио в заметных наушниках"
@@ -765,7 +779,6 @@ def _detailed_transformation_stage_cue(
             middle += ", не символом волны"
         if middle_evidence:
             middle += ", " + ", ".join(middle_evidence)
-        middle += ", и меняется"
     else:
         middle = (
             ", ".join(middle_evidence)
@@ -807,33 +820,29 @@ def _single_scene_transformation_cue(
     ]
     if listening:
         details.append(
-            "причина явно видна: субъект реально слушает аудио в заметных "
-            "наушниках или через колонку/устройство, не символом волны"
+            "явно слушает аудио в заметных наушниках, не символом волны"
         )
 
     if initial and final:
         details.append(
             "исходные признаки ещё частично видны: "
             + ", ".join(initial)
-            + "; на том же объекте уже проявляются: "
+            + "; уже проявляются: "
             + ", ".join(final)
         )
     elif final:
         details.append(
             "запрошенный результат уже частично проявился: "
             + ", ".join(final)
-            + ", но сам переход ещё визуально читается"
         )
     else:
         details.append(
-            "сам переход виден на объекте, материале, фактуре, форме, позе или "
-            "другом изменяемом признаке ровно так, как задано пользователем"
+            "сам переход виден на объекте, материале, фактуре, форме, позе"
         )
 
     return (
         "; ".join(details)
-        + ". Не своди запрос к готовому статичному финалу. "
-        "Без копий главного объекта, панелей и триптиха, если это не просили."
+        + ". Не своди запрос к готовому статичному финалу."
     )
 
 
@@ -1062,25 +1071,29 @@ def _bounded_yandex_prompt(
     normalized_scene_head = " ".join(str(scene_head or "").split()).strip()
 
     if stage_priority and len(normalized_scene_head) <= 200:
-        # A short owner sentence is the scene. Do not spend the 500-character
-        # budget on cue/safety reserves and then clip "становится добрым".
-        style_block = _bounded_join(list(style_cues), limit=125)
-        safety_reserve = _bounded_join(list(safety), limit=160)
-        fixed = (
-            len(style_block)
-            + len(safety_reserve)
-            + (1 if style_block else 0)
-            + (1 if safety_reserve else 0)
-        )
+        # A short owner sentence is the scene. Preserve the complete semantic
+        # contract before optional presentation/safety detail so the provider never
+        # receives a truncated transformation with a missing final state.
         bounded_scene_head = normalized_scene_head
-        semantic_limit = max(
+        semantic_budget = max(
             80,
-            _YANDEX_PROMPT_LIMIT - len(bounded_scene_head) - fixed - 1,
+            _YANDEX_PROMPT_LIMIT - len(bounded_scene_head) - 1,
         )
-        bounded_semantics = _bounded_join(list(semantic_cues), limit=semantic_limit)
-        core = [part for part in (bounded_scene_head, bounded_semantics, style_block) if part]
+        bounded_semantics = _bounded_join(
+            list(semantic_cues),
+            limit=semantic_budget,
+        )
+        style_block = _bounded_join(list(style_cues), limit=125)
+        core = [
+            part
+            for part in (bounded_scene_head, bounded_semantics, style_block)
+            if part
+        ]
         used = sum(len(part) for part in core) + max(0, len(core) - 1)
-        remaining = max(0, _YANDEX_PROMPT_LIMIT - used - (1 if safety else 0))
+        remaining = max(
+            0,
+            _YANDEX_PROMPT_LIMIT - used - (1 if safety else 0),
+        )
         safety_block = _bounded_join(list(safety), limit=remaining)
         return _bounded_join(
             [*core, safety_block, *extras],
