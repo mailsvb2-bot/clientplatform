@@ -326,7 +326,15 @@ def _receipt_semantic_qa_enabled(receipt: CreativeGenerationReceipt) -> bool:
 
 
 def _semantic_qa_warning(qa) -> str:
-    if qa is None or str(getattr(qa, "status", "") or "") != "needs_review":
+    if qa is None:
+        return ""
+    status = str(getattr(qa, "status", "") or "").strip().lower()
+    if status == "unavailable":
+        return (
+            "⚠️ Картинка сгенерирована, но автоматическая проверка соответствия "
+            "исходному запросу сейчас недоступна. Новую генерацию я не запускала."
+        )
+    if status != "needs_review":
         return ""
     issues = tuple(
         " ".join(str(item or "").split()).strip()
