@@ -43,7 +43,7 @@ class SemanticQAContractRequest(BaseModel):
     kind: str = Field(pattern="^image$")
     country_code: str = Field(default="", max_length=16, pattern=r"^[A-Za-z0-9_-]*$")
     owner_request: str = Field(min_length=1, max_length=1500)
-    semantic_flags: list[str] = Field(default_factory=list, max_length=16)
+    semantic_flags: list[str] = Field(default_factory=list, max_length=20)
     scene_contract: SceneContractRequest | None = None
 
 
