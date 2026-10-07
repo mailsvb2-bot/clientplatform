@@ -328,6 +328,14 @@ _EXPLICIT_STORYBOARD_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+_NEGATED_STORYBOARD_LAYOUT_RE = re.compile(
+    r"(?:"
+    r"\bбез\s+(?:коллаж\w*|панел\w*|триптих\w*|сториборд\w*)|"
+    r"\bне\s+(?:коллаж\w*|триптих\w*|сториборд\w*)|"
+    r"\b(?:no|without)\s+(?:collage|panels?|triptych|storyboard)\b"
+    r")",
+    re.IGNORECASE,
+)
 _FROM_TO_STORYBOARD_RE = re.compile(
     r"(?:"
     r"\b(?:меня\w*|изменя\w*)\b[^.!?;]{0,80}?\bиз\s+\S.{0,80}?\s+\bв\s+\S|"
@@ -513,8 +521,9 @@ def _semantic_flags(request: str) -> tuple[str, ...]:
     # a transformation, so autopilot does not invent a character-state narrative.
     if subject_transformation and _VISIBLE_STATE_RE.search(request):
         flags.append("visible_state")
+    storyboard_source = _NEGATED_STORYBOARD_LAYOUT_RE.sub("", request)
     if "transformation" in flags and (
-        _EXPLICIT_STORYBOARD_RE.search(request)
+        _EXPLICIT_STORYBOARD_RE.search(storyboard_source)
         or _FROM_TO_STORYBOARD_RE.search(request)
     ):
         flags.append("storyboard")
