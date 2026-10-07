@@ -1275,9 +1275,12 @@ async def choose_visual_style_preset(callback: CallbackQuery, state: FSMContext)
     try:
         style = _style_intent_from_state(data).with_quick_style(quick_style)
         selected = style.has_quick_style(quick_style)
-        medium_override = bool(
-            {"illustrative", "natural_photo"}.intersection(
-                style.quick_style_names()
+        medium_override = (
+            style.realism != "auto"
+            or bool(
+                {"illustrative", "natural_photo"}.intersection(
+                    style.quick_style_names()
+                )
             )
         )
     except ValueError:
@@ -1429,6 +1432,12 @@ async def clear_current_visual_style(callback: CallbackQuery, state: FSMContext)
     data = await state.get_data()
     if not _style_session_matches(data, token):
         await callback.answer("Эта настройка уже устарела", show_alert=True)
+        return
+    if _style_only_scene_locked(data):
+        await callback.answer(
+            "При смене стиля постановка зафиксирована и не меняется",
+            show_alert=True,
+        )
         return
     try:
         actor = await control._actor(
