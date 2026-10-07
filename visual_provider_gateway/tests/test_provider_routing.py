@@ -234,7 +234,6 @@ def test_gigachat_semantic_qa_is_non_generative_and_cleans_uploaded_file(
             "люди и здания остаются теми же"
         ),
         semantic_flags=(
-            "transformation",
             "presentation_change",
             "presentation_transition",
         ),
