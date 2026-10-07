@@ -1163,7 +1163,7 @@ class GigaChatImageProvider:
                 if str(item or "").strip()
             )
         )
-        if len(flags) > 20:
+        if len(flags) > 17:
             raise ValueError("semantic_qa_flags_invalid")
         try:
             size = image_path.stat().st_size
