@@ -79,7 +79,10 @@ from clientplatform.domain.creative_generation import (
 from clientplatform.domain.event_content import EventContentStage
 from clientplatform.domain.programs import ContentKind
 from clientplatform.domain.tenancy import TenantPermissionDenied
-from clientplatform.domain.visual_prompt_compiler import semantic_flags_for_request
+from clientplatform.domain.visual_prompt_compiler import (
+    image_semantic_flags_for_request,
+    semantic_flags_for_request,
+)
 from clientplatform.domain.visual_scene_contract import VisualSceneContract
 from clientplatform.domain.visual_scene_plan import VisualScenePlanStatus
 from clientplatform.domain.visual_style_intent import (
@@ -196,7 +199,12 @@ async def _ensure_scene_variants(
 
     request = normalize_business_image_request(str(data["creative_pending_prompt"]))
     style = _style_intent_from_state(data)
-    flags = semantic_flags_for_request(request)
+    kind = str(data.get("creative_kind") or "image").strip().lower()
+    flags = (
+        image_semantic_flags_for_request(request)
+        if kind == "image"
+        else semantic_flags_for_request(request)
+    )
 
     if not visual_scene_ai_planning_available():
         contract, source, variants = deterministic_visual_scene_bundle(
