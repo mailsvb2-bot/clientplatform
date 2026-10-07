@@ -87,7 +87,7 @@ def test_yandex_v11_compiles_scene_contract_before_verbose_prompt() -> None:
 
     assert len(adapted.prompt) <= 500
     assert adapted.prompt.startswith("ёж, который слушает")
-    assert "Одна сцена, герой один раз" in adapted.prompt
+    assert "Одна сцена, один герой в процессе изменения" in adapted.prompt
     assert "три стадии" not in adapted.prompt
     assert "слушает ресурсное аудио" in adapted.prompt
     assert "добрым" in adapted.prompt
@@ -186,7 +186,7 @@ def test_yandex_adapter_uses_natural_owner_description_without_compiler_meta() -
     assert adapted.prompt.startswith(
         "a prickly hedgehog listens to an audio session and becomes gentle"
     )
-    assert "Одна сцена, герой один раз" in adapted.prompt
+    assert "Одна сцена, один герой в процессе изменения" in adapted.prompt
     assert "три стадии" not in adapted.prompt
     assert "ДО →" not in adapted.prompt
     assert "ДЕЙСТВИЕ/ПРИЧИНА" not in adapted.prompt
@@ -223,14 +223,16 @@ def test_yandex_adapter_expands_resource_audio_transformation_into_visual_stages
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert adapted.prompt.startswith(request)
-    assert "Одна сцена, герой один раз" in adapted.prompt
+    assert "Одна сцена, один герой в процессе изменения" in adapted.prompt
     assert "три стадии" not in adapted.prompt
     assert "сначала обычный" not in adapted.prompt
     assert "слушает аудио" in adapted.prompt
     assert "наушниках" in adapted.prompt
     assert "не символом волны" in adapted.prompt
-    assert "доброжелательный расслабленный взгляд" in adapted.prompt
-    assert "заметно более густой пушистый мех" in adapted.prompt
+    assert "мягкий густой мех уже появляется на мордочке, груди и боках" in adapted.prompt
+    assert "рядом ещё видна более жёсткая фактура" in adapted.prompt
+    assert "взгляд и поза становятся доброжелательными и расслабленными" in adapted.prompt
+    assert "Не готовый статичный портрет" in adapted.prompt
     assert "ДО →" not in adapted.prompt
     assert "Owner request" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
@@ -271,10 +273,12 @@ def test_yandex_production_contract_keeps_one_scene_for_gradual_change() -> None
     assert "storyboard" not in flags
     assert adapted.prompt.startswith(request)
     assert "ресурсные аудиотрансы" in adapted.prompt
-    assert "Одна сцена, герой один раз" in adapted.prompt
+    assert "Одна сцена, один герой в процессе изменения" in adapted.prompt
     assert "наушниках" in adapted.prompt
-    assert "доброжелательный расслабленный взгляд" in adapted.prompt
-    assert "пушистый мех" in adapted.prompt
+    assert "мягкий густой мех уже появляется на мордочке, груди и боках" in adapted.prompt
+    assert "рядом ещё видна более жёсткая фактура" in adapted.prompt
+    assert "взгляд и поза становятся доброжелательными и расслабленными" in adapted.prompt
+    assert "Не готовый статичный портрет" in adapted.prompt
     assert "три стадии" not in adapted.prompt
     assert "visible progressive change" not in adapted.prompt
     assert "исходное состояние" not in adapted.prompt
@@ -282,7 +286,7 @@ def test_yandex_production_contract_keeps_one_scene_for_gradual_change() -> None
     responses = str(adapted.metadata["yandex_responses_input"])
     assert responses.startswith(request)
     assert "три стадии" not in responses
-    assert "Одна сцена, герой один раз" in responses
+    assert "Одна сцена, один герой в процессе изменения" in responses
 
 def test_yandex_responses_input_preserves_scene_semantics_without_compiler_meta() -> None:
     request = (
@@ -307,12 +311,13 @@ def test_yandex_responses_input_preserves_scene_semantics_without_compiler_meta(
 
     responses_input = str(adapted.metadata["yandex_responses_input"])
     assert responses_input.startswith(request)
-    assert "Одна сцена, герой один раз" in responses_input
+    assert "Одна сцена, один герой в процессе изменения" in responses_input
     assert "три стадии" not in responses_input
     assert "слушает аудио" in responses_input
     assert "наушниках" in responses_input
-    assert "доброжелательный расслабленный взгляд" in responses_input
-    assert "заметно более густой пушистый мех" in responses_input
+    assert "мягкий густой мех уже появляется на мордочке, груди и боках" in responses_input
+    assert "рядом ещё видна более жёсткая фактура" in responses_input
+    assert "взгляд и поза становятся доброжелательными и расслабленными" in responses_input
     assert "Owner request" not in responses_input
     assert "mandatory" not in responses_input.casefold()
     assert "BEFORE" not in responses_input
@@ -403,7 +408,7 @@ def test_yandex_stage_prompt_keeps_final_state_and_artistic_style_with_brand_con
 
     assert len(adapted.prompt) <= 500
     assert adapted.prompt.startswith(request)
-    assert "Одна сцена, герой один раз" in adapted.prompt
+    assert "Одна сцена, один герой в процессе изменения" in adapted.prompt
     assert "три стадии" not in adapted.prompt
     assert "слушает аудио в заметных наушниках" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
@@ -623,7 +628,7 @@ def test_yandex_adapter_preserves_multiple_selected_styles_with_semantics() -> N
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert "явно слушает аудио" in adapted.prompt
-    assert "Одна сцена, герой один раз" in adapted.prompt
+    assert "Одна сцена, один герой в процессе изменения" in adapted.prompt
     assert "три стадии" not in adapted.prompt
     assert "ДО →" not in adapted.prompt
     assert "Стиль:" in adapted.prompt
@@ -685,7 +690,7 @@ def test_yandex_adapter_keeps_all_safety_clauses_for_long_owner_request() -> Non
     assert adapted.prompt.startswith(
         "a hedgehog listens to a guided audio wellness session"
     )
-    assert "Одна сцена, герой один раз" in adapted.prompt
+    assert "Одна сцена, один герой в процессе изменения" in adapted.prompt
     assert "три стадии" not in adapted.prompt
     assert "явно слушает аудио" in adapted.prompt
     assert "ДО →" not in adapted.prompt
@@ -730,7 +735,7 @@ def test_gigachat_adapter_preserves_listening_transformation_without_compiler_me
     adapted = adapt_visual_brief_for_provider(brief, provider="gigachat")
 
     assert adapted.prompt.startswith(request)
-    assert "Одна сцена, герой один раз" in adapted.prompt
+    assert "Одна сцена, один герой в процессе изменения" in adapted.prompt
     assert "три стадии" not in adapted.prompt
     assert "сначала обычный" not in adapted.prompt
     assert "слушает аудио" in adapted.prompt
@@ -846,7 +851,7 @@ def test_gigachat_adapter_reserves_safety_for_near_limit_owner_request() -> None
 
     assert len(adapted.prompt) <= 1800
     assert adapted.prompt.startswith("ёж слушает ресурсное аудио")
-    assert "Одна сцена, герой один раз" in adapted.prompt
+    assert "Одна сцена, один герой в процессе изменения" in adapted.prompt
     assert "три стадии" not in adapted.prompt
     assert "слушает аудио" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
@@ -942,7 +947,7 @@ def test_engine_applies_adapter_only_after_provider_selection(monkeypatch) -> No
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 13
+    assert result.provider_payload["prompt_adapter_version"] == 14
     assert "Owner request" not in captured["brief"].prompt
     assert "hedgehog listens to an audio session" in captured["brief"].prompt
 
@@ -1063,12 +1068,12 @@ def test_engine_applies_meaning_adapter_to_gigachat_fallback(monkeypatch) -> Non
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 13
+    assert result.provider_payload["prompt_adapter_version"] == 14
     prompt = captured["brief"].prompt
     assert prompt.startswith(
         "a prickly hedgehog listens to an audio session and becomes gentle"
     )
-    assert "Одна сцена, герой один раз" in prompt
+    assert "Одна сцена, один герой в процессе изменения" in prompt
     assert "три стадии" not in prompt
     assert "ДО →" not in prompt
     assert "ДЕЙСТВИЕ/ПРИЧИНА" not in prompt
@@ -1106,7 +1111,7 @@ def test_yandex_adapter_prioritizes_owner_request_before_style_and_brand_context
     assert adapted.prompt.startswith(
         "a prickly hedgehog listens to an audio session and becomes gentle"
     )
-    assert "Одна сцена, герой один раз" in adapted.prompt
+    assert "Одна сцена, один герой в процессе изменения" in adapted.prompt
     assert "три стадии" not in adapted.prompt
     assert "ДО →" not in adapted.prompt
     assert "Example brand context" not in adapted.prompt
