@@ -108,13 +108,35 @@ _PRESENTATION_NOUN_CHANGE_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
-
+_PRESENTATION_OPERATION_RE = re.compile(
+    r"(?:"
+    r"\b(?:поменя|смен|измен|замен|перерис|стилиз|примен)\w*\b|"
+    r"\b(?:change|switch|replace|restyle|redraw|stylize|render)\w*\b"
+    r")",
+    re.IGNORECASE,
+)
+_PRESENTATION_GOVERNOR_RE = re.compile(
+    r"(?:"
+    r"\b(?:стил|палитр|фон|освещен|контраст|композици|ракурс|атмосфер|"
+    r"рисовк|визуальн\w*\s+подач|изображен|картинк|визуал|портрет)\w*\b|"
+    r"\b(?:style|palette|background|lighting|contrast|composition|"
+    r"camera\s+angle|mood|tone|rendering|image|picture|visual|portrait)\b"
+    r")",
+    re.IGNORECASE,
+)
 
 
 def _presentation_change_spans(request: str) -> tuple[tuple[int, int], ...]:
     spans: list[tuple[int, int]] = []
+    for match in _PRESENTATION_CHANGE_RE.finditer(request):
+        start, end = match.span()
+        operations = tuple(
+            _PRESENTATION_OPERATION_RE.finditer(request[start:end])
+        )
+        if operations and operations[-1].start() > 0:
+            start += operations[-1].start()
+        spans.append((start, end))
     for pattern in (
-        _PRESENTATION_CHANGE_RE,
         _PRESENTATION_MEDIA_TRANSFORMATION_RE,
         _PRESENTATION_NOUN_CHANGE_RE,
     ):
@@ -141,18 +163,21 @@ def _presentation_change_requested(request: str) -> bool:
 
 
 def _span_is_presentation_change(
+    request: str,
     start: int,
     end: int,
     presentation_spans: tuple[tuple[int, int], ...],
 ) -> bool:
     del end
-    # A transformation token governed by a presentation noun ("style turns into",
-    # "palette changes from ... to ...") starts inside the presentation span even
-    # when its connector/target extends beyond the noun regex match.
-    return any(
-        left <= start < right
-        for left, right in presentation_spans
-    )
+    # A physical transformation token is presentation-only only when a presentation
+    # governor actually precedes it inside the matched operation. This prevents a
+    # broad "make ... and render ... style" span from swallowing "become happy".
+    for left, right in presentation_spans:
+        if not left <= start < right:
+            continue
+        if _PRESENTATION_GOVERNOR_RE.search(request[left:start]):
+            return True
+    return False
 
 
 def _subject_transformation_requested(
@@ -162,6 +187,7 @@ def _subject_transformation_requested(
 ) -> bool:
     return any(
         not _span_is_presentation_change(
+            request,
             match.start(),
             match.end(),
             presentation_spans,
@@ -187,6 +213,9 @@ def _presentation_transition_requested(
             request.rfind("?", 0, start),
         ) + 1
         prefix = request[prefix_start:start]
+        # Transition words from a preceding physical-change clause must not leak
+        # across a coordinating conjunction into a later static style operation.
+        prefix = re.split(r"\b(?:and|и)\b", prefix, flags=re.IGNORECASE)[-1]
         if len(prefix) <= 48 and _PRESENTATION_TRANSITION_RE.search(prefix):
             return True
     return False
