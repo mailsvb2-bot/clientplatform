@@ -9,7 +9,7 @@ import pytest
 import handlers.clientplatform_creative_studio as studio
 
 
-def _immediate_to_thread(function, *args, **kwargs):
+async def _immediate_to_thread(function, *args, **kwargs):
     return function(*args, **kwargs)
 
 
