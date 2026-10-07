@@ -106,7 +106,7 @@ async def aiohttp_client():
 
 @pytest.fixture
 async def upstream(aiohttp_client):
-    calls = {"post": 0, "content": 0}
+    calls = {"post": 0, "content": 0, "semantic_qa": 0}
     source = _image()
 
     async def create(request):
@@ -142,6 +142,19 @@ async def upstream(aiohttp_client):
         calls["content"] += 1
         return web.Response(body=source, content_type="image/jpeg")
 
+    async def semantic_qa(request):
+        calls["semantic_qa"] += 1
+        payload = await request.json()
+        assert payload["scope_id"] == "tenant-a"
+        assert isinstance(payload["contract"], dict)
+        return web.json_response(
+            {
+                "status": "needs_review",
+                "issues": ["Запрошенное изменение визуально не читается."],
+                "summary": "Нужна проверка владельцем.",
+            }
+        )
+
     async def providers(_):
         return web.json_response({"providers": ["fake"]})
 
@@ -152,6 +165,10 @@ async def upstream(aiohttp_client):
     app.router.add_post("/v1/creative/generations", create)
     app.router.add_get("/v1/creative/generations/{job_id}", get_job)
     app.router.add_get("/v1/creative/generations/{job_id}/content", content)
+    app.router.add_post(
+        "/v1/creative/generations/{job_id}/semantic-qa",
+        semantic_qa,
+    )
     app.router.add_get("/v1/providers", providers)
     app.router.add_get("/v1/usage", usage)
     client = await aiohttp_client(app)
@@ -323,6 +340,68 @@ async def test_generation_content_proxy_uses_idle_timeout_not_total_transfer_tim
     assert raw == source
 
 
+
+
+
+@pytest.mark.asyncio
+async def test_semantic_qa_is_proxied_through_canonical_visual_gateway(gateway, upstream):
+    payload = {
+        "scope_id": "tenant-a",
+        "contract": {
+            "version": 2,
+            "kind": "image",
+            "country_code": "RU",
+            "owner_request": "тот же объект постепенно меняет визуальный стиль",
+            "semantic_flags": [
+                "transformation",
+                "presentation_change",
+                "presentation_transition",
+            ],
+            "scene_contract": {
+                "version": 1,
+                "topology": "static",
+                "primary_subject": "объект",
+                "initial_state": [],
+                "actions": [],
+                "cause": "",
+                "transition": [],
+                "final_state": [],
+                "explicit_text": [],
+                "required_evidence": [
+                    "visual presentation transition readable within the same scene"
+                ],
+                "forbidden": [
+                    "physical mutation caused only by presentation or style wording"
+                ],
+            },
+        },
+    }
+
+    response = await gateway.post(
+        "/v1/creative/generations/job1/semantic-qa",
+        headers=auth(),
+        json=payload,
+    )
+
+    assert response.status == 200
+    body = await response.json()
+    assert body["status"] == "needs_review"
+    assert body["issues"] == ["Запрошенное изменение визуально не читается."]
+    assert upstream.calls["semantic_qa"] == 1
+
+
+@pytest.mark.asyncio
+async def test_semantic_qa_rejects_invalid_scope_before_upstream(gateway, upstream):
+    response = await gateway.post(
+        "/v1/creative/generations/job1/semantic-qa",
+        headers=auth(),
+        json={"scope_id": "bad scope", "contract": {}},
+    )
+
+    assert response.status == 400
+    assert upstream.calls["semantic_qa"] == 0
+
+
 @pytest.mark.asyncio
 async def test_capabilities_are_authenticated_and_do_not_touch_provider(gateway, upstream):
     denied = await gateway.get("/v1/capabilities")
@@ -331,10 +410,10 @@ async def test_capabilities_are_authenticated_and_do_not_touch_provider(gateway,
     assert response.status == 200
     assert await response.json() == {
         "contract_version": "1.0",
-        "capabilities": ["generation", "render_pack", "usage"],
+        "capabilities": ["generation", "semantic_qa", "render_pack", "usage"],
         "render_formats": ["square", "feed", "story", "landscape"],
     }
-    assert upstream.calls == {"post": 0, "content": 0}
+    assert upstream.calls == {"post": 0, "content": 0, "semantic_qa": 0}
 
 
 @pytest.mark.asyncio
