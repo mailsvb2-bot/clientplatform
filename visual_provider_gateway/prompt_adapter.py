@@ -1280,12 +1280,17 @@ def _adapt_yandex_motion(brief: CreativeBrief) -> CreativeBrief:
             "Ключевой кадр для короткого вертикального видео: "
             + " ".join(str(brief.prompt or "").split())
         )
+    # For motion keyframes, semantic continuity and hard production safety
+    # (readable-text, watermark/logo and safe-area framing constraints) outrank
+    # decorative style when Alice's 500-character budget is tight. Keep style as
+    # a best-effort tail so it survives whenever space remains without evicting
+    # mandatory framing/safety.
     prompt = _bounded_yandex_prompt(
         scene_head=scene,
         semantic_cues=semantic_cues,
-        style_cues=style_cues,
+        style_cues=(),
         brief=brief,
-        extras=tuple(extras),
+        extras=tuple((*style_cues, *extras)),
     )
     return replace(brief, prompt=prompt)
 
