@@ -1343,13 +1343,13 @@ async def set_visual_style_dimension(callback: CallbackQuery, state: FSMContext)
         await callback.answer("Эта настройка уже устарела", show_alert=True)
         return
     style = _style_intent_from_state(data).with_value(field, value)
-    existing_medium_override = bool(
-        data.get("creative_override_owner_style_wording")
-    )
     medium_override = (
-        value != "auto"
-        if field == "realism"
-        else existing_medium_override
+        style.realism != "auto"
+        or bool(
+            {"illustrative", "natural_photo"}.intersection(
+                style.quick_style_names()
+            )
+        )
     )
     await state.update_data(
         creative_style_intent=style.to_mapping(),
@@ -1534,6 +1534,12 @@ async def auto_scene_variant(callback: CallbackQuery, state: FSMContext) -> None
     data = await state.get_data()
     if not _style_session_matches(data, token):
         await callback.answer("Эта настройка уже устарела", show_alert=True)
+        return
+    if _style_only_scene_locked(data):
+        await callback.answer(
+            "При смене стиля постановка зафиксирована и не меняется",
+            show_alert=True,
+        )
         return
     try:
         actor = await control._actor(
