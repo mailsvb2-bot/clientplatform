@@ -97,10 +97,11 @@ def grounded_scene_contract_from_mapping(
     # Presentation/style edits are not physical subject transformations; keep their
     # deterministic scene topology even if the planner is tempted by words like
     # "change", "becomes" or "style transition".
+    flag_set = set(semantic_flags)
     presentation_only = (
-        "presentation_change" in set(semantic_flags)
-        and "visible_state" not in set(semantic_flags)
-        and "object_replacement" not in set(semantic_flags)
+        "presentation_change" in flag_set
+        and "transformation" not in flag_set
+        and "object_replacement" not in flag_set
     )
     if presentation_only:
         topology = base.topology
