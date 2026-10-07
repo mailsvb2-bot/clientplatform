@@ -97,27 +97,99 @@ _PRESENTATION_TRANSITION_RE = re.compile(
     re.IGNORECASE,
 )
 
+_PRESENTATION_NOUN_CHANGE_RE = re.compile(
+    r"(?:"
+    r"\b(?:стил|палитр|фон|освещен|контраст|композици|ракурс|атмосфер|"
+    r"рисовк|визуальн\w*\s+подач)\w*\b[^.!?;,]{0,80}"
+    r"\b(?:меня|измен|станов|переход|превращ)\w*\b|"
+    r"\b(?:style|palette|background|lighting|contrast|composition|"
+    r"camera\s+angle|mood|tone|rendering)\b[^.!?;,]{0,80}"
+    r"\b(?:changes?|becomes?|transitions?|switches?|turns?)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+
+def _presentation_change_spans(request: str) -> tuple[tuple[int, int], ...]:
+    spans: list[tuple[int, int]] = []
+    for pattern in (
+        _PRESENTATION_CHANGE_RE,
+        _PRESENTATION_MEDIA_TRANSFORMATION_RE,
+        _PRESENTATION_NOUN_CHANGE_RE,
+    ):
+        spans.extend(match.span() for match in pattern.finditer(request))
+    for match in _OBJECT_REPLACEMENT_RE.finditer(request):
+        tail = request[match.end() :]
+        target = _ABSTRACT_REPLACEMENT_TARGET_RE.match(tail)
+        if target is not None:
+            spans.append((match.start(), match.end() + target.end()))
+    if not spans:
+        return ()
+    spans.sort()
+    merged: list[tuple[int, int]] = []
+    for start, end in spans:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return tuple(merged)
+
 
 def _presentation_change_requested(request: str) -> bool:
-    if _PRESENTATION_CHANGE_RE.search(request):
-        return True
-    if _PRESENTATION_MEDIA_TRANSFORMATION_RE.search(request):
-        return True
-    for match in _OBJECT_REPLACEMENT_RE.finditer(request):
-        if _ABSTRACT_REPLACEMENT_TARGET_RE.match(request[match.end() :]):
+    return bool(_presentation_change_spans(request))
+
+
+def _span_is_presentation_change(
+    start: int,
+    end: int,
+    presentation_spans: tuple[tuple[int, int], ...],
+) -> bool:
+    return any(
+        start >= left and end <= right
+        for left, right in presentation_spans
+    )
+
+
+def _subject_transformation_requested(
+    request: str,
+    *,
+    presentation_spans: tuple[tuple[int, int], ...],
+) -> bool:
+    return any(
+        not _span_is_presentation_change(
+            match.start(),
+            match.end(),
+            presentation_spans,
+        )
+        for match in _TRANSFORMATION_RE.finditer(request)
+    )
+
+
+def _presentation_transition_requested(
+    request: str,
+    *,
+    presentation_spans: tuple[tuple[int, int], ...],
+) -> bool:
+    for start, end in presentation_spans:
+        fragment = request[start:end]
+        if _PRESENTATION_TRANSITION_RE.search(fragment):
+            return True
+        prefix_start = max(
+            request.rfind(",", 0, start),
+            request.rfind(";", 0, start),
+            request.rfind(".", 0, start),
+            request.rfind("!", 0, start),
+            request.rfind("?", 0, start),
+        ) + 1
+        prefix = request[prefix_start:start]
+        if len(prefix) <= 48 and _PRESENTATION_TRANSITION_RE.search(prefix):
             return True
     return False
 
 
 def _subject_transformation(flags: tuple[str, ...]) -> bool:
-    values = set(flags)
-    if "transformation" not in values:
-        return False
-    return not (
-        "presentation_change" in values
-        and "visible_state" not in values
-        and "object_replacement" not in values
-    )
+    return "transformation" in set(flags)
 
 
 _SEQUENCE_RE = re.compile(
@@ -348,8 +420,12 @@ def _clean(value: str, *, field: str, limit: int) -> str:
 
 
 def _semantic_flags(request: str) -> tuple[str, ...]:
+    presentation_spans = _presentation_change_spans(request)
+    subject_transformation = _subject_transformation_requested(
+        request,
+        presentation_spans=presentation_spans,
+    )
     checks = (
-        ("transformation", _TRANSFORMATION_RE),
         ("sequence", _SEQUENCE_RE),
         ("listening", _LISTENING_RE),
         ("watching", _WATCHING_RE),
@@ -363,10 +439,15 @@ def _semantic_flags(request: str) -> tuple[str, ...]:
         ("portrait", _PORTRAIT_RE),
     )
     flags = [name for name, pattern in checks if pattern.search(request)]
-    presentation_change = _presentation_change_requested(request)
+    if subject_transformation:
+        flags.insert(0, "transformation")
+    presentation_change = bool(presentation_spans)
     if presentation_change:
         flags.append("presentation_change")
-        if _PRESENTATION_TRANSITION_RE.search(request):
+        if _presentation_transition_requested(
+            request,
+            presentation_spans=presentation_spans,
+        ):
             flags.append("presentation_transition")
     replacement_matches = tuple(_OBJECT_REPLACEMENT_RE.finditer(request))
     physical_replacement = any(
@@ -385,7 +466,7 @@ def _semantic_flags(request: str) -> tuple[str, ...]:
     # Descriptive words such as "calm" may refer only to visual style in a static
     # request. Treat them as state evidence only when the owner actually asks for
     # a transformation, so autopilot does not invent a character-state narrative.
-    if "transformation" in flags and _VISIBLE_STATE_RE.search(request):
+    if subject_transformation and _VISIBLE_STATE_RE.search(request):
         flags.append("visible_state")
     if "transformation" in flags and (
         _EXPLICIT_STORYBOARD_RE.search(request)
