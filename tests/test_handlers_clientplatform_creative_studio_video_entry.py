@@ -754,13 +754,15 @@ def test_image_delivery_recovers_from_local_materialization_oserror(
     assert "файл сейчас не удалось получить" in target.answer.await_args.args[0]
 
 
-def test_semantic_qa_warning_is_silent_for_pass_and_unavailable() -> None:
+def test_semantic_qa_warning_is_silent_for_pass_but_not_unavailable() -> None:
     assert studio._semantic_qa_warning(
         SimpleNamespace(status="pass", issues=())
     ) == ""
-    assert studio._semantic_qa_warning(
+    warning = studio._semantic_qa_warning(
         SimpleNamespace(status="unavailable", issues=())
-    ) == ""
+    )
+    assert "автоматическая проверка соответствия" in warning
+    assert "сейчас недоступна" in warning
 
 
 def test_video_delivery_enables_streaming(monkeypatch, tmp_path) -> None:
