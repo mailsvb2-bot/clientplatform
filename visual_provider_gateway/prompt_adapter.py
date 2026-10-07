@@ -776,7 +776,7 @@ def _single_scene_transformation_cue(
     *,
     listening: bool,
 ) -> str:
-    """Describe an in-progress change inside one subject, not a static portrait."""
+    """Keep arbitrary requested change visibly in-progress inside one subject."""
 
     parsed = _parsed_transformation_evidence(owner_request) if owner_request else None
     initial: tuple[str, ...] = ()
@@ -784,35 +784,46 @@ def _single_scene_transformation_cue(
     if parsed is not None:
         initial, final = parsed
 
-    final_set = set(final)
-    details: list[str] = ["Одна сцена, один герой в процессе изменения"]
+    details: list[str] = ["Одна сцена, один и тот же главный объект в процессе изменения"]
     if listening:
-        details.append("слушает аудио в заметных наушниках")
+        details.append("причина видна: он слушает аудио в заметных наушниках")
 
-    if "заметно более густой пушистый мех" in final_set:
-        details.append(
-            "мягкий густой мех уже появляется на мордочке, груди и боках, "
-            "рядом ещё видна более жёсткая фактура"
-        )
-    elif initial and final:
+    if initial and final:
         details.append(
             "часть исходных признаков ещё видна, рядом уже проявляются "
             + ", ".join(final)
         )
     elif final:
         details.append(
-            "часть внешности уже имеет " + ", ".join(final)
-            + ", соседние участки ещё заметно меняются"
+            "запрошенный результат уже частично проявился: "
+            + ", ".join(final)
+            + ", но сам переход ещё визуально читается"
         )
-
-    if "доброжелательный расслабленный взгляд" in final_set:
-        details.append("взгляд и поза становятся доброжелательными и расслабленными")
-    elif "фактура визуально мягче" in final_set:
-        details.append("смягчение фактуры видно прямо на поверхности")
+    else:
+        details.append(
+            "сам переход виден на объекте, материале, фактуре, форме, позе или "
+            "другом изменяемом признаке ровно так, как задано пользователем"
+        )
 
     return (
         "; ".join(details)
-        + ". Не готовый статичный портрет. Без второго героя, панелей и триптиха."
+        + ". Не своди запрос к готовому статичному финалу. "
+        "Без копий главного объекта, панелей и триптиха, если это не просили."
+    )
+
+
+def _presentation_change_cue(*, transition: bool) -> str:
+    if transition:
+        return (
+            "Одна сцена, тот же объект и тот же сюжет: меняется только визуальная "
+            "подача. Переход запрошенного стиля, палитры, света, фона или другого "
+            "параметра виден внутри композиции; не превращай его в физическую "
+            "мутацию объекта и не дублируй объект."
+        )
+    return (
+        "Сохрани объект, сюжет, геометрию и действия; измени только запрошенную "
+        "визуальную подачу — стиль, палитру, фон, свет, композицию или иной указанный "
+        "параметр. Без физической мутации и без до/после, если пользователь этого не просил."
     )
 
 
@@ -837,6 +848,12 @@ def _compiled_semantic_visual_cues(
     transformation = has("the transformation is mandatory") or has(
         "the transformation is a mandatory"
     )
+    presentation_transition = has(
+        "the requested change is a visual-presentation transition"
+    )
+    presentation_change = presentation_transition or has(
+        "the owner is editing visual presentation"
+    ) or has("apply the requested presentation/style edit")
     storyboard = has("compact visual storyboard") or has("transformation stage detail")
     detailed_stages = has("transformation stage detail")
     visible_state = has("visible-state translation")
@@ -844,10 +861,12 @@ def _compiled_semantic_visual_cues(
     explicit_text = has("readable text is explicitly part")
     owner_request = _compiled_owner_request(lines)
 
-    # Highest priority: one compact cue carries the state change and, when present,
-    # its causal interaction. Compiler v5+ receives concrete stage descriptions;
-    # frozen older compiler prompts are normalized too, so internal stage labels
-    # cannot leak into newly submitted provider prompts.
+    if presentation_change:
+        cues.append(_presentation_change_cue(transition=presentation_transition))
+
+    # Highest priority: one compact cue carries a subject/material state change and,
+    # when present, its causal interaction. Presentation edits are handled separately
+    # above so style words cannot be turned into anatomy or object mutation.
     if transformation and not storyboard and str(kind or "").strip().lower() != "video":
         cues.append(
             _single_scene_transformation_cue(
@@ -999,7 +1018,9 @@ def _bounded_yandex_prompt(
         cue.startswith("Один герой, три стадии")
         or cue.startswith("Три сцены")
         or cue.startswith("Один и тот же главный объект, три стадии")
-        or cue.startswith("Одна сцена, герой один раз")
+        or cue.startswith("Одна сцена, один и тот же главный объект")
+        or cue.startswith("Одна сцена, тот же объект")
+        or cue.startswith("Сохрани объект, сюжет")
         for cue in semantic_cues
     )
     normalized_scene_head = " ".join(str(scene_head or "").split()).strip()
