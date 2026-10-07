@@ -209,7 +209,6 @@ def test_semantic_qa_v2_accepts_full_scene_contract_and_v1_stays_compatible(
                 "люди и здания остаются теми же"
             ),
             "semantic_flags": [
-                "transformation",
                 "presentation_change",
                 "presentation_transition",
             ],
