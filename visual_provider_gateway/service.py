@@ -33,6 +33,9 @@ _SEMANTIC_QA_FLAGS = frozenset(
         "explicit_text",
         "portrait",
         "visible_state",
+        "storyboard",
+        "presentation_change",
+        "presentation_transition",
     }
 )
 
