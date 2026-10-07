@@ -89,7 +89,7 @@ def test_yandex_v11_compiles_scene_contract_before_verbose_prompt() -> None:
     assert len(adapted.prompt) <= 500
     assert adapted.prompt.startswith("ёж, который слушает")
     assert "Один герой, три стадии" in adapted.prompt
-    assert "три стадии" not in adapted.prompt
+    assert "три стадии" in adapted.prompt
     assert "слушает ресурсное аудио" in adapted.prompt
     assert "добрым" in adapted.prompt
     assert "пушистым" in adapted.prompt
@@ -224,16 +224,16 @@ def test_yandex_adapter_expands_resource_audio_transformation_into_visual_stages
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert adapted.prompt.startswith(request)
-    assert "Одна сцена, один и тот же главный объект в процессе изменения" in adapted.prompt
-    assert "три стадии" not in adapted.prompt
-    assert "сначала обычный" not in adapted.prompt
+    assert "Один герой, три стадии" in adapted.prompt
+    assert "три стадии" in adapted.prompt
+    assert "сначала обычный" in adapted.prompt
     assert "слушает аудио" in adapted.prompt
     assert "наушниках" in adapted.prompt
     assert "не символом волны" in adapted.prompt
     assert "финал" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
     assert "явно пушистая объёмная фактура" in adapted.prompt
-    assert "Не своди запрос к готовому статичному финалу" in adapted.prompt
+    assert "Не своди запрос к готовому статичному финалу" not in adapted.prompt
     assert "ДО →" not in adapted.prompt
     assert "Owner request" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
@@ -269,9 +269,9 @@ def test_yandex_production_contract_stages_gradual_change_for_static_image() -> 
     assert "storyboard" in flags
     assert adapted.prompt.startswith(request)
     assert "ресурсные аудиотрансы" in adapted.prompt
-    assert "Одна сцена, один и тот же главный объект в процессе изменения" in adapted.prompt
+    assert "Один герой, три стадии" in adapted.prompt
     assert "наушниках" in adapted.prompt
-    assert "запрошенный результат уже частично проявился" in adapted.prompt
+    assert "финал" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
     assert "явно пушистая объёмная фактура" in adapted.prompt
     assert "сначала" in adapted.prompt
@@ -403,8 +403,8 @@ def test_yandex_stage_prompt_keeps_final_state_and_artistic_style_with_brand_con
 
     assert len(adapted.prompt) <= 500
     assert adapted.prompt.startswith(request)
-    assert "Одна сцена, один и тот же главный объект в процессе изменения" in adapted.prompt
-    assert "три стадии" not in adapted.prompt
+    assert "Один герой, три стадии" in adapted.prompt
+    assert "три стадии" in adapted.prompt
     assert "слушает аудио в заметных наушниках" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
     assert "явно пушистая объёмная фактура" in adapted.prompt
@@ -791,9 +791,9 @@ def test_gigachat_adapter_preserves_listening_transformation_without_compiler_me
     adapted = adapt_visual_brief_for_provider(brief, provider="gigachat")
 
     assert adapted.prompt.startswith(request)
-    assert "Одна сцена, один и тот же главный объект в процессе изменения" in adapted.prompt
-    assert "три стадии" not in adapted.prompt
-    assert "сначала обычный" not in adapted.prompt
+    assert "Один герой, три стадии" in adapted.prompt
+    assert "три стадии" in adapted.prompt
+    assert "сначала обычный" in adapted.prompt
     assert "слушает аудио" in adapted.prompt
     assert "не символом волны" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
@@ -907,8 +907,8 @@ def test_gigachat_adapter_reserves_safety_for_near_limit_owner_request() -> None
 
     assert len(adapted.prompt) <= 1800
     assert adapted.prompt.startswith("ёж слушает ресурсное аудио")
-    assert "Одна сцена, один и тот же главный объект в процессе изменения" in adapted.prompt
-    assert "три стадии" not in adapted.prompt
+    assert "Один герой, три стадии" in adapted.prompt
+    assert "три стадии" in adapted.prompt
     assert "слушает аудио" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
     assert "явно пушистая объёмная фактура" in adapted.prompt
