@@ -1014,9 +1014,16 @@ def _compiled_semantic_visual_cues(
     ):
         cues.append("Причинно-следственная последовательность действий ясно читается.")
 
-    if has("autonomous composition default: use a narrative story-scene"):
+    # Transformation/replacement cues already define the scene and action. Adding
+    # the generic autonomous-composition sentence here duplicates meaning and can
+    # evict selected art direction or mandatory safety from Yandex's 500-char budget.
+    if not transformation and has(
+        "autonomous composition default: use a narrative story-scene"
+    ):
         cues.append("Сюжетная сцена; запрошенное действие — главный фокус.")
-    elif has("autonomous composition default: use a balanced medium"):
+    elif not transformation and has(
+        "autonomous composition default: use a balanced medium"
+    ):
         cues.append("Сбалансированная композиция с одним ясным главным объектом.")
 
     return tuple(dict.fromkeys(cues))
