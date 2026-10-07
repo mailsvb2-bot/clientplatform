@@ -1452,3 +1452,27 @@ def test_physical_transition_plus_static_style_keeps_axes_independent() -> None:
     assert "presentation_transition" not in flags
     assert "Одна сцена, один и тот же главный объект в процессе изменения" in adapted.prompt
     assert "меняется только визуальная подача" not in adapted.prompt
+
+
+def test_explicit_restyle_style_overrides_obsolete_style_words_in_owner_request() -> None:
+    request = "городская улица вечером в стиле акварели"
+    compiled = compile_visual_prompt(
+        request=request,
+        kind="image",
+        style_intent=VisualStyleIntent(realism="photorealistic"),
+        override_owner_style_wording=True,
+    )
+    adapted = adapt_visual_brief_for_provider(
+        CreativeBrief(
+            kind="image",
+            prompt=compiled.prompt,
+            country_code="RU",
+            aspect_ratio="4:5",
+            negative_prompt=compiled.negative_prompt,
+        ),
+        provider="yandexart",
+    )
+
+    assert "Стиль: фотореализм" in adapted.prompt
+    assert "Обязательный стиль пользователя: в стиле акварели" not in adapted.prompt
+    assert len(adapted.prompt) <= 500
