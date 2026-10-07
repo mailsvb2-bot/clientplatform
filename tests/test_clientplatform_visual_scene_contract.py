@@ -360,7 +360,7 @@ def test_presentation_transition_does_not_become_subject_transformation_contract
     flags = semantic_flags_for_request(request)
     contract = fallback_scene_contract(request=request, semantic_flags=flags)
 
-    assert "transformation" in flags
+    assert "transformation" not in flags
     assert "presentation_change" in flags
     assert "presentation_transition" in flags
     assert contract.topology == "static"
