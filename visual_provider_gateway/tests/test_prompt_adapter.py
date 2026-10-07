@@ -87,7 +87,7 @@ def test_yandex_v11_compiles_scene_contract_before_verbose_prompt() -> None:
 
     assert len(adapted.prompt) <= 500
     assert adapted.prompt.startswith("ёж, который слушает")
-    assert "Одна сцена, один герой в процессе изменения" in adapted.prompt
+    assert "Одна сцена, один и тот же главный объект в процессе изменения" in adapted.prompt
     assert "три стадии" not in adapted.prompt
     assert "слушает ресурсное аудио" in adapted.prompt
     assert "добрым" in adapted.prompt
@@ -186,7 +186,7 @@ def test_yandex_adapter_uses_natural_owner_description_without_compiler_meta() -
     assert adapted.prompt.startswith(
         "a prickly hedgehog listens to an audio session and becomes gentle"
     )
-    assert "Одна сцена, один герой в процессе изменения" in adapted.prompt
+    assert "Одна сцена, один и тот же главный объект в процессе изменения" in adapted.prompt
     assert "три стадии" not in adapted.prompt
     assert "ДО →" not in adapted.prompt
     assert "ДЕЙСТВИЕ/ПРИЧИНА" not in adapted.prompt
@@ -223,16 +223,15 @@ def test_yandex_adapter_expands_resource_audio_transformation_into_visual_stages
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert adapted.prompt.startswith(request)
-    assert "Одна сцена, один герой в процессе изменения" in adapted.prompt
+    assert "Одна сцена, один и тот же главный объект в процессе изменения" in adapted.prompt
     assert "три стадии" not in adapted.prompt
     assert "сначала обычный" not in adapted.prompt
     assert "слушает аудио" in adapted.prompt
     assert "наушниках" in adapted.prompt
-    assert "не символом волны" in adapted.prompt
-    assert "мягкий густой мех уже появляется на мордочке, груди и боках" in adapted.prompt
-    assert "рядом ещё видна более жёсткая фактура" in adapted.prompt
-    assert "взгляд и поза становятся доброжелательными и расслабленными" in adapted.prompt
-    assert "Не готовый статичный портрет" in adapted.prompt
+        assert "запрошенный результат уже частично проявился" in adapted.prompt
+    assert "доброжелательный расслабленный взгляд" in adapted.prompt
+    assert "заметно более густой пушистый мех" in adapted.prompt
+    assert "Не своди запрос к готовому статичному финалу" in adapted.prompt
     assert "ДО →" not in adapted.prompt
     assert "Owner request" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
@@ -273,12 +272,12 @@ def test_yandex_production_contract_keeps_one_scene_for_gradual_change() -> None
     assert "storyboard" not in flags
     assert adapted.prompt.startswith(request)
     assert "ресурсные аудиотрансы" in adapted.prompt
-    assert "Одна сцена, один герой в процессе изменения" in adapted.prompt
+    assert "Одна сцена, один и тот же главный объект в процессе изменения" in adapted.prompt
     assert "наушниках" in adapted.prompt
-    assert "мягкий густой мех уже появляется на мордочке, груди и боках" in adapted.prompt
-    assert "рядом ещё видна более жёсткая фактура" in adapted.prompt
-    assert "взгляд и поза становятся доброжелательными и расслабленными" in adapted.prompt
-    assert "Не готовый статичный портрет" in adapted.prompt
+    assert "запрошенный результат уже частично проявился" in adapted.prompt
+    assert "доброжелательный расслабленный взгляд" in adapted.prompt
+    assert "заметно более густой пушистый мех" in adapted.prompt
+    assert "Не своди запрос к готовому статичному финалу" in adapted.prompt
     assert "три стадии" not in adapted.prompt
     assert "visible progressive change" not in adapted.prompt
     assert "исходное состояние" not in adapted.prompt
@@ -286,7 +285,7 @@ def test_yandex_production_contract_keeps_one_scene_for_gradual_change() -> None
     responses = str(adapted.metadata["yandex_responses_input"])
     assert responses.startswith(request)
     assert "три стадии" not in responses
-    assert "Одна сцена, один герой в процессе изменения" in responses
+    assert "Одна сцена, один и тот же главный объект в процессе изменения" in responses
 
 def test_yandex_responses_input_preserves_scene_semantics_without_compiler_meta() -> None:
     request = (
@@ -311,13 +310,13 @@ def test_yandex_responses_input_preserves_scene_semantics_without_compiler_meta(
 
     responses_input = str(adapted.metadata["yandex_responses_input"])
     assert responses_input.startswith(request)
-    assert "Одна сцена, один герой в процессе изменения" in responses_input
+    assert "Одна сцена, один и тот же главный объект в процессе изменения" in responses_input
     assert "три стадии" not in responses_input
     assert "слушает аудио" in responses_input
     assert "наушниках" in responses_input
-    assert "мягкий густой мех уже появляется на мордочке, груди и боках" in responses_input
-    assert "рядом ещё видна более жёсткая фактура" in responses_input
-    assert "взгляд и поза становятся доброжелательными и расслабленными" in responses_input
+    assert "запрошенный результат уже частично проявился" in responses_input
+    assert "доброжелательный расслабленный взгляд" in responses_input
+    assert "заметно более густой пушистый мех" in responses_input
     assert "Owner request" not in responses_input
     assert "mandatory" not in responses_input.casefold()
     assert "BEFORE" not in responses_input
@@ -408,7 +407,7 @@ def test_yandex_stage_prompt_keeps_final_state_and_artistic_style_with_brand_con
 
     assert len(adapted.prompt) <= 500
     assert adapted.prompt.startswith(request)
-    assert "Одна сцена, один герой в процессе изменения" in adapted.prompt
+    assert "Одна сцена, один и тот же главный объект в процессе изменения" in adapted.prompt
     assert "три стадии" not in adapted.prompt
     assert "слушает аудио в заметных наушниках" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
@@ -628,7 +627,7 @@ def test_yandex_adapter_preserves_multiple_selected_styles_with_semantics() -> N
     adapted = adapt_visual_brief_for_provider(brief, provider="yandexart")
 
     assert "явно слушает аудио" in adapted.prompt
-    assert "Одна сцена, один герой в процессе изменения" in adapted.prompt
+    assert "Одна сцена, один и тот же главный объект в процессе изменения" in adapted.prompt
     assert "три стадии" not in adapted.prompt
     assert "ДО →" not in adapted.prompt
     assert "Стиль:" in adapted.prompt
@@ -690,7 +689,7 @@ def test_yandex_adapter_keeps_all_safety_clauses_for_long_owner_request() -> Non
     assert adapted.prompt.startswith(
         "a hedgehog listens to a guided audio wellness session"
     )
-    assert "Одна сцена, один герой в процессе изменения" in adapted.prompt
+    assert "Одна сцена, один и тот же главный объект в процессе изменения" in adapted.prompt
     assert "три стадии" not in adapted.prompt
     assert "явно слушает аудио" in adapted.prompt
     assert "ДО →" not in adapted.prompt
@@ -735,12 +734,11 @@ def test_gigachat_adapter_preserves_listening_transformation_without_compiler_me
     adapted = adapt_visual_brief_for_provider(brief, provider="gigachat")
 
     assert adapted.prompt.startswith(request)
-    assert "Одна сцена, один герой в процессе изменения" in adapted.prompt
+    assert "Одна сцена, один и тот же главный объект в процессе изменения" in adapted.prompt
     assert "три стадии" not in adapted.prompt
     assert "сначала обычный" not in adapted.prompt
     assert "слушает аудио" in adapted.prompt
-    assert "не символом волны" in adapted.prompt
-    assert "доброжелательный расслабленный взгляд" in adapted.prompt
+        assert "доброжелательный расслабленный взгляд" in adapted.prompt
     assert "заметно более густой пушистый мех" in adapted.prompt
     assert "Owner request" not in adapted.prompt
     assert "mandatory" not in adapted.prompt.casefold()
@@ -851,7 +849,7 @@ def test_gigachat_adapter_reserves_safety_for_near_limit_owner_request() -> None
 
     assert len(adapted.prompt) <= 1800
     assert adapted.prompt.startswith("ёж слушает ресурсное аудио")
-    assert "Одна сцена, один герой в процессе изменения" in adapted.prompt
+    assert "Одна сцена, один и тот же главный объект в процессе изменения" in adapted.prompt
     assert "три стадии" not in adapted.prompt
     assert "слушает аудио" in adapted.prompt
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
@@ -1073,7 +1071,7 @@ def test_engine_applies_meaning_adapter_to_gigachat_fallback(monkeypatch) -> Non
     assert prompt.startswith(
         "a prickly hedgehog listens to an audio session and becomes gentle"
     )
-    assert "Одна сцена, один герой в процессе изменения" in prompt
+    assert "Одна сцена, один и тот же главный объект в процессе изменения" in prompt
     assert "три стадии" not in prompt
     assert "ДО →" not in prompt
     assert "ДЕЙСТВИЕ/ПРИЧИНА" not in prompt
@@ -1111,7 +1109,7 @@ def test_yandex_adapter_prioritizes_owner_request_before_style_and_brand_context
     assert adapted.prompt.startswith(
         "a prickly hedgehog listens to an audio session and becomes gentle"
     )
-    assert "Одна сцена, один герой в процессе изменения" in adapted.prompt
+    assert "Одна сцена, один и тот же главный объект в процессе изменения" in adapted.prompt
     assert "три стадии" not in adapted.prompt
     assert "ДО →" not in adapted.prompt
     assert "Example brand context" not in adapted.prompt
@@ -1205,3 +1203,131 @@ def test_yandex_responses_receives_full_selected_art_direction() -> None:
     assert "warm practical light that gradually increases from left to right" in responses_input
     assert "avoid decorative clutter" in responses_input
     assert "symbolic wave graphics" in responses_input
+
+
+def test_generic_state_transformation_is_not_hardcoded_to_any_subject() -> None:
+    request = (
+        "зелёный лист постепенно становится сухим и ломким, "
+        "края скручиваются"
+    )
+    compiled = compile_visual_prompt(request=request, kind="image")
+    adapted = adapt_visual_brief_for_provider(
+        CreativeBrief(
+            kind="image",
+            prompt=compiled.prompt,
+            country_code="RU",
+            aspect_ratio="4:5",
+            negative_prompt=compiled.negative_prompt,
+        ),
+        provider="yandexart",
+    )
+
+    assert "transformation" in compiled.semantic_flags
+    assert adapted.prompt.startswith(request)
+    assert "Одна сцена, один и тот же главный объект в процессе изменения" in adapted.prompt
+    assert "сам переход виден на объекте, материале, фактуре, форме, позе" in adapted.prompt
+    assert "Не своди запрос к готовому статичному финалу" in adapted.prompt
+    assert "ёж" not in adapted.prompt.casefold()
+    assert "мех" not in adapted.prompt.casefold()
+    assert "наушник" not in adapted.prompt.casefold()
+    assert len(adapted.prompt) <= 500
+
+
+def test_presentation_edit_changes_rendering_not_subject_physics() -> None:
+    request = (
+        "Сделай городскую улицу в стиле акварели, "
+        "сохрани людей, здания и композицию"
+    )
+    flags = semantic_flags_for_request(request)
+    contract = fallback_scene_contract(request=request, semantic_flags=flags)
+    compiled = compile_visual_prompt(
+        request=request,
+        kind="image",
+        scene_contract=contract,
+    )
+    adapted = adapt_visual_brief_for_provider(
+        CreativeBrief(
+            kind="image",
+            prompt=compiled.prompt,
+            country_code="RU",
+            aspect_ratio="4:5",
+            negative_prompt=compiled.negative_prompt,
+            scene_contract=contract.to_mapping(),
+        ),
+        provider="yandexart",
+    )
+
+    assert "presentation_change" in flags
+    assert "transformation" not in flags
+    assert contract.topology == "static"
+    assert adapted.prompt.startswith(request)
+    assert "Сохрани объект, сюжет, геометрию и действия" in adapted.prompt
+    assert "измени только запрошенную визуальную подачу" in adapted.prompt
+    assert "Без физической мутации" in adapted.prompt
+    assert "главный объект в процессе изменения" not in adapted.prompt
+    assert len(adapted.prompt) <= 500
+
+
+def test_presentation_transition_keeps_scene_identity_without_physical_mutation() -> None:
+    request = (
+        "Изображение городской улицы постепенно становится акварельным, "
+        "архитектура и люди остаются теми же"
+    )
+    flags = semantic_flags_for_request(request)
+    contract = fallback_scene_contract(request=request, semantic_flags=flags)
+    compiled = compile_visual_prompt(
+        request=request,
+        kind="image",
+        scene_contract=contract,
+    )
+    adapted = adapt_visual_brief_for_provider(
+        CreativeBrief(
+            kind="image",
+            prompt=compiled.prompt,
+            country_code="RU",
+            aspect_ratio="4:5",
+            negative_prompt=compiled.negative_prompt,
+            scene_contract=contract.to_mapping(),
+        ),
+        provider="yandexart",
+    )
+
+    assert "presentation_change" in flags
+    assert "presentation_transition" in flags
+    assert "transformation" in flags
+    assert contract.topology == "static"
+    assert adapted.prompt.startswith(request)
+    assert "Одна сцена, тот же объект и тот же сюжет" in adapted.prompt
+    assert "меняется только визуальная подача" in adapted.prompt
+    assert "не превращай его в физическую мутацию объекта" in adapted.prompt
+    assert "главный объект в процессе изменения" not in adapted.prompt
+    assert len(adapted.prompt) <= 500
+
+
+def test_subject_change_and_selected_rendering_style_are_independent_axes() -> None:
+    request = "каменная статуя постепенно становится мягкой и гибкой"
+    compiled = compile_visual_prompt(
+        request=request,
+        kind="image",
+        style_intent=VisualStyleIntent(
+            realism="illustrative",
+            quick_styles="warm_friendly",
+        ),
+    )
+    adapted = adapt_visual_brief_for_provider(
+        CreativeBrief(
+            kind="image",
+            prompt=compiled.prompt,
+            country_code="RU",
+            aspect_ratio="4:5",
+            negative_prompt=compiled.negative_prompt,
+        ),
+        provider="yandexart",
+    )
+
+    assert "transformation" in compiled.semantic_flags
+    assert "presentation_change" not in compiled.semantic_flags
+    assert "Одна сцена, один и тот же главный объект в процессе изменения" in adapted.prompt
+    assert "мяг" in adapted.prompt.casefold()
+    assert "художественный" in adapted.prompt or "тёплый" in adapted.prompt
+    assert len(adapted.prompt) <= 500
