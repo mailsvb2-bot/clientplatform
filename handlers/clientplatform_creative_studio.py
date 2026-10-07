@@ -1359,6 +1359,12 @@ async def save_current_visual_style(callback: CallbackQuery, state: FSMContext) 
     if not _style_session_matches(data, token):
         await callback.answer("Эта настройка уже устарела", show_alert=True)
         return
+    if _style_only_scene_locked(data):
+        await callback.answer(
+            "При смене стиля постановка зафиксирована и не меняется",
+            show_alert=True,
+        )
+        return
     try:
         actor = await control._actor(
             int(callback.from_user.id),
@@ -1524,6 +1530,12 @@ async def pick_scene_variant(callback: CallbackQuery, state: FSMContext) -> None
     if not _style_session_matches(data, token):
         await callback.answer("Эта настройка уже устарела", show_alert=True)
         return
+    if _style_only_scene_locked(data):
+        await callback.answer(
+            "При смене стиля постановка зафиксирована и не меняется",
+            show_alert=True,
+        )
+        return
     try:
         selected = _variant_by_id(_scene_variants_from_state(data), variant_id)
     except (TypeError, ValueError):
@@ -1553,6 +1565,12 @@ async def ask_scene_variant_supplement(
     if not _style_session_matches(data, token):
         await callback.answer("Эта настройка уже устарела", show_alert=True)
         return
+    if _style_only_scene_locked(data):
+        await callback.answer(
+            "При смене стиля постановка зафиксирована и не меняется",
+            show_alert=True,
+        )
+        return
     try:
         variant = _variant_by_id(_scene_variants_from_state(data), variant_id)
     except (TypeError, ValueError):
@@ -1581,6 +1599,13 @@ async def receive_scene_variant_supplement(
 ) -> None:
     data = await state.get_data()
     token = str(data.get("creative_business_token") or "").strip()
+    if _style_only_scene_locked(data):
+        await state.set_state(ClientPlatformCreativeStudioState.choosing_style)
+        await message.answer(
+            "При смене стиля постановка зафиксирована и не меняется. "
+            "Можно изменить только параметры визуальной подачи."
+        )
+        return
     try:
         variant_id = str(data["creative_scene_selected_variant_id"])
         variants = list(_scene_variants_from_state(data))
