@@ -1296,7 +1296,7 @@ def test_presentation_transition_keeps_scene_identity_without_physical_mutation(
 
     assert "presentation_change" in flags
     assert "presentation_transition" in flags
-    assert "transformation" in flags
+    assert "transformation" not in flags
     assert contract.topology == "static"
     assert adapted.prompt.startswith(request)
     assert "Одна сцена, тот же объект и тот же сюжет" in adapted.prompt
@@ -1402,3 +1402,53 @@ def test_single_scene_transformation_keeps_explicit_initial_evidence() -> None:
     assert "доброжелательный расслабленный взгляд" in adapted.prompt
     assert "часть исходных признаков ещё видна" not in adapted.prompt
     assert len(adapted.prompt) <= 500
+
+
+def test_style_transition_with_state_adjective_never_emits_physical_change_cue() -> None:
+    request = "The image of a sad dog gradually becomes watercolor"
+    flags = semantic_flags_for_request(request)
+    contract = fallback_scene_contract(request=request, semantic_flags=flags)
+    compiled = compile_visual_prompt(
+        request=request,
+        kind="image",
+        scene_contract=contract,
+    )
+    adapted = adapt_visual_brief_for_provider(
+        CreativeBrief(
+            kind="image",
+            prompt=compiled.prompt,
+            country_code="RU",
+            aspect_ratio="4:5",
+            negative_prompt=compiled.negative_prompt,
+            scene_contract=contract.to_mapping(),
+        ),
+        provider="yandexart",
+    )
+
+    assert "presentation_transition" in flags
+    assert "transformation" not in flags
+    assert contract.topology == "static"
+    assert "Одна сцена, тот же объект и тот же сюжет" in adapted.prompt
+    assert "главный объект в процессе изменения" not in adapted.prompt
+
+
+def test_physical_transition_plus_static_style_keeps_axes_independent() -> None:
+    request = "A sad cat gradually becomes happy, render it in watercolor style"
+    flags = semantic_flags_for_request(request)
+    compiled = compile_visual_prompt(request=request, kind="image")
+    adapted = adapt_visual_brief_for_provider(
+        CreativeBrief(
+            kind="image",
+            prompt=compiled.prompt,
+            country_code="RU",
+            aspect_ratio="4:5",
+            negative_prompt=compiled.negative_prompt,
+        ),
+        provider="yandexart",
+    )
+
+    assert "transformation" in flags
+    assert "presentation_change" in flags
+    assert "presentation_transition" not in flags
+    assert "Одна сцена, один и тот же главный объект в процессе изменения" in adapted.prompt
+    assert "меняется только визуальная подача" not in adapted.prompt
