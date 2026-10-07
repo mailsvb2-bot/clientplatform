@@ -118,6 +118,7 @@ def freeze_business_visual_payload(
     scene_contract: VisualSceneContract | None = None,
     scene_planner_source: str = "",
     scene_variant: VisualSceneVariant | None = None,
+    override_owner_style_wording: bool = False,
 ) -> str:
     """Freeze the exact versioned image/video brief before owner paid consent."""
 
@@ -151,6 +152,7 @@ def freeze_business_visual_payload(
         style_intent=resolved_style,
         scene_contract=scene_contract,
         scene_direction=("" if scene_variant is None else scene_variant.direction),
+        override_owner_style_wording=override_owner_style_wording,
     )
     semantic_qa = build_visual_semantic_qa_contract(
         request=owner_request,
@@ -207,6 +209,7 @@ def freeze_business_image_payload(
     scene_contract: VisualSceneContract | None = None,
     scene_planner_source: str = "",
     scene_variant: VisualSceneVariant | None = None,
+    override_owner_style_wording: bool = False,
 ) -> str:
     return freeze_business_visual_payload(
         request=request,
@@ -218,6 +221,7 @@ def freeze_business_image_payload(
         scene_contract=scene_contract,
         scene_planner_source=scene_planner_source,
         scene_variant=scene_variant,
+        override_owner_style_wording=override_owner_style_wording,
     )
 
 
@@ -231,6 +235,7 @@ def freeze_business_video_payload(
     scene_contract: VisualSceneContract | None = None,
     scene_planner_source: str = "",
     scene_variant: VisualSceneVariant | None = None,
+    override_owner_style_wording: bool = False,
 ) -> str:
     return freeze_business_visual_payload(
         request=request,
@@ -242,6 +247,7 @@ def freeze_business_video_payload(
         scene_contract=scene_contract,
         scene_planner_source=scene_planner_source,
         scene_variant=scene_variant,
+        override_owner_style_wording=override_owner_style_wording,
     )
 
 
@@ -371,6 +377,37 @@ def frozen_business_visual_style(value: str) -> VisualStyleIntent | None:
     return VisualStyleIntent.from_mapping(style)
 
 
+def frozen_business_visual_scene(
+    value: str,
+) -> tuple[VisualSceneContract, str, VisualSceneVariant | None] | None:
+    """Return the exact frozen scene used by a v4 visual receipt.
+
+    Restyling must not silently become replanning: the original scene contract and
+    selected presentation direction are immutable content, while style is the only
+    axis the owner asked to change.
+    """
+
+    _load_frozen_business_visual_payload(value)
+    raw = json.loads(str(value or ""))
+    if int(raw.get("version") or 0) < 4:
+        return None
+    brief = raw.get("brief")
+    intent = raw.get("intent")
+    if not isinstance(brief, dict) or not isinstance(intent, dict):
+        raise ValueError("frozen business visual scene is invalid")
+    contract = VisualSceneContract.from_mapping(brief.get("scene_contract"))
+    source = str(intent.get("scene_planner_source") or "").strip().lower()
+    if source not in {"ai", "deterministic"}:
+        raise ValueError("frozen business visual scene planner is invalid")
+    raw_variant = intent.get("scene_variant")
+    variant = (
+        None
+        if raw_variant is None
+        else VisualSceneVariant.from_mapping(raw_variant)
+    )
+    return contract, source, variant
+
+
 def frozen_business_visual_semantic_qa(
     value: str,
 ) -> VisualSemanticQAContract | None:
@@ -429,6 +466,7 @@ def build_business_visual_brief(
     style_intent: VisualStyleIntent | None = None,
     scene_contract: VisualSceneContract | None = None,
     scene_direction: str = "",
+    override_owner_style_wording: bool = False,
 ) -> VisualCreativeBrief:
     owner_request = normalize_business_image_request(request)
     visual_kind = str(kind or "").strip().lower()
@@ -442,6 +480,7 @@ def build_business_visual_brief(
         style_intent=style_intent,
         scene_contract=scene_contract,
         scene_direction=scene_direction,
+        override_owner_style_wording=override_owner_style_wording,
     )
     return VisualCreativeBrief(
         kind=visual_kind,
@@ -862,6 +901,7 @@ __all__ = [
     "freeze_business_video_payload",
     "frozen_business_visual_kind",
     "frozen_business_visual_binding",
+    "frozen_business_visual_scene",
     "frozen_business_visual_style",
     "normalize_business_image_request",
     "build_ad_visual_brief",

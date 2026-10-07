@@ -199,6 +199,54 @@ def test_semantic_qa_v2_accepts_full_scene_contract_and_v1_stays_compatible(
     assert v2["version"] == 2
     assert v2["scene_contract"] == scene
 
+    presentation = svc._semantic_qa_contract(
+        {
+            "version": 2,
+            "kind": "image",
+            "country_code": "RU",
+            "owner_request": (
+                "Изображение улицы постепенно становится акварельным, "
+                "люди и здания остаются теми же"
+            ),
+            "semantic_flags": [
+                "presentation_change",
+                "presentation_transition",
+            ],
+            "scene_contract": {
+                "version": 1,
+                "topology": "static",
+                "primary_subject": "улица",
+                "initial_state": [],
+                "actions": [],
+                "cause": "",
+                "transition": [],
+                "final_state": [],
+                "explicit_text": [],
+                "required_evidence": [
+                    "visual presentation transition readable within the same scene"
+                ],
+                "forbidden": [
+                    "physical mutation caused only by presentation or style wording"
+                ],
+            },
+        }
+    )
+    assert presentation["semantic_flags"][-2:] == [
+        "presentation_change",
+        "presentation_transition",
+    ]
+
+    storyboard = svc._semantic_qa_contract(
+        {
+            "version": 1,
+            "kind": "image",
+            "country_code": "RU",
+            "owner_request": "коллаж до и после",
+            "semantic_flags": ["transformation", "storyboard"],
+        }
+    )
+    assert storyboard["semantic_flags"] == ["transformation", "storyboard"]
+
     v1 = svc._semantic_qa_contract(
         {
             "version": 1,

@@ -1163,7 +1163,7 @@ class GigaChatImageProvider:
                 if str(item or "").strip()
             )
         )
-        if len(flags) > 16:
+        if len(flags) > 17:
             raise ValueError("semantic_qa_flags_invalid")
         try:
             size = image_path.stat().st_size
@@ -1249,10 +1249,27 @@ class GigaChatImageProvider:
             criteria.append(
                 "Видно ли запрошенное действие, а не только статичный объект или портрет."
             )
-        if "transformation" in flag_set:
+        presentation_only = (
+            "presentation_change" in flag_set
+            and "transformation" not in flag_set
+            and "object_replacement" not in flag_set
+        )
+        if "transformation" in flag_set and not presentation_only:
             criteria.append(
-                "Видна ли трансформация одного и того же субъекта: "
-                "исходное состояние, причина/действие и результат."
+                "Видно ли именно изменение одного и того же субъекта или материала, "
+                "а не только статичный готовый результат; запрошенные изменяемые "
+                "признаки должны читаться визуально."
+            )
+        if "presentation_change" in flag_set:
+            criteria.append(
+                "Соответствует ли визуальная подача именно запрошенному пользователем "
+                "стилю, палитре, свету, фону, композиции или иному параметру, при этом "
+                "объекты, сюжет и фактическое содержание не должны самовольно меняться."
+            )
+        if "presentation_transition" in flag_set:
+            criteria.append(
+                "Читается ли переход именно визуальной подачи внутри изображения, "
+                "если он был запрошен, без физической мутации и без подмены объектов."
             )
         if "visible_state" in flag_set:
             criteria.append(

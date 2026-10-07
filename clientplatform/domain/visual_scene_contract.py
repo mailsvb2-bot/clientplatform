@@ -123,9 +123,14 @@ class VisualSceneContract:
 
 def _topology(flags: tuple[str, ...]) -> str:
     values = set(flags)
+    presentation_only = (
+        "presentation_change" in values
+        and "transformation" not in values
+        and "object_replacement" not in values
+    )
     if "object_replacement" in values:
         return "replacement"
-    if "transformation" in values:
+    if "transformation" in values and not presentation_only:
         return "transformation"
     if "comparison" in values:
         return "comparison"
@@ -144,6 +149,31 @@ def _topology(flags: tuple[str, ...]) -> str:
     ):
         return "action"
     return "static"
+
+
+def _prioritized_required_evidence(
+    evidence: list[str],
+) -> tuple[str, ...]:
+    """Keep the bounded contract while preserving the highest-value semantics."""
+
+    unique = list(dict.fromkeys(evidence))
+    priority = (
+        "requested presentation or style change visibly applied",
+        "subject and scene content preserved across presentation change",
+        "visual presentation transition readable within the same scene",
+        "subject shown once in one coherent scene",
+        "same subject identity across stages",
+        "requested changed qualities visibly readable",
+        "requested final state visibly different",
+        "causal action visible together with the changed qualities",
+        "causal action connected to change",
+        "same environment across replacement",
+        "replacement action or before/after relation visible",
+        "requested chronology visible",
+    )
+    ordered = [item for item in priority if item in unique]
+    ordered.extend(item for item in unique if item not in ordered)
+    return tuple(ordered[:_MAX_ITEMS])
 
 
 def fallback_scene_contract(
@@ -183,7 +213,25 @@ def fallback_scene_contract(
     if "eating_or_drinking" in flags:
         actions.append("eating or drinking")
         evidence.append("requested consumption action visible")
-    if "transformation" in flags:
+    subject_transformation = "transformation" in flags
+    if "presentation_change" in flags:
+        evidence.extend(
+            [
+                "requested presentation or style change visibly applied",
+                "subject and scene content preserved across presentation change",
+            ]
+        )
+        forbidden.append(
+            "physical mutation caused only by presentation or style wording"
+        )
+        if "presentation_transition" in flags:
+            evidence.append(
+                "visual presentation transition readable within the same scene"
+            )
+            forbidden.append(
+                "duplicate main subject unless explicitly requested"
+            )
+    if subject_transformation:
         transition.append("visible progressive change")
         if "storyboard" in flags:
             evidence.extend(
@@ -229,8 +277,8 @@ def fallback_scene_contract(
         forbidden = [item for item in forbidden if item != "unrequested readable text"]
         forbidden.append("readable text other than owner-requested wording")
 
-    # Conservative subject anchor: when the request is shaped like
-    # "ёж, который ...", keep the exact owner-authored noun phrase before the
+    # Conservative subject anchor: when the request uses a relative/action clause,
+    # keep the exact owner-authored noun phrase before the
     # relative/action clause instead of letting a provider see only generic "hero".
     # No new noun is invented; if no safe boundary exists we keep the bounded request.
     subject = owner[:160].rstrip(" ,;:.")
@@ -253,7 +301,7 @@ def fallback_scene_contract(
         transition=tuple(transition),
         final_state=(),
         explicit_text=(),
-        required_evidence=tuple(dict.fromkeys(evidence)),
+        required_evidence=_prioritized_required_evidence(evidence),
         forbidden=tuple(dict.fromkeys(forbidden)),
     )
 

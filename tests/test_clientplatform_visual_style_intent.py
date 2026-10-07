@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from clientplatform.application import visual_creatives
+from clientplatform.domain.creative_generation import MAX_CREATIVE_GENERATION_PROVIDER_PAYLOAD_CHARS
 from clientplatform.domain.visual_prompt_compiler import compile_visual_prompt
 from clientplatform.domain.visual_style_intent import (
     VisualStyleIntent,
@@ -211,7 +212,10 @@ class VisualStyleIntentTests(unittest.TestCase):
             ),
         )
 
-        self.assertLessEqual(len(payload), 10000)
+        self.assertLessEqual(
+            len(payload),
+            MAX_CREATIVE_GENERATION_PROVIDER_PAYLOAD_CHARS,
+        )
 
     def test_frozen_payload_with_legacy_style_schema_stays_loadable(self) -> None:
         current = json.loads(

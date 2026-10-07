@@ -223,12 +223,78 @@ def test_gigachat_semantic_qa_is_non_generative_and_cleans_uploaded_file(
     payload = chat_payloads[0]
     assert payload["function_call"] == "none"
     assert payload["messages"][0]["attachments"] == ["qa-file-1"]
-    assert "Ничего не генерируй" in payload["messages"][0]["content"]
-    assert sum(call["url"].endswith("/files") for call in transport_calls) == 1
+    subject_prompt = payload["messages"][0]["content"]
+    assert "Ничего не генерируй" in subject_prompt
+    assert "изменение одного и того же субъекта или материала" in subject_prompt
+
+    presentation_result = provider.review_image_semantics(
+        image_path=image_path,
+        owner_request=(
+            "Изображение улицы постепенно становится акварельным, "
+            "люди и здания остаются теми же"
+        ),
+        semantic_flags=(
+            "presentation_change",
+            "presentation_transition",
+        ),
+        scene_contract={
+            "version": 1,
+            "topology": "static",
+            "primary_subject": "улица",
+            "initial_state": [],
+            "actions": [],
+            "cause": "",
+            "transition": [],
+            "final_state": [],
+            "explicit_text": [],
+            "required_evidence": [
+                "visual presentation transition readable within the same scene"
+            ],
+            "forbidden": [
+                "physical mutation caused only by presentation or style wording"
+            ],
+        },
+    )
+    assert presentation_result["status"] == "needs_review"
+    assert len(chat_payloads) == 2
+    presentation_prompt = chat_payloads[1]["messages"][0]["content"]
+    assert "визуальная подача именно запрошенному пользователем" in presentation_prompt
+    assert "переход именно визуальной подачи" in presentation_prompt
+    assert "физической мутации" in presentation_prompt
+    assert "изменение одного и того же субъекта или материала" not in presentation_prompt
+
+    supported_flags = (
+        "transformation",
+        "object_replacement",
+        "sequence",
+        "listening",
+        "watching",
+        "reading",
+        "using",
+        "holding",
+        "eating_or_drinking",
+        "generic_action",
+        "comparison",
+        "explicit_text",
+        "portrait",
+        "visible_state",
+        "storyboard",
+        "presentation_change",
+        "presentation_transition",
+    )
+    rich_result = provider.review_image_semantics(
+        image_path=image_path,
+        owner_request="сложный визуальный запрос",
+        semantic_flags=supported_flags,
+    )
+    assert rich_result["status"] == "needs_review"
+    assert len(chat_payloads) == 3
+
+    assert sum(call["url"].endswith("/files") for call in transport_calls) == 3
     assert sum(
         call["url"].endswith("/files/qa-file-1/delete")
         for call in transport_calls
-    ) == 1
+    ) == 3
 
 
 def test_selfhosted_forwards_operator_selected_model(monkeypatch):

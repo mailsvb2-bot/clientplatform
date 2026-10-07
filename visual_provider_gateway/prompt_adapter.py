@@ -13,7 +13,7 @@ import re
 from .models import CreativeBrief
 
 
-PROMPT_ADAPTER_VERSION = 13
+PROMPT_ADAPTER_VERSION = 14
 
 _RUNWAY_PROMPT_LIMIT = 1000
 _YANDEX_PROMPT_LIMIT = 500
@@ -155,12 +155,12 @@ def _yandex_safety_parts(brief: CreativeBrief) -> tuple[str, ...]:
     natural = _natural_safety_parts(brief)
     joined = " ".join(natural)
     clauses: list[str] = []
+    if "названия бренда/услуг/методов" in joined.casefold():
+        clauses.append("Названия бренда/услуг не печатать без явного запроса.")
     if "только явно запрошенный текст" in joined.casefold():
         clauses.append("Только запрошенный текст; без других надписей.")
     elif "Без читаемого текста" in joined:
         clauses.append("Без читаемого текста/UI.")
-    if "названия бренда/услуг/методов" in joined.casefold():
-        clauses.append("Названия бренда/услуг не печатать без явного запроса.")
     if "Без водяных знаков" in joined and "Без выдуманных логотипов" in joined:
         clauses.append("Без водяных знаков. Без выдуманных логотипов.")
     elif "Без водяных знаков" in joined:
@@ -465,6 +465,24 @@ def _compiled_style_cues(lines: tuple[str, ...]) -> tuple[str, ...]:
     return ("Стиль: " + "; ".join(dict.fromkeys(selected)) + ".",)
 
 
+_OWNER_STYLE_FRAGMENT_RE = re.compile(
+    r"(?:"
+    r"\bв\s+стиле\s+[^,.;!?]{1,90}|"
+    r"\bстил\w*(?:\s+изображен\w*)?\s*(?:[:—-]|на)\s*[^,.;!?]{1,90}|"
+    r"\bin\s+(?:the\s+)?style\s+of\s+[^,.;!?]{1,90}|"
+    r"\bstyle\s*[:—-]\s*[^,.;!?]{1,90}"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _owner_style_fragment(owner_request: str) -> str:
+    match = _OWNER_STYLE_FRAGMENT_RE.search(str(owner_request or ""))
+    if not match:
+        return ""
+    return " ".join(match.group(0).split()).strip()[:120]
+
+
 _TRANSFORMATION_BECOMES_RE = re.compile(
     r"(?:\bстанов\w*|\bпревращ\w*\s+в\b|\bbecomes?\b|"
     r"\bturns?\s+into\b|\btransforms?\s+into\b)\s+"
@@ -511,17 +529,17 @@ _STATE_CONNECTOR_RE = re.compile(
 
 _COMPACT_EXPLICIT_STAGE_EVIDENCE = {
     "доброжелательный расслабленный взгляд": "доброжелательный взгляд",
-    "заметно более густой пушистый мех": "густой пушистый мех",
+    "явно пушистая объёмная фактура": "пушистая объёмная фактура",
     "напряжённая закрытая поза": "напряжённая поза",
     "настороженный взгляд": "настороженный взгляд",
     "расслабленная поза": "расслабленная поза",
-    "иглы или фактура заметно смягчаются": "иглы/фактура смягчаются",
+    "фактура или форма заметно смягчается": "фактура/форма смягчается",
     "спокойный расслабленный взгляд": "спокойный взгляд",
     "напряжённый взгляд и жёсткая поза": "сердитый взгляд, жёсткая поза",
     "тревожный взгляд и заметное напряжение тела": "тревожный взгляд, напряжённая поза",
     "радостное выражение, открытая поза": "радостный взгляд, открытая поза",
     "опущенный взгляд и сдержанная закрытая поза": "опущенный взгляд, закрытая поза",
-    "явно колючая жёсткая фактура или иглы": "жёсткие колючие иглы",
+    "явно колючая жёсткая фактура": "колючая жёсткая фактура",
     "фактура визуально мягче": "фактура мягче",
 }
 
@@ -545,11 +563,11 @@ _STATE_EVIDENCE_RULES = (
     ),
     (
         re.compile(r"(?:\bсмягч\w*|\bsoften\w*)", re.IGNORECASE),
-        "иглы или фактура заметно смягчаются",
+        "фактура или форма заметно смягчается",
     ),
     (
         re.compile(r"(?:\bпушист\w*|\bfluffy\b)", re.IGNORECASE),
-        "заметно более густой пушистый мех",
+        "явно пушистая объёмная фактура",
     ),
     (
         re.compile(r"(?:\bмягк\w*|\bsoft\b)", re.IGNORECASE),
@@ -577,7 +595,7 @@ _STATE_EVIDENCE_RULES = (
     ),
     (
         re.compile(r"(?:\bколюч\w*|\bprickly\b)", re.IGNORECASE),
-        "явно колючая жёсткая фактура или иглы",
+        "явно колючая жёсткая фактура",
     ),
     (
         re.compile(r"(?:\bгрязн\w*|\bdirty\b)", re.IGNORECASE),
@@ -585,7 +603,7 @@ _STATE_EVIDENCE_RULES = (
     ),
     (
         re.compile(r"(?:\bчист\w*|\bclean\b)", re.IGNORECASE),
-        "явно чистая поверхность или шерсть",
+        "явно чистая поверхность или внешний вид",
     ),
     (
         re.compile(r"(?:\bблестящ\w*|\bshiny\b)", re.IGNORECASE),
@@ -740,6 +758,20 @@ def _detailed_transformation_stage_cue(
         initial_evidence, final_evidence = parsed
         middle_evidence = ()
 
+    if explicit_stages is not None:
+        if len(middle_evidence) > 2 and "расслабленная поза" in middle_evidence:
+            middle_evidence = tuple(
+                item for item in middle_evidence if item != "расслабленная поза"
+            )[:2]
+        else:
+            middle_evidence = middle_evidence[:2]
+        if len(final_evidence) > 2 and "расслабленная поза" in final_evidence:
+            final_evidence = tuple(
+                item for item in final_evidence if item != "расслабленная поза"
+            )[:2]
+        else:
+            final_evidence = final_evidence[:2]
+
     opening = ", ".join(initial_evidence) if initial_evidence else "обычный"
     if listening:
         middle = "слушает аудио в заметных наушниках"
@@ -747,7 +779,6 @@ def _detailed_transformation_stage_cue(
             middle += ", не символом волны"
         if middle_evidence:
             middle += ", " + ", ".join(middle_evidence)
-        middle += ", и меняется"
     else:
         middle = (
             ", ".join(middle_evidence)
@@ -776,29 +807,57 @@ def _single_scene_transformation_cue(
     *,
     listening: bool,
 ) -> str:
-    """Describe a state change as one picture, not three copies of the subject."""
+    """Keep arbitrary requested change visibly in-progress inside one subject."""
 
     parsed = _parsed_transformation_evidence(owner_request) if owner_request else None
     initial: tuple[str, ...] = ()
     final: tuple[str, ...] = ()
     if parsed is not None:
         initial, final = parsed
-    details: list[str] = []
+
+    details: list[str] = [
+        "Одна сцена, один и тот же главный объект в процессе изменения"
+    ]
     if listening:
-        details.append("явно слушает аудио в заметных наушниках, не символом волны")
+        details.append(
+            "явно слушает аудио в заметных наушниках, не символом волны"
+        )
+
     if initial and final:
-        details.append("от " + ", ".join(initial) + " к " + ", ".join(final))
+        details.append(
+            "исходные признаки ещё частично видны: "
+            + ", ".join(initial)
+            + "; уже проявляются: "
+            + ", ".join(final)
+        )
     elif final:
-        details.append(", ".join(final))
-    if details:
+        details.append(
+            "запрошенный результат уже частично проявился: "
+            + ", ".join(final)
+        )
+    else:
+        details.append(
+            "сам переход виден на объекте, материале, фактуре, форме, позе"
+        )
+
+    return (
+        "; ".join(details)
+        + ". Не своди запрос к готовому статичному финалу."
+    )
+
+
+def _presentation_change_cue(*, transition: bool) -> str:
+    if transition:
         return (
-            "Одна сцена, герой один раз: "
-            + "; ".join(details)
-            + ". Без повторов, панелей и триптиха."
+            "Одна сцена, тот же объект и тот же сюжет: меняется только визуальная "
+            "подача. Переход запрошенного стиля, палитры, света, фона или другого "
+            "параметра виден внутри композиции; не превращай его в физическую "
+            "мутацию объекта и не дублируй объект."
         )
     return (
-        "Одна сцена, герой один раз: действие и запрошенное изменение видны вместе. "
-        "Без повторов, панелей и триптиха."
+        "Сохрани объект, сюжет, геометрию и действия; измени только запрошенную "
+        "визуальную подачу — стиль, палитру, фон, свет, композицию или иной указанный "
+        "параметр. Без физической мутации и без до/после, если пользователь этого не просил."
     )
 
 
@@ -823,17 +882,35 @@ def _compiled_semantic_visual_cues(
     transformation = has("the transformation is mandatory") or has(
         "the transformation is a mandatory"
     )
+    presentation_transition = has(
+        "the requested change is a visual-presentation transition"
+    )
+    presentation_change = presentation_transition or has(
+        "the owner is editing visual presentation"
+    ) or has("apply the requested presentation/style edit")
     storyboard = has("compact visual storyboard") or has("transformation stage detail")
     detailed_stages = has("transformation stage detail")
     visible_state = has("visible-state translation")
     listening = has("if the subject is listening")
     explicit_text = has("readable text is explicitly part")
     owner_request = _compiled_owner_request(lines)
+    resolved_style_overrides_owner = has(
+        "style precedence: resolved style snapshot overrides owner-authored style wording"
+    )
+    owner_style = (
+        ""
+        if resolved_style_overrides_owner
+        else _owner_style_fragment(owner_request)
+    )
 
-    # Highest priority: one compact cue carries the state change and, when present,
-    # its causal interaction. Compiler v5+ receives concrete stage descriptions;
-    # frozen older compiler prompts are normalized too, so internal stage labels
-    # cannot leak into newly submitted provider prompts.
+    if presentation_change:
+        cues.append(_presentation_change_cue(transition=presentation_transition))
+    if owner_style:
+        cues.append("Обязательный стиль пользователя: " + owner_style + ".")
+
+    # Highest priority: one compact cue carries a subject/material state change and,
+    # when present, its causal interaction. Presentation edits are handled separately
+    # above so style words cannot be turned into anatomy or object mutation.
     if transformation and not storyboard and str(kind or "").strip().lower() != "video":
         cues.append(
             _single_scene_transformation_cue(
@@ -937,9 +1014,16 @@ def _compiled_semantic_visual_cues(
     ):
         cues.append("Причинно-следственная последовательность действий ясно читается.")
 
-    if has("autonomous composition default: use a narrative story-scene"):
+    # Transformation/replacement cues already define the scene and action. Adding
+    # the generic autonomous-composition sentence here duplicates meaning and can
+    # evict selected art direction or mandatory safety from Yandex's 500-char budget.
+    if not transformation and has(
+        "autonomous composition default: use a narrative story-scene"
+    ):
         cues.append("Сюжетная сцена; запрошенное действие — главный фокус.")
-    elif has("autonomous composition default: use a balanced medium"):
+    elif not transformation and has(
+        "autonomous composition default: use a balanced medium"
+    ):
         cues.append("Сбалансированная композиция с одним ясным главным объектом.")
 
     return tuple(dict.fromkeys(cues))
@@ -977,6 +1061,7 @@ def _bounded_yandex_prompt(
     style_cues: tuple[str, ...],
     brief: CreativeBrief,
     extras: tuple[str, ...] = (),
+    prioritize_safety: bool = False,
 ) -> str:
     """Preserve owner meaning and style first under Alice's hard 500-char limit."""
 
@@ -985,31 +1070,73 @@ def _bounded_yandex_prompt(
         cue.startswith("Один герой, три стадии")
         or cue.startswith("Три сцены")
         or cue.startswith("Один и тот же главный объект, три стадии")
-        or cue.startswith("Одна сцена, герой один раз")
+        or cue.startswith("Одна сцена, один и тот же главный объект")
+        or cue.startswith("Одна сцена, тот же объект")
+        or cue.startswith("Сохрани объект, сюжет")
+        or cue.startswith("Обязательный стиль пользователя")
         for cue in semantic_cues
     )
     normalized_scene_head = " ".join(str(scene_head or "").split()).strip()
 
     if stage_priority and len(normalized_scene_head) <= 200:
-        # A short owner sentence is the scene. Do not spend the 500-character
-        # budget on cue/safety reserves and then clip "становится добрым".
-        style_block = _bounded_join(list(style_cues), limit=125)
-        safety_reserve = _bounded_join(list(safety), limit=160)
-        fixed = (
-            len(style_block)
-            + len(safety_reserve)
-            + (1 if style_block else 0)
-            + (1 if safety_reserve else 0)
-        )
         bounded_scene_head = normalized_scene_head
-        semantic_limit = max(
+        if prioritize_safety:
+            # Motion keyframes have hard framing/lettering/logo constraints that
+            # must survive the provider's 500-character ceiling. Reserve the full
+            # compact safety block first, then preserve as much transformation
+            # evidence as fits; style is a best-effort tail.
+            safety_block = _bounded_join(list(safety), limit=180)
+            fixed = (
+                len(bounded_scene_head)
+                + len(safety_block)
+                + (1 if bounded_scene_head and safety_block else 0)
+            )
+            semantic_budget = max(
+                80,
+                _YANDEX_PROMPT_LIMIT - fixed - (1 if semantic_cues else 0),
+            )
+            bounded_semantics = _bounded_join(
+                list(semantic_cues),
+                limit=semantic_budget,
+            )
+            core = [
+                part
+                for part in (bounded_scene_head, bounded_semantics, safety_block)
+                if part
+            ]
+            used = sum(len(part) for part in core) + max(0, len(core) - 1)
+            remaining = max(
+                0,
+                _YANDEX_PROMPT_LIMIT - used - (1 if style_cues else 0),
+            )
+            style_block = _bounded_join(list(style_cues), limit=remaining)
+            return _bounded_join(
+                [*core, style_block, *extras],
+                limit=_YANDEX_PROMPT_LIMIT,
+            )
+
+        # A short owner sentence is the scene. Preserve the complete semantic
+        # contract before optional presentation/safety detail so the provider never
+        # receives a truncated transformation with a missing final state.
+        semantic_budget = max(
             80,
-            _YANDEX_PROMPT_LIMIT - len(bounded_scene_head) - fixed - 1,
+            _YANDEX_PROMPT_LIMIT - len(bounded_scene_head) - 1,
         )
-        bounded_semantics = _bounded_join(list(semantic_cues), limit=semantic_limit)
-        core = [part for part in (bounded_scene_head, bounded_semantics, style_block) if part]
+        bounded_semantics = _bounded_join(
+            list(semantic_cues),
+            limit=semantic_budget,
+        )
+        style_block = _bounded_join(list(style_cues), limit=125)
+        core = [
+            part
+            for part in (bounded_scene_head, bounded_semantics, style_block)
+            if part
+        ]
         used = sum(len(part) for part in core) + max(0, len(core) - 1)
-        remaining = max(0, _YANDEX_PROMPT_LIMIT - used - (1 if safety else 0))
+        remaining = max(
+            0,
+            _YANDEX_PROMPT_LIMIT - used - (1 if safety else 0),
+        )
         safety_block = _bounded_join(list(safety), limit=remaining)
         return _bounded_join(
             [*core, safety_block, *extras],
@@ -1039,8 +1166,8 @@ def _bounded_yandex_prompt(
             bounded_scene_head = normalized_scene_head
         else:
             # _bounded_join intentionally refuses tiny fragments. Here even a
-            # short natural subject anchor is semantically valuable (for example
-            # keeping "ёж" instead of leaving only generic "one hero" cues).
+            # short natural subject anchor is semantically valuable instead of
+            # leaving only generic "one hero" cues.
             bounded_scene_head = (
                 normalized_scene_head[:scene_limit]
                 .rsplit(" ", 1)[0]
@@ -1157,8 +1284,8 @@ def _adapt_yandex(brief: CreativeBrief) -> CreativeBrief:
             "Покажи именно событие замены, сохрани то же окружение. " + owner_request
         )
     else:
-        # The owner's sentence is the scene. A contract subject such as "Ёж"
-        # must not replace it: Alice then draws a generic portrait and ignores
+        # The owner's sentence is the scene. A shortened contract subject must
+        # not replace it: the provider may otherwise draw a generic portrait and ignore
         # the action and the change.
         scene_head = owner_request
     prompt = _bounded_yandex_prompt(
@@ -1189,12 +1316,16 @@ def _adapt_yandex_motion(brief: CreativeBrief) -> CreativeBrief:
             "Ключевой кадр для короткого вертикального видео: "
             + " ".join(str(brief.prompt or "").split())
         )
+    # For motion keyframes, semantic continuity and hard production safety
+    # (readable-text, watermark/logo and safe-area framing constraints) outrank
+    # decorative style when Alice's 500-character budget is tight.
     prompt = _bounded_yandex_prompt(
         scene_head=scene,
         semantic_cues=semantic_cues,
         style_cues=style_cues,
         brief=brief,
         extras=tuple(extras),
+        prioritize_safety=True,
     )
     return replace(brief, prompt=prompt)
 

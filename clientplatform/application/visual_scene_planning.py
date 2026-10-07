@@ -94,7 +94,18 @@ def grounded_scene_contract_from_mapping(
         return None
     # Deterministic classification wins for high-information event shapes. The AI
     # may refine only a static fallback, never erase transformation/replacement/etc.
-    if base.topology != "static" and topology != base.topology:
+    # Presentation/style edits are not physical subject transformations; keep their
+    # deterministic scene topology even if the planner is tempted by words like
+    # "change", "becomes" or "style transition".
+    flag_set = set(semantic_flags)
+    presentation_only = (
+        "presentation_change" in flag_set
+        and "transformation" not in flag_set
+        and "object_replacement" not in flag_set
+    )
+    if presentation_only:
+        topology = base.topology
+    elif base.topology != "static" and topology != base.topology:
         topology = base.topology
 
     subject = _grounded_text(owner_request, value.get("primary_subject"), limit=160)
@@ -212,7 +223,10 @@ def plan_visual_scene_contract(
         "request as an exact contiguous span; use empty string/list when the request "
         "does not explicitly state it. Never add synonyms, objects, emotions, claims, "
         "brand names or visual details. topology must be one of: static, action, "
-        "transformation, sequence, comparison, replacement. primary_subject is the "
+        "transformation, sequence, comparison, replacement. A request that changes "
+        "only rendering style, palette, lighting, background or other presentation "
+        "is NOT a physical transformation of the subject; preserve the deterministic "
+        "semantic topology for such edits. primary_subject is the "
         "short exact phrase naming the main subject. initial_state/final_state are "
         "only explicitly stated states. actions are explicit actions. cause is the "
         "explicit causal action/source when stated. transition is explicit change "

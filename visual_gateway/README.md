@@ -10,6 +10,7 @@ Authenticated endpoints:
 - `GET /v1/capabilities`
 - `POST /v1/creative/generations` (quota-guarded provider-gateway delegation)
 - `GET /v1/creative/generations/{id}` and `/content`
+- `POST /v1/creative/generations/{id}/semantic-qa` (one advisory semantic review of a completed image; no media regeneration)
 - `GET /v1/providers`, `GET /v1/usage`
 - `POST /v1/creative/render-packs`
 - `GET /v1/creative/render-packs/{id}`

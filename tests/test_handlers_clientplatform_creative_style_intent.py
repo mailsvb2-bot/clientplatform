@@ -713,6 +713,11 @@ def test_restyle_result_reopens_same_idea_and_covers_errors(monkeypatch) -> None
         "frozen_business_visual_style",
         lambda _payload: visual_style_preset("warm_friendly"),
     )
+    monkeypatch.setattr(
+        studio,
+        "frozen_business_visual_scene",
+        lambda _payload: None,
+    )
     monkeypatch.setattr(studio, "_receipt_kind", lambda _receipt: "video")
     monkeypatch.setattr(studio.control, "_callback_message", lambda _callback: target)
 
@@ -831,3 +836,66 @@ def test_creative_safety_delegates_outside_style_state_and_is_idempotent() -> No
 
 if __name__ == "__main__":
     raise SystemExit("run with pytest")
+
+
+def test_visual_language_choice_overrides_conflicting_owner_style_wording(monkeypatch) -> None:
+    target = _message()
+    state = FakeState(
+        _style_state(
+            creative_pending_prompt="городская улица вечером в стиле акварели"
+        )
+    )
+    monkeypatch.setattr(studio.control, "_callback_message", lambda _callback: target)
+
+    callback = _callback("cpc:st:s:r:p:business-token", target)
+    asyncio.run(studio.set_visual_style_dimension(callback, state))
+
+    assert state.data["creative_style_intent"]["realism"] == "photorealistic"
+    assert state.data["creative_override_owner_style_wording"] is True
+
+
+def test_non_medium_style_choice_keeps_owner_authored_medium_authoritative(monkeypatch) -> None:
+    target = _message()
+    state = FakeState(
+        _style_state(
+            creative_pending_prompt="городская улица вечером в стиле акварели"
+        )
+    )
+    monkeypatch.setattr(studio.control, "_callback_message", lambda _callback: target)
+
+    callback = _callback("cpc:st:s:t:w:business-token", target)
+    asyncio.run(studio.set_visual_style_dimension(callback, state))
+
+    assert state.data["creative_style_intent"]["color_temperature"] == "warm"
+    assert state.data["creative_override_owner_style_wording"] is False
+
+
+def test_photo_quick_style_overrides_conflicting_owner_medium(monkeypatch) -> None:
+    target = _message()
+    state = FakeState(
+        _style_state(
+            creative_pending_prompt="городская улица вечером в стиле акварели"
+        )
+    )
+    monkeypatch.setattr(studio.control, "_callback_message", lambda _callback: target)
+
+    callback = _callback("cpc:st:p:np:business-token", target)
+    asyncio.run(studio.choose_visual_style_preset(callback, state))
+
+    assert state.data["creative_override_owner_style_wording"] is True
+
+
+def test_style_reset_restores_owner_authored_medium_precedence(monkeypatch) -> None:
+    target = _message()
+    state = FakeState(
+        _style_state(
+            creative_pending_prompt="городская улица вечером в стиле акварели",
+            creative_override_owner_style_wording=True,
+        )
+    )
+    monkeypatch.setattr(studio.control, "_callback_message", lambda _callback: target)
+
+    callback = _callback("cpc:st:reset:business-token", target)
+    asyncio.run(studio.reset_visual_style(callback, state))
+
+    assert state.data["creative_override_owner_style_wording"] is False

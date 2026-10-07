@@ -238,6 +238,46 @@ def _safe_direction_for_composition(
     return mapping[composition]
 
 
+def style_only_restyle_variant(
+    contract: VisualSceneContract,
+    variant: VisualSceneVariant | None,
+) -> VisualSceneVariant | None:
+    """Preserve staging while removing old presentation/style instructions."""
+
+    if variant is None:
+        return None
+    neutral_direction = {
+        "clear_story": (
+            "Preserve the same subject placement, relationships and immediate semantic "
+            "readability. Do not prescribe lighting, palette, atmosphere or rendering style."
+        ),
+        "cinematic": (
+            "Preserve the same camera framing, spatial depth and subject relationships. "
+            "Do not prescribe lighting, palette, atmosphere or rendering style."
+        ),
+        "editorial": (
+            "Preserve the same visual hierarchy, subject placement and controlled layout. "
+            "Do not prescribe lighting, palette, atmosphere or rendering style."
+        ),
+        "focused": (
+            "Preserve the same tight focus, subject prominence and semantic relationships. "
+            "Do not prescribe lighting, palette, atmosphere or rendering style."
+        ),
+        "sequential": (
+            "Preserve the same requested sequence or visual-flow layout and subject identity. "
+            "Do not prescribe lighting, palette, atmosphere or rendering style."
+        ),
+    }[variant.composition]
+    return replace(
+        variant,
+        direction=(
+            neutral_direction
+            + " Every requirement in the immutable scene contract remains mandatory."
+        ),
+        user_supplement="",
+    )
+
+
 def _fallback_variant_copy(
     *,
     contract: VisualSceneContract,
@@ -785,6 +825,7 @@ __all__ = [
     "freeze_visual_scene_bundle",
     "load_visual_scene_bundle",
     "recommended_scene_variant",
+    "style_only_restyle_variant",
     "supplement_scene_variant",
     "visual_scene_ai_planning_available",
 ]
