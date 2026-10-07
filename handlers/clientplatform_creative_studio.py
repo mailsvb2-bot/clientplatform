@@ -1109,6 +1109,7 @@ async def _prepare_styled_generation(
             scene_contract=scene_contract,
             scene_planner_source=planner_source,
             scene_variant=selected_scene_variant,
+            override_owner_style_wording=_style_only_scene_locked(data),
         )
         receipt = await asyncio.to_thread(
             prepare_creative_generation,
