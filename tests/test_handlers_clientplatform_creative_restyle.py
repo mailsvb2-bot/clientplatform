@@ -224,3 +224,46 @@ def test_stale_scene_callback_is_blocked_during_style_only_restyle(monkeypatch) 
         show_alert=True,
     )
     assert ensure.await_count == 0
+
+
+def test_style_only_restyle_blocks_saved_style_and_scene_mutation_callbacks(monkeypatch) -> None:
+    state = _State(_locked_style_data())
+    blocked = (
+        (studio.save_current_visual_style, "cpc:st:save:business-token"),
+        (studio.clear_current_visual_style, "cpc:st:clear:business-token"),
+        (studio.show_scene_variants, "cpc:sv:show:business-token"),
+        (studio.pick_scene_variant, "cpc:sv:pick:v2:business-token"),
+        (studio.ask_scene_variant_supplement, "cpc:sv:add:v2:business-token"),
+    )
+
+    monkeypatch.setattr(
+        studio,
+        "_ensure_scene_variants",
+        AsyncMock(side_effect=AssertionError("locked restyle must not replan scene")),
+    )
+    for handler, callback_data in blocked:
+        callback = SimpleNamespace(
+            data=callback_data,
+            answer=AsyncMock(),
+            from_user=SimpleNamespace(id=101),
+        )
+        asyncio.run(handler(callback, state))
+        callback.answer.assert_awaited_once_with(
+            "При смене стиля постановка зафиксирована и не меняется",
+            show_alert=True,
+        )
+
+
+def test_style_only_restyle_rejects_pending_scene_supplement_message() -> None:
+    state = _State(_locked_style_data())
+    message = SimpleNamespace(answer=AsyncMock())
+
+    asyncio.run(studio.receive_scene_variant_supplement(message, state))
+
+    state.set_state.assert_awaited_once_with(
+        studio.ClientPlatformCreativeStudioState.choosing_style
+    )
+    message.answer.assert_awaited_once()
+    assert "Можно изменить только параметры визуальной подачи" in (
+        message.answer.await_args.args[0]
+    )
