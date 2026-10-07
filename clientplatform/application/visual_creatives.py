@@ -9,6 +9,7 @@ from clientplatform.domain.visual_prompt_compiler import (
     VisualSemanticQAContract,
     build_visual_semantic_qa_contract,
     compile_visual_prompt,
+    image_semantic_flags_for_request,
     semantic_flags_for_request,
 )
 from clientplatform.domain.visual_scene_contract import (
@@ -43,8 +44,8 @@ class VisualCreativeError(RuntimeError):
 
 _BUSINESS_IMAGE_BRIEF_VERSION = 4
 _SUPPORTED_BUSINESS_IMAGE_BRIEF_VERSIONS = frozenset({1, 2, 3, 4})
-_PROMPT_COMPILER_VERSION = 6
-_SUPPORTED_PROMPT_COMPILER_VERSIONS = frozenset({2, 3, 4, 5, 6})
+_PROMPT_COMPILER_VERSION = 7
+_SUPPORTED_PROMPT_COMPILER_VERSIONS = frozenset({2, 3, 4, 5, 6, 7})
 _BUSINESS_IMAGE_WAIT_SECONDS = 20
 _FROZEN_BRIEF_KEYS_LEGACY = frozenset(
     {
@@ -127,7 +128,11 @@ def freeze_business_visual_payload(
         selected=style_intent,
     )
     owner_request = normalize_business_image_request(request)
-    semantic_flags = semantic_flags_for_request(owner_request)
+    semantic_flags = (
+        image_semantic_flags_for_request(owner_request)
+        if str(kind or "").strip().lower() == "image"
+        else semantic_flags_for_request(owner_request)
+    )
     if scene_contract is None:
         scene_contract = fallback_scene_contract(
             request=owner_request,
