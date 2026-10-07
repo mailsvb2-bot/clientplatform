@@ -60,6 +60,7 @@ from clientplatform.application.visual_creatives import (
     freeze_business_video_payload,
     frozen_business_visual_binding,
     frozen_business_visual_kind,
+    frozen_business_visual_scene,
     frozen_business_visual_semantic_qa,
     frozen_business_visual_style,
     materialize_ad_visual,
@@ -895,6 +896,33 @@ def _style_session_matches(data: dict, token: str) -> bool:
     )
 
 
+def _style_only_scene_locked(data: dict) -> bool:
+    return bool(
+        data.get("creative_style_only")
+        and isinstance(data.get("creative_locked_scene_contract"), dict)
+        and str(data.get("creative_locked_scene_planner_source") or "").strip().lower()
+        in {"ai", "deterministic"}
+    )
+
+
+def _style_rows_for_session(
+    rows: list[list[tuple[str, str]]],
+    data: dict,
+) -> list[list[tuple[str, str]]]:
+    if not _style_only_scene_locked(data):
+        return rows
+    filtered: list[list[tuple[str, str]]] = []
+    for row in rows:
+        kept = [
+            button
+            for button in row
+            if not str(button[1]).startswith("cpc:sv:")
+        ]
+        if kept:
+            filtered.append(kept)
+    return filtered
+
+
 async def _replace_or_answer(
     target: Message,
     text: str,
@@ -921,14 +949,21 @@ async def _show_style_dashboard(target: Message, data: dict, token: str) -> None
         for item in data.get("creative_style_inferred_fields") or ()
         if str(item)
     )
+    text = style_dashboard_text(
+        style,
+        request_inferred_fields=inferred,
+        saved_applied=bool(data.get("creative_saved_style_applied")),
+    )
+    if _style_only_scene_locked(data):
+        text += (
+            "\n\n🔒 Режим смены стиля: исходная постановка, объекты, действия и "
+            "смысл сцены зафиксированы. Меняется только визуальная подача."
+        )
+    rows = _style_rows_for_session(style_dashboard_rows(token, style), data)
     await _replace_or_answer(
         target,
-        style_dashboard_text(
-            style,
-            request_inferred_fields=inferred,
-            saved_applied=bool(data.get("creative_saved_style_applied")),
-        ),
-        reply_markup=control._keyboard(style_dashboard_rows(token, style)),
+        text,
+        reply_markup=control._keyboard(rows),
     )
 
 
@@ -1027,16 +1062,32 @@ async def _prepare_styled_generation(
         style = _style_intent_from_state(data)
         actor = await control._actor(int(user_id), business_id)
         actor.assert_can_manage_promotions()
-        scene_contract, planner_source, scene_variants = await _ensure_scene_variants(
-            state,
-            data,
-            actor=actor,
-        )
-        selected_scene_variant = (
-            scene_variant
-            if scene_variant is not None
-            else recommended_scene_variant(scene_variants)
-        )
+        if _style_only_scene_locked(data):
+            if scene_variant is not None:
+                raise ValueError("style-only restyle cannot change scene variant")
+            scene_contract = VisualSceneContract.from_mapping(
+                data.get("creative_locked_scene_contract")
+            )
+            planner_source = str(
+                data.get("creative_locked_scene_planner_source") or ""
+            ).strip().lower()
+            raw_variant = data.get("creative_locked_scene_variant")
+            selected_scene_variant = (
+                None
+                if raw_variant is None
+                else VisualSceneVariant.from_mapping(raw_variant)
+            )
+        else:
+            scene_contract, planner_source, scene_variants = await _ensure_scene_variants(
+                state,
+                data,
+                actor=actor,
+            )
+            selected_scene_variant = (
+                scene_variant
+                if scene_variant is not None
+                else recommended_scene_variant(scene_variants)
+            )
         freezer = (
             freeze_business_video_payload
             if kind == "video"
@@ -1240,7 +1291,12 @@ async def open_visual_style_dimension(callback: CallbackQuery, state: FSMContext
     await _replace_or_answer(
         control._callback_message(callback),
         f"🎨 {dimension.title}\n\nВыберите вариант. Текущий отмечен галочкой:",
-        reply_markup=control._keyboard(style_dimension_rows(token, code, style)),
+        reply_markup=control._keyboard(
+            _style_rows_for_session(
+                style_dimension_rows(token, code, style),
+                data,
+            )
+        ),
     )
 
 
@@ -1269,7 +1325,10 @@ async def set_visual_style_dimension(callback: CallbackQuery, state: FSMContext)
         control._callback_message(callback),
         f"🎨 {dimension.title}\n\nВыберите вариант. Текущий отмечен галочкой:",
         reply_markup=control._keyboard(
-            style_dimension_rows(token, dimension_code, style)
+            _style_rows_for_session(
+                style_dimension_rows(token, dimension_code, style),
+                data,
+            )
         ),
     )
 
@@ -1397,6 +1456,12 @@ async def show_scene_variants(callback: CallbackQuery, state: FSMContext) -> Non
     data = await state.get_data()
     if not _style_session_matches(data, token):
         await callback.answer("Эта настройка уже устарела", show_alert=True)
+        return
+    if _style_only_scene_locked(data):
+        await callback.answer(
+            "При смене стиля постановка зафиксирована и не меняется",
+            show_alert=True,
+        )
         return
     await callback.answer("Готовлю варианты постановки…")
     await _show_scene_variant_choices(
@@ -1560,7 +1625,11 @@ async def confirm_visual_style(callback: CallbackQuery, state: FSMContext) -> No
     if not _style_session_matches(data, token):
         await callback.answer("Эта настройка уже устарела", show_alert=True)
         return
-    await callback.answer("ClientPlatform выбирает лучший вариант…")
+    await callback.answer(
+        "Сохраняю постановку и меняю только стиль…"
+        if _style_only_scene_locked(data)
+        else "ClientPlatform выбирает лучший вариант…"
+    )
     await _prepare_styled_generation(
         control._callback_message(callback),
         state,
@@ -2159,6 +2228,7 @@ async def restyle_creative_result(callback: CallbackQuery, state: FSMContext) ->
         actor = await _actor_for_callback(callback, token)
         receipt = await _receipt_for_callback(actor, receipt_token)
         frozen_style = frozen_business_visual_style(receipt.provider_payload_json)
+        frozen_scene = frozen_business_visual_scene(receipt.provider_payload_json)
         style = resolve_visual_style_intent(
             request=receipt.request_text,
             selected=frozen_style,
@@ -2171,19 +2241,30 @@ async def restyle_creative_result(callback: CallbackQuery, state: FSMContext) ->
         await callback.answer("Этот результат уже недоступен", show_alert=True)
         return
 
-    await state.set_data(
-        {
-            "creative_business_id": actor.business_id,
-            "creative_business_token": token,
-            "creative_kind": _receipt_kind(receipt),
-            "creative_pending_prompt": receipt.request_text,
-            "creative_brand_context": receipt.brand_context,
-            "creative_country_code": receipt.country_code,
-            "creative_style_intent": style.to_mapping(),
-            "creative_saved_style_applied": False,
-            "creative_style_inferred_fields": list(inference.explicit_fields),
-        }
-    )
+    state_data = {
+        "creative_business_id": actor.business_id,
+        "creative_business_token": token,
+        "creative_kind": _receipt_kind(receipt),
+        "creative_pending_prompt": receipt.request_text,
+        "creative_brand_context": receipt.brand_context,
+        "creative_country_code": receipt.country_code,
+        "creative_style_intent": style.to_mapping(),
+        "creative_saved_style_applied": False,
+        "creative_style_inferred_fields": list(inference.explicit_fields),
+        "creative_style_only": frozen_scene is not None,
+    }
+    if frozen_scene is not None:
+        contract, planner_source, variant = frozen_scene
+        state_data.update(
+            {
+                "creative_locked_scene_contract": contract.to_mapping(),
+                "creative_locked_scene_planner_source": planner_source,
+                "creative_locked_scene_variant": (
+                    None if variant is None else variant.to_mapping()
+                ),
+            }
+        )
+    await state.set_data(state_data)
     await state.set_state(ClientPlatformCreativeStudioState.choosing_style)
     await callback.answer("Меняем только визуальный стиль")
     await _show_style_dashboard(control._callback_message(callback), await state.get_data(), token)
