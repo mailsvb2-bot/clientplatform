@@ -713,6 +713,11 @@ def test_restyle_result_reopens_same_idea_and_covers_errors(monkeypatch) -> None
         "frozen_business_visual_style",
         lambda _payload: visual_style_preset("warm_friendly"),
     )
+    monkeypatch.setattr(
+        studio,
+        "frozen_business_visual_scene",
+        lambda _payload: None,
+    )
     monkeypatch.setattr(studio, "_receipt_kind", lambda _receipt: "video")
     monkeypatch.setattr(studio.control, "_callback_message", lambda _callback: target)
 
