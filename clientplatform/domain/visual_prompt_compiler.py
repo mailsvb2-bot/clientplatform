@@ -145,8 +145,12 @@ def _span_is_presentation_change(
     end: int,
     presentation_spans: tuple[tuple[int, int], ...],
 ) -> bool:
+    del end
+    # A transformation token governed by a presentation noun ("style turns into",
+    # "palette changes from ... to ...") starts inside the presentation span even
+    # when its connector/target extends beyond the noun regex match.
     return any(
-        start >= left and end <= right
+        left <= start < right
         for left, right in presentation_spans
     )
 
