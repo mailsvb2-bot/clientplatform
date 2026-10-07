@@ -44,6 +44,7 @@ from clientplatform.application.visual_scene_variants import (
     freeze_visual_scene_bundle,
     load_visual_scene_bundle,
     recommended_scene_variant,
+    style_only_restyle_variant,
     supplement_scene_variant,
     visual_scene_ai_planning_available,
 )
@@ -1080,10 +1081,13 @@ async def _prepare_styled_generation(
                 data.get("creative_locked_scene_planner_source") or ""
             ).strip().lower()
             raw_variant = data.get("creative_locked_scene_variant")
-            selected_scene_variant = (
-                None
-                if raw_variant is None
-                else VisualSceneVariant.from_mapping(raw_variant)
+            selected_scene_variant = style_only_restyle_variant(
+                scene_contract,
+                (
+                    None
+                    if raw_variant is None
+                    else VisualSceneVariant.from_mapping(raw_variant)
+                ),
             )
         else:
             scene_contract, planner_source, scene_variants = await _ensure_scene_variants(
