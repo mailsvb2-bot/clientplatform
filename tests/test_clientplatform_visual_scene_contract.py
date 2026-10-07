@@ -335,3 +335,48 @@ def test_ai_variant_direction_cannot_override_semantic_contract() -> None:
     assert all("sports car" not in item.direction.casefold() for item in variants)
     assert all("different animal" not in item.direction.casefold() for item in variants)
     assert "primary subject" in variants[0].direction.casefold()
+
+
+def test_presentation_edit_keeps_static_scene_contract() -> None:
+    request = "Поменяй стиль изображения на акварельный, сохрани сцену"
+    flags = semantic_flags_for_request(request)
+    contract = fallback_scene_contract(request=request, semantic_flags=flags)
+
+    assert "presentation_change" in flags
+    assert contract.topology == "static"
+    assert "requested presentation or style change visibly applied" in contract.required_evidence
+    assert "subject and scene content preserved across presentation change" in contract.required_evidence
+    assert (
+        "physical mutation caused only by presentation or style wording"
+        in contract.forbidden
+    )
+
+
+def test_presentation_transition_does_not_become_subject_transformation_contract() -> None:
+    request = (
+        "Изображение комнаты постепенно становится акварельным, "
+        "мебель и геометрия остаются прежними"
+    )
+    flags = semantic_flags_for_request(request)
+    contract = fallback_scene_contract(request=request, semantic_flags=flags)
+
+    assert "transformation" in flags
+    assert "presentation_change" in flags
+    assert "presentation_transition" in flags
+    assert contract.topology == "static"
+    assert "visual presentation transition readable within the same scene" in contract.required_evidence
+    assert "visible progressive change" not in contract.transition
+
+
+def test_subject_state_change_stays_transformation_even_with_style_edit() -> None:
+    request = (
+        "злой кот становится добрым, "
+        "а стиль изображения меняется на акварельный"
+    )
+    flags = semantic_flags_for_request(request)
+    contract = fallback_scene_contract(request=request, semantic_flags=flags)
+
+    assert "visible_state" in flags
+    assert "presentation_change" in flags
+    assert contract.topology == "transformation"
+    assert "visible progressive change" in contract.transition
