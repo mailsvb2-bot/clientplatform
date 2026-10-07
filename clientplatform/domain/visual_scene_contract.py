@@ -123,9 +123,14 @@ class VisualSceneContract:
 
 def _topology(flags: tuple[str, ...]) -> str:
     values = set(flags)
+    presentation_only = (
+        "presentation_change" in values
+        and "visible_state" not in values
+        and "object_replacement" not in values
+    )
     if "object_replacement" in values:
         return "replacement"
-    if "transformation" in values:
+    if "transformation" in values and not presentation_only:
         return "transformation"
     if "comparison" in values:
         return "comparison"
@@ -183,7 +188,32 @@ def fallback_scene_contract(
     if "eating_or_drinking" in flags:
         actions.append("eating or drinking")
         evidence.append("requested consumption action visible")
-    if "transformation" in flags:
+    subject_transformation = (
+        "transformation" in flags
+        and not (
+            "presentation_change" in flags
+            and "visible_state" not in flags
+            and "object_replacement" not in flags
+        )
+    )
+    if "presentation_change" in flags:
+        evidence.extend(
+            [
+                "requested presentation or style change visibly applied",
+                "subject and scene content preserved across presentation change",
+            ]
+        )
+        forbidden.append(
+            "physical mutation caused only by presentation or style wording"
+        )
+        if "presentation_transition" in flags:
+            evidence.append(
+                "visual presentation transition readable within the same scene"
+            )
+            forbidden.append(
+                "duplicate main subject unless explicitly requested"
+            )
+    if subject_transformation:
         transition.append("visible progressive change")
         if "storyboard" in flags:
             evidence.extend(
