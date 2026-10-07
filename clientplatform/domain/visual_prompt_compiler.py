@@ -63,25 +63,25 @@ _ABSTRACT_REPLACEMENT_TARGET_RE = re.compile(
 _PRESENTATION_CHANGE_RE = re.compile(
     r"(?:"
     r"\b(?:поменя|смен|измен|замен|перерис|стилиз|сдела|примен)\w*\b"
-    r"[^.!?;]{0,120}\b(?:стил|палитр|фон|освещен|контраст|композици|"
+    r"[^.!?;,]{0,120}\b(?:стил|палитр|фон|освещен|контраст|композици|"
     r"ракурс|атмосфер|рисовк|визуальн\w*\s+подач)\w*|"
-    r"\b(?:сдела|перерис|стилиз)\w*\b[^.!?;]{0,120}\bв\s+стиле\b|"
+    r"\b(?:сдела|перерис|стилиз)\w*\b[^.!?;,]{0,120}\bв\s+стиле\b|"
     r"\b(?:change|switch|replace|restyle|redraw|stylize|render|make)\w*\b"
-    r"[^.!?;]{0,120}\b(?:style|palette|background|lighting|contrast|"
+    r"[^.!?;,]{0,120}\b(?:style|palette|background|lighting|contrast|"
     r"composition|camera\s+angle|mood|tone|rendering)\b|"
     r"\b(?:style|palette|background|lighting|contrast|composition|mood|tone|rendering)\b"
-    r"[^.!?;]{0,80}\b(?:changes?|becomes?|transitions?|switches?)\b"
+    r"[^.!?;,]{0,80}\b(?:changes?|becomes?|transitions?|switches?)\b"
     r")",
     re.IGNORECASE,
 )
 _PRESENTATION_MEDIA_TRANSFORMATION_RE = re.compile(
     r"(?:"
-    r"\b(?:изображен|картинк|визуал)\w*\b[^.!?;]{0,80}"
-    r"\b(?:станов|превращ|меня|переход)\w*\b[^.!?;]{0,80}"
+    r"\b(?:изображен|картинк|визуал)\w*\b[^.!?;,]{0,80}"
+    r"\b(?:станов|превращ|меня|переход)\w*\b[^.!?;,]{0,80}"
     r"\b(?:акварел|масля\w*\s+живопис|карандаш|скетч|комикс|аниме|"
     r"фотореал|иллюстрац|вектор|пиксел|3d)\w*|"
-    r"\b(?:image|picture|visual)\b[^.!?;]{0,80}"
-    r"\b(?:becomes?|turns?|changes?|transitions?)\b[^.!?;]{0,80}"
+    r"\b(?:image|picture|visual)\b[^.!?;,]{0,80}"
+    r"\b(?:becomes?|turns?|changes?|transitions?)\b[^.!?;,]{0,80}"
     r"\b(?:watercolor|oil\s+painting|pencil|sketch|comic|anime|"
     r"photoreal|illustration|vector|pixel\s+art|3d)\b"
     r")",
