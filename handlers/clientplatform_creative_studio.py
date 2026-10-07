@@ -1613,6 +1613,19 @@ async def _finish_visual(
                     output_dir=directory,
                 )
             binding = frozen_business_visual_binding(receipt.provider_payload_json)
+            semantic_qa = None
+            semantic_warning = ""
+            if str(getattr(job, "kind", "") or "") == "image":
+                try:
+                    semantic_qa = await asyncio.to_thread(
+                        review_business_image_semantics_from_frozen_payload,
+                        provider_payload_json=receipt.provider_payload_json,
+                        job=job,
+                    )
+                except (VisualCreativeError, TypeError, ValueError):
+                    semantic_qa = None
+                semantic_warning = _semantic_qa_warning(semantic_qa)
+
             claimed = await asyncio.to_thread(
                 claim_creative_generation_delivery,
                 actor=actor,
@@ -1650,7 +1663,13 @@ async def _finish_visual(
                         supports_streaming=True,
                     )
                 else:
-                    await target.answer_photo(FSInputFile(path), caption="✅ Картинка готова")
+                    image_caption = (
+                        "⚠️ Картинка сгенерирована, но автопроверка смысла просит "
+                        "проверить соответствие исходному запросу."
+                        if semantic_warning
+                        else "✅ Картинка готова"
+                    )
+                    await target.answer_photo(FSInputFile(path), caption=image_caption)
             except TelegramAPIError:
                 await target.answer(
                     "⚠️ Telegram не дал однозначного подтверждения доставки. "
@@ -1702,27 +1721,17 @@ async def _finish_visual(
         actor=actor,
         receipt_id=receipt.id,
     )
-    if str(getattr(job, "kind", "") or "") == "image":
+    if str(getattr(job, "kind", "") or "") == "image" and semantic_warning:
         try:
-            qa = await asyncio.to_thread(
-                review_business_image_semantics_from_frozen_payload,
-                provider_payload_json=receipt.provider_payload_json,
-                job=job,
+            await target.answer(semantic_warning)
+        except TelegramAPIError:
+            # The image is already delivered and marked delivered. A secondary
+            # advisory warning must never turn that success into an ambiguous
+            # delivery or invite an automatic rerender.
+            logger.debug(
+                "Could not deliver semantic QA advisory after image delivery",
+                exc_info=True,
             )
-        except (VisualCreativeError, TypeError, ValueError):
-            qa = None
-        warning = _semantic_qa_warning(qa)
-        if warning:
-            try:
-                await target.answer(warning)
-            except TelegramAPIError:
-                # The image is already delivered and marked delivered. A secondary
-                # advisory warning must never turn that success into an ambiguous
-                # delivery or invite an automatic rerender.
-                logger.debug(
-                    "Could not deliver semantic QA advisory after image delivery",
-                    exc_info=True,
-                )
     await target.answer(
         "Можно сохранить результат из чата, создать ещё один или перейти к рекламе.",
         reply_markup=_result_rows(token, receipt),
