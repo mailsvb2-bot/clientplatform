@@ -259,8 +259,8 @@ def fallback_scene_contract(
         forbidden = [item for item in forbidden if item != "unrequested readable text"]
         forbidden.append("readable text other than owner-requested wording")
 
-    # Conservative subject anchor: when the request is shaped like
-    # "ёж, который ...", keep the exact owner-authored noun phrase before the
+    # Conservative subject anchor: when the request uses a relative/action clause,
+    # keep the exact owner-authored noun phrase before the
     # relative/action clause instead of letting a provider see only generic "hero".
     # No new noun is invented; if no safe boundary exists we keep the bounded request.
     subject = owner[:160].rstrip(" ,;:.")
