@@ -605,7 +605,7 @@ async def capabilities(request: web.Request) -> web.Response:
     return web.json_response(
         {
             "contract_version": CONTRACT_VERSION,
-            "capabilities": ["generation", "render_pack", "usage"],
+            "capabilities": ["generation", "semantic_qa", "render_pack", "usage"],
             "render_formats": list(FORMATS),
         }
     )
@@ -693,6 +693,37 @@ async def _upstream_content(request: web.Request, job_id: str, scope_id: str) ->
             return raw, mime
     except (ClientError, asyncio.TimeoutError):
         raise GatewayError(502, "provider_gateway_unavailable") from None
+
+
+async def proxy_generation_semantic_qa(request: web.Request) -> web.Response:
+    """Proxy advisory image-semantic QA through the canonical visual boundary."""
+
+    job_id = str(request.match_info["job_id"])
+    if _ID_RE.fullmatch(job_id) is None:
+        raise GatewayError(400, "invalid_job_id")
+    payload = await _json_body(request)
+    scope_id = _scope(payload.get("scope_id"))
+    contract = payload.get("contract")
+    if not isinstance(contract, dict):
+        raise GatewayError(400, "invalid_semantic_qa_contract")
+    status, value = await _upstream_json(
+        request,
+        "POST",
+        f"/v1/creative/generations/{urllib.parse.quote(job_id, safe='')}/semantic-qa",
+        payload={"scope_id": scope_id, "contract": contract},
+    )
+    if status < 200 or status >= 300:
+        return web.json_response(value, status=status)
+    qa_status = str(value.get("status") or "").strip().lower()
+    issues = value.get("issues")
+    summary = value.get("summary")
+    if (
+        qa_status not in {"pass", "needs_review", "unavailable"}
+        or not isinstance(issues, list)
+        or not isinstance(summary, str)
+    ):
+        raise GatewayError(502, "provider_gateway_invalid_semantic_qa")
+    return web.json_response(value, status=status)
 
 
 async def proxy_generation_content(request: web.Request) -> web.Response:
@@ -1075,6 +1106,10 @@ def create_app(config: GatewayConfig | None = None) -> web.Application:
     app.router.add_get("/v1/capabilities", capabilities)
     app.router.add_post("/v1/creative/generations", proxy_generation_create)
     app.router.add_get("/v1/creative/generations/{job_id}", proxy_generation_get)
+    app.router.add_post(
+        "/v1/creative/generations/{job_id}/semantic-qa",
+        proxy_generation_semantic_qa,
+    )
     app.router.add_get("/v1/creative/generations/{job_id}/content", proxy_generation_content)
     app.router.add_get("/v1/{endpoint:providers|usage}", proxy_simple_get)
     app.router.add_post("/v1/creative/render-packs", create_render_pack)
