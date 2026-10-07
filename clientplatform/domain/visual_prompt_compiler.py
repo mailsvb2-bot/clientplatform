@@ -887,6 +887,7 @@ def compile_visual_prompt(
     style_intent: VisualStyleIntent | None = None,
     scene_contract: VisualSceneContract | None = None,
     scene_direction: str = "",
+    override_owner_style_wording: bool = False,
 ) -> CompiledVisualPrompt:
     owner_request = _clean(
         request,
@@ -951,6 +952,13 @@ def compile_visual_prompt(
         medium,
         purpose_line,
         f'Owner request, preserve its meaning exactly: "{owner_request}"',
+        (
+            "Style precedence: resolved style snapshot overrides owner-authored style "
+            "wording for this restyle."
+            if override_owner_style_wording
+            else "Style precedence: owner-authored style wording remains authoritative "
+            "alongside the resolved style snapshot."
+        ),
         *_scene_contract_directives(scene_contract),
         *(
             [
