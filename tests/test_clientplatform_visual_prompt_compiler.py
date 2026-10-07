@@ -25,16 +25,16 @@ class VisualPromptCompilerTests(unittest.TestCase):
 
         self.assertEqual(
             compiled.semantic_flags,
-            ("transformation", "listening", "visible_state"),
+            ("transformation", "listening", "visible_state", "storyboard"),
         )
         self.assertIn(request, compiled.prompt)
         self.assertIn("listening unmistakable", compiled.prompt)
         self.assertIn("headphones", compiled.prompt)
         self.assertIn("transformation is mandatory visual evidence", compiled.prompt)
-        self.assertIn("one coherent scene", compiled.prompt)
-        self.assertIn("Show the subject once", compiled.prompt)
-        self.assertIn("Do not tile duplicate portraits", compiled.prompt)
-        self.assertNotIn("compact visual storyboard", compiled.prompt)
+        self.assertIn("compact visual storyboard", compiled.prompt)
+        self.assertIn("Transformation stage detail", compiled.prompt)
+        self.assertNotIn("Show the subject once", compiled.prompt)
+        self.assertNotIn("Do not tile duplicate portraits", compiled.prompt)
         self.assertIn("Brand name: Тишина", compiled.prompt)
         self.assertIn("unfamiliar names", compiled.prompt)
         self.assertLess(
@@ -43,11 +43,11 @@ class VisualPromptCompilerTests(unittest.TestCase):
         )
         self.assertIn("generic isolated portrait", compiled.negative_prompt)
         self.assertIn(
-            "identical repeated portraits of the same subject",
+            "single-state image with no visible transformation",
             compiled.negative_prompt,
         )
         self.assertNotIn(
-            "single-state image with no visible transformation",
+            "identical repeated portraits of the same subject",
             compiled.negative_prompt,
         )
         self.assertIn("audio interaction missing", compiled.negative_prompt)
@@ -191,18 +191,33 @@ class VisualPromptCompilerTests(unittest.TestCase):
         self.assertIn("transformation", compiled.semantic_flags)
         self.assertIn("visible_state", compiled.semantic_flags)
         self.assertIn("visible audio interaction", compiled.prompt)
-        self.assertIn("one coherent scene", compiled.prompt)
-        self.assertIn("Show the subject once", compiled.prompt)
-        self.assertIn("narrative story-scene", compiled.prompt)
-        self.assertIn("in-progress softening", compiled.prompt)
-        self.assertNotIn("compact visual storyboard", compiled.prompt)
-        self.assertNotIn("Transformation stage detail", compiled.prompt)
+        self.assertIn("compact visual storyboard", compiled.prompt)
+        self.assertIn("Transformation stage detail", compiled.prompt)
+        self.assertIn("paired transformation composition", compiled.prompt)
+        self.assertNotIn("Show the subject once", compiled.prompt)
+        self.assertNotIn("in-progress softening", compiled.prompt)
         self.assertIn("Never rely on captions", compiled.prompt)
         self.assertIn(
             "storyboard stage labels, arrows, numbers or captions",
             compiled.negative_prompt,
         )
         self.assertIn("audio interaction missing", compiled.negative_prompt)
+
+    def test_owner_can_explicitly_keep_static_transformation_in_one_scene(self) -> None:
+        compiled = compile_visual_prompt(
+            request=(
+                "одна сцена, один кадр: злой кот постепенно становится добрым, "
+                "без коллажа и без повторов"
+            ),
+            kind="image",
+        )
+
+        self.assertIn("transformation", compiled.semantic_flags)
+        self.assertNotIn("storyboard", compiled.semantic_flags)
+        self.assertIn("one coherent scene", compiled.prompt)
+        self.assertIn("Show the subject once", compiled.prompt)
+        self.assertNotIn("compact visual storyboard", compiled.prompt)
+
 
     def test_object_replacement_is_a_constrained_physical_scene(self) -> None:
         compiled = compile_visual_prompt(
@@ -308,7 +323,7 @@ class VisualPromptCompilerTests(unittest.TestCase):
             ),
         )
 
-        self.assertIn("one coherent scene", compiled.prompt)
+        self.assertIn("compact visual storyboard", compiled.prompt)
         self.assertIn("Do not add fake awards", compiled.prompt)
         self.assertIn("Do not rely on readable text", compiled.prompt)
         self.assertIn("Names from business grounding are semantic context only", compiled.prompt)
@@ -327,6 +342,7 @@ class VisualPromptCompilerTests(unittest.TestCase):
         self.assertIn("listening", hedgehog.semantic_flags)
         self.assertIn("transformation", hedgehog.semantic_flags)
         self.assertIn("visible_state", hedgehog.semantic_flags)
+        self.assertIn("storyboard", hedgehog.semantic_flags)
 
         sink = build_visual_semantic_qa_contract(
             request="Замена раковины",
@@ -388,7 +404,7 @@ class VisualPromptCompilerTests(unittest.TestCase):
         )
         payload = json.loads(frozen)
         self.assertEqual(payload["version"], 4)
-        self.assertEqual(payload["intent"]["prompt_compiler_version"], 6)
+        self.assertEqual(payload["intent"]["prompt_compiler_version"], 7)
         self.assertEqual(payload["semantic_qa"]["version"], 2)
         self.assertIn("scene_contract", payload["brief"])
         self.assertIsInstance(payload["brief"]["scene_contract"], dict)
@@ -398,6 +414,11 @@ class VisualPromptCompilerTests(unittest.TestCase):
         self.assertEqual(payload["brief"]["country_code"], "RU")
         self.assertIn("listening", payload["semantic_qa"]["semantic_flags"])
         self.assertIn("transformation", payload["semantic_qa"]["semantic_flags"])
+        self.assertIn("storyboard", payload["semantic_qa"]["semantic_flags"])
+        self.assertIn(
+            "same subject identity across stages",
+            payload["brief"]["scene_contract"]["required_evidence"],
+        )
         provider_prompt = payload["brief"]["prompt"]
         provider_negative = payload["brief"]["negative_prompt"]
 
@@ -541,7 +562,7 @@ class VisualPromptCompilerTests(unittest.TestCase):
             compiled.prompt,
         )
         self.assertIn(
-            "The transformation is mandatory visual evidence in one coherent scene",
+            "The transformation is mandatory visual evidence, not optional mood",
             compiled.prompt,
         )
 
@@ -575,7 +596,7 @@ class VisualPromptCompilerTests(unittest.TestCase):
         self.assertIn("presentation_change", compiled.semantic_flags)
         self.assertNotIn("presentation_transition", compiled.semantic_flags)
         self.assertIn(
-            "The transformation is mandatory visual evidence in one coherent scene",
+            "The transformation is mandatory visual evidence, not optional mood",
             compiled.prompt,
         )
         self.assertIn(
