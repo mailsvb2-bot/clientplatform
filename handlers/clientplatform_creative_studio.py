@@ -1109,7 +1109,10 @@ async def _prepare_styled_generation(
             scene_contract=scene_contract,
             scene_planner_source=planner_source,
             scene_variant=selected_scene_variant,
-            override_owner_style_wording=_style_only_scene_locked(data),
+            override_owner_style_wording=bool(
+                _style_only_scene_locked(data)
+                or data.get("creative_override_owner_style_wording")
+            ),
         )
         receipt = await asyncio.to_thread(
             prepare_creative_generation,
@@ -1218,6 +1221,7 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
         creative_style_intent=resolved.to_mapping(),
         creative_saved_style_applied=saved_applied,
         creative_style_inferred_fields=list(inference.explicit_fields),
+        creative_override_owner_style_wording=False,
     )
     await state.set_state(ClientPlatformCreativeStudioState.choosing_style)
     await message.answer(
@@ -1271,12 +1275,22 @@ async def choose_visual_style_preset(callback: CallbackQuery, state: FSMContext)
     try:
         style = _style_intent_from_state(data).with_quick_style(quick_style)
         selected = style.has_quick_style(quick_style)
+        medium_override = bool(
+            {"illustrative", "natural_photo"}.intersection(
+                style.quick_style_names()
+            )
+        )
     except ValueError:
         await callback.answer("Кнопка устарела", show_alert=True)
         return
     await state.update_data(
         creative_style_intent=style.to_mapping(),
         creative_saved_style_applied=False,
+        creative_override_owner_style_wording=(
+            True
+            if _style_only_scene_locked(data)
+            else medium_override
+        ),
     )
     data = await state.get_data()
     await callback.answer("Акцент добавлен" if selected else "Акцент снят")
@@ -1322,9 +1336,22 @@ async def set_visual_style_dimension(callback: CallbackQuery, state: FSMContext)
         await callback.answer("Эта настройка уже устарела", show_alert=True)
         return
     style = _style_intent_from_state(data).with_value(field, value)
+    existing_medium_override = bool(
+        data.get("creative_override_owner_style_wording")
+    )
+    medium_override = (
+        value != "auto"
+        if field == "realism"
+        else existing_medium_override
+    )
     await state.update_data(
         creative_style_intent=style.to_mapping(),
         creative_saved_style_applied=False,
+        creative_override_owner_style_wording=(
+            True
+            if _style_only_scene_locked(data)
+            else medium_override
+        ),
     )
     data = await state.get_data()
     style = _style_intent_from_state(data)
@@ -1355,6 +1382,7 @@ async def reset_visual_style(callback: CallbackQuery, state: FSMContext) -> None
     await state.update_data(
         creative_style_intent=style.to_mapping(),
         creative_saved_style_applied=False,
+        creative_override_owner_style_wording=_style_only_scene_locked(data),
     )
     data = await state.get_data()
     await callback.answer("Вернул автоматический стиль")
@@ -2292,6 +2320,7 @@ async def restyle_creative_result(callback: CallbackQuery, state: FSMContext) ->
         "creative_saved_style_applied": False,
         "creative_style_inferred_fields": list(inference.explicit_fields),
         "creative_style_only": frozen_scene is not None,
+        "creative_override_owner_style_wording": frozen_scene is not None,
     }
     if frozen_scene is not None:
         contract, planner_source, variant = frozen_scene
