@@ -38,3 +38,17 @@ def test_negative_prompt_does_not_block_requested_text():
 def test_metadata_direction_rejects_non_dictionary_and_unknown_keys():
     assert direction_from_brief_metadata({"visual_direction": "bad"}) is None
     assert direction_from_brief_metadata({"visual_direction": {"subject": "кофе", "price": "200"}}) is None
+
+
+def test_service_sanitizes_invented_claims_before_provider():
+    from visual_provider_gateway.service import VisualGatewayService
+
+    payload = {"prompt": "чашка кофе", "brand_context": ""}
+    approved = VisualGatewayService._safe_visual_direction(
+        {"subject": "чашка кофе", "light": "мягкий свет", "action": "скидка 90%"},
+        payload,
+    )
+    assert approved is not None
+    assert approved["subject"] == "чашка кофе"
+    assert approved["light"] == "мягкий свет"
+    assert approved["action"] == ""
