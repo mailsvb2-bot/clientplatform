@@ -32,6 +32,8 @@ os.environ.setdefault("PUBLIC_BASE_URL", "https" + "://" + "clientplatform.ru")
 # production defaults, while unrelated tests never start real background workers.
 os.environ["TELEGRAM_TRANSPORT"] = "polling"
 os.environ["TELEGRAM_WEBHOOK_ENABLED"] = "0"
+os.environ["VISUAL_IMAGE_VARIANTS"] = "1"
+os.environ["VISUAL_AESTHETIC_DIRECTOR_ENABLED"] = "0"
 os.environ["MESSENGER_WEBHOOK_ENABLED"] = "0"
 os.environ["CLIENTPLATFORM_CONTROL_BOT_ENABLED"] = "0"
 os.environ["CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED"] = "0"
