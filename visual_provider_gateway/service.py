@@ -455,6 +455,33 @@ class VisualGatewayService:
             raise ValueError("visual_reference_host_not_allowed")
         return raw
 
+    @staticmethod
+    def _safe_visual_direction(value: object, payload: dict[str, Any]) -> dict[str, str] | None:
+        if not isinstance(value, dict):
+            return None
+        fields = ("subject", "action", "setting", "light", "angle", "style", "palette")
+        if not set(value).issubset(fields):
+            return None
+        # Provider boundary: only bound strings; never accept instructions or facts from LLM output.
+        import re
+        owner = (str(payload.get("prompt") or "") + " " + str(payload.get("brand_context") or "")).casefold()
+        facts = re.compile(r"\\d|%|₽|\\$|€|руб|скидк|акци|гаранти|лучш|сертифик|наград|цена|стоимост|бесплатн|№", re.I)
+        safe: dict[str, str] = {}
+        for key in fields:
+            val = " ".join(str(value.get(key) or "").split())[:120]
+            if any(match.group(0).casefold() not in owner for match in facts.finditer(val)):
+                val = ""
+            safe[key] = val
+        if not safe["subject"]:
+            return None
+        while sum(len(v) for v in safe.values()) > 350:
+            nonempty = next((key for key in reversed(fields[1:]) if safe[key]), None)
+            if nonempty is None:
+                safe["subject"] = safe["subject"][:350]
+                break
+            safe[nonempty] = ""
+        return safe
+
     def submit(self, payload: dict[str, Any], *, client_id: str) -> dict[str, Any]:
         self._cleanup_transient_assets()
         scope_id = str(payload.get("scope_id") or "global").strip() or "global"
@@ -515,7 +542,11 @@ class VisualGatewayService:
                 brand_context=str(payload.get("brand_context") or ""),
                 seed=(None if payload.get("seed") in (None, "") else int(payload["seed"])),
                 scene_contract=self._scene_contract(payload.get("scene_contract")),
-                metadata={"client_id": client_id, "scope_id": scope_id},
+                metadata={
+                    "client_id": client_id,
+                    "scope_id": scope_id,
+                    "visual_direction": self._safe_visual_direction(payload.get("visual_direction"), payload),
+                },
             )
             wait = max(0, min(int(payload.get("wait_seconds") or 0), 60))
             job = self.engine.generate(brief, wait_seconds=wait)

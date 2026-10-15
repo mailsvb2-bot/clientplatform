@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from clientplatform.domain.visual_prompt_compiler import (
     compile_visual_prompt,
     semantic_flags_for_request,
@@ -14,6 +16,11 @@ from clientplatform.domain.visual_style_intent import VisualStyleIntent
 from visual_provider_gateway import engine
 from visual_provider_gateway.models import CreativeBrief, CreativeJob
 from visual_provider_gateway.prompt_adapter import adapt_visual_brief_for_provider
+
+
+@pytest.fixture(autouse=True)
+def _legacy_prompt_mode(monkeypatch):
+    monkeypatch.setenv("VISUAL_PROMPT_MODE", "legacy")
 
 
 def _compiled_brief(*, kind: str = "image") -> CreativeBrief:
@@ -1008,7 +1015,7 @@ def test_engine_applies_adapter_only_after_provider_selection(monkeypatch) -> No
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 14
+    assert result.provider_payload["prompt_adapter_version"] == 15
     assert "Owner request" not in captured["brief"].prompt
     assert "hedgehog listens to an audio session" in captured["brief"].prompt
 
@@ -1129,7 +1136,7 @@ def test_engine_applies_meaning_adapter_to_gigachat_fallback(monkeypatch) -> Non
     result = engine.VisualCreativeEngine(enabled=True).submit(_compiled_brief())
 
     assert result.status == "succeeded"
-    assert result.provider_payload["prompt_adapter_version"] == 14
+    assert result.provider_payload["prompt_adapter_version"] == 15
     prompt = captured["brief"].prompt
     assert prompt.startswith(
         "a prickly hedgehog listens to an audio session and becomes gentle"

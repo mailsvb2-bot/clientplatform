@@ -9,11 +9,14 @@ offer, claim, audience or transformation.
 
 from dataclasses import replace
 import re
+import os
+
+from .scene_prompt import build_direction_prompt, direction_from_brief_metadata, explicit_text_allowed, fallback_visual_direction, negative_prompt_for, owner_request_from_prompt
 
 from .models import CreativeBrief
 
 
-PROMPT_ADAPTER_VERSION = 14
+PROMPT_ADAPTER_VERSION = 15
 
 _RUNWAY_PROMPT_LIMIT = 1000
 _YANDEX_PROMPT_LIMIT = 500
@@ -1416,6 +1419,35 @@ def _adapt_runway(brief: CreativeBrief) -> CreativeBrief:
     return replace(brief, prompt=prompt)
 
 
+def prompt_mode() -> str:
+    mode = str(os.getenv("VISUAL_PROMPT_MODE", "direction") or "direction").strip().lower()
+    return "legacy" if mode == "legacy" else "direction"
+
+
+def _adapt_direction(brief: CreativeBrief, *, provider: str) -> CreativeBrief | None:
+    lines = _compiled_directives(brief.prompt)
+    owner = _compiled_owner_request(lines) or owner_request_from_prompt(brief.prompt)
+    direction = direction_from_brief_metadata(brief.metadata)
+    if direction is None:
+        direction = fallback_visual_direction(
+            f'Owner request, preserve its meaning exactly: "{owner}"' if owner else brief.prompt,
+            style_hint=" ".join(_compiled_style_cues(lines)),
+        )
+    elif owner:
+        direction = replace(direction, subject=owner[:220])
+    if direction is None or not direction.subject:
+        return None
+    prompt = build_direction_prompt(direction)
+    meta = dict(brief.metadata or {})
+    meta["prompt_mode"] = "direction"
+    meta["direction_source"] = direction.source
+    if provider == "yandexart":
+        meta["yandex_responses_input"] = prompt
+    return replace(brief, prompt=prompt, negative_prompt=negative_prompt_for(
+        explicit_text_allowed=explicit_text_allowed(brief.prompt)
+    ), metadata=meta)
+
+
 def adapt_visual_brief_for_provider(
     brief: CreativeBrief,
     *,
@@ -1423,6 +1455,10 @@ def adapt_visual_brief_for_provider(
 ) -> CreativeBrief:
     value = brief.normalized()
     name = str(provider or "").strip().lower()
+    if prompt_mode() == "direction" and name in {"yandexart", "yandexart_motion", "gigachat"}:
+        adapted = _adapt_direction(value, provider=name)
+        if adapted is not None:
+            return adapted
     if name == "yandexart":
         return _adapt_yandex(value)
     if name == "yandexart_motion":

@@ -373,7 +373,7 @@ def _provider_state_and_alerts(
         if video_mode == "motion" and previous_video_mode != "motion":
             alerts.append(
                 "🟠 Полноценная AI-генерация видео недоступна\n"
-                "Работает только motion fallback: AI-кадр + движение камеры.\n"
+                "Работает только анимированный баннер (motion fallback): AI-кадр + движение камеры.\n"
                 "Проверьте native video worker/provider."
             )
         elif video_mode == "native" and previous_video_mode in {"motion", "unavailable"}:

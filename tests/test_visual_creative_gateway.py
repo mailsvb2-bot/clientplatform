@@ -64,6 +64,33 @@ def test_submit_builds_scoped_gateway_request(monkeypatch):
     assert seen["timeout"] == 30
 
 
+def test_submit_transports_explicit_visual_direction_without_rewriting_owner_prompt(monkeypatch):
+    monkeypatch.setenv("VISUAL_GATEWAY_URL", "http://gateway.internal:8097")
+    monkeypatch.setenv("VISUAL_GATEWAY_TOKEN", "secret")
+    payloads = []
+
+    def fake_open(request, timeout):
+        payloads.append(json.loads((request.data or b"{}").decode()))
+        return FakeResponse(
+            b'{"id":"j1","provider":"yandexart","scope_id":"tenant-1",'
+            b'"kind":"image","status":"queued","asset_ready":false}'
+        )
+
+    monkeypatch.setattr(gateway.urllib.request, "urlopen", fake_open)
+    original = "owner requested cup of coffee"
+    for direction in (None, {"subject": "чашка кофе", "light": "мягкий свет"}):
+        gateway.submit_visual(
+            gateway.VisualCreativeBrief(
+                kind="image", prompt=original, visual_direction=direction,
+            ),
+            scope_id="tenant-1", idempotency_key="request-0001",
+        )
+    assert payloads[0]["prompt"] == original
+    assert "visual_direction" not in payloads[0]
+    assert payloads[1]["prompt"] == original
+    assert payloads[1]["visual_direction"] == {"subject": "чашка кофе", "light": "мягкий свет"}
+
+
 def test_invalid_gateway_configuration_fails_closed(monkeypatch):
     monkeypatch.delenv("VISUAL_GATEWAY_URL", raising=False)
     with pytest.raises(gateway.VisualCreativeGatewayError, match="not_configured"):

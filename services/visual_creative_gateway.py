@@ -67,6 +67,7 @@ class VisualCreativeBrief:
     brand_context: str = ""
     seed: int | None = None
     scene_contract: dict[str, object] | None = None
+    visual_direction: dict[str, str] | None = None
 
 _RENDER_PACK_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _RENDER_IDEMPOTENCY_RE = re.compile(r"[A-Za-z0-9_.:@/-]{8,200}")
@@ -415,6 +416,8 @@ def submit_visual(
         "scope_id": scope,
         "idempotency_key": idem,
     }
+    if brief.visual_direction:
+        payload["visual_direction"] = dict(brief.visual_direction)
     job = _job(
         _json(
             "POST",
