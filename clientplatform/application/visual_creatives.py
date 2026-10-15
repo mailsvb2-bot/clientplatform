@@ -539,15 +539,83 @@ def create_business_visual_from_frozen_payload(
 ) -> VisualCreativeJob:
     brief, wait_seconds = _load_frozen_business_visual_payload(provider_payload_json)
     brief = _with_aesthetic_direction(brief)
+    variants = _image_variant_count() if brief.kind == "image" else 1
+    contract = frozen_business_visual_semantic_qa(provider_payload_json) if variants > 1 else None
     try:
-        return submit_visual(
-            brief,
-            scope_id=scope_id,
-            idempotency_key=idempotency_key,
-            wait_seconds=wait_seconds,
-        )
+        if variants <= 1 or contract is None:
+            return submit_visual(brief, scope_id=scope_id, idempotency_key=idempotency_key, wait_seconds=wait_seconds)
+        return _best_image_variant(brief, contract=contract.to_mapping(), variants=variants, scope_id=scope_id, idempotency_key=idempotency_key)
     except VisualCreativeGatewayError as exc:
         raise VisualCreativeError("visual_creative_generation_failed") from exc
+
+
+
+_QA_RANK = {"pass": 3, "needs_review": 1, "unavailable": 0}
+
+
+def _image_variant_count() -> int:
+    try:
+        count = int(os.getenv("VISUAL_IMAGE_VARIANTS", "3") or 3)
+    except ValueError:
+        count = 3
+    return max(1, min(count, 4))
+
+
+def _variant_deadline_seconds() -> int:
+    try:
+        seconds = int(os.getenv("VISUAL_VARIANT_DEADLINE_SECONDS", "90") or 90)
+    except ValueError:
+        seconds = 90
+    return max(10, min(seconds, 180))
+
+
+def _best_image_variant(
+    brief: VisualCreativeBrief,
+    *,
+    contract: dict[str, object],
+    variants: int,
+    scope_id: str,
+    idempotency_key: str,
+) -> VisualCreativeJob:
+    """Return highest-ranked completed image, while preserving original idempotency key."""
+    import time
+
+    deadline = time.monotonic() + _variant_deadline_seconds()
+    seed = brief.seed if brief.seed is not None else 1000
+    jobs: list[VisualCreativeJob] = []
+    for index in range(min(4, max(1, variants))):
+        key = idempotency_key if index == 0 else f"{idempotency_key[:190]}:v{index}"
+        try:
+            jobs.append(submit_visual(
+                replace(brief, seed=seed + index * 7919),
+                scope_id=scope_id,
+                idempotency_key=key,
+                wait_seconds=0,
+            ))
+        except VisualCreativeGatewayError:
+            if index == 0:
+                raise
+    best: VisualCreativeJob | None = None
+    best_rank = -1
+    for job in jobs:
+        remaining = int(deadline - time.monotonic())
+        try:
+            done = wait_visual(job, wait_seconds=max(0, min(remaining, 60)))
+        except VisualCreativeGatewayError:
+            continue
+        if best is None:
+            best = done
+        if done.status != "succeeded" or not done.asset_ready:
+            continue
+        try:
+            rank = _QA_RANK.get(review_visual_semantics(done, contract=contract).status, 0)
+        except VisualCreativeGatewayError:
+            rank = 0
+        if rank > best_rank or best.status != "succeeded":
+            best, best_rank = done, rank
+        if rank == _QA_RANK["pass"]:
+            break
+    return best if best is not None else jobs[0]
 
 
 def review_business_image_semantics_from_frozen_payload(
