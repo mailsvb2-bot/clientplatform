@@ -699,7 +699,7 @@ class YandexArtProvider:
                     # owner request and invoke Alice AI ART via the Responses API
                     # Image Generation Tool. Operators can explicitly select the
                     # direct Images API for controlled rollback/recovery.
-                    if _yandex_art_pipeline() == "responses":
+                    if _yandex_art_pipeline() == "responses" and not direct_only:
                         try:
                             return self._submit_responses_image_tool(
                                 brief,
