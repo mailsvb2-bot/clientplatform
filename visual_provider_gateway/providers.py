@@ -320,9 +320,11 @@ def yandex_art_pipeline() -> str:
         "image-generation-tool": "responses",
         "direct": "images",
         "openai_images": "images",
+        "foundation": "async",
+        "image_generation_async": "async",
     }
     normalized = aliases.get(raw, raw)
-    return normalized if normalized in {"responses", "images"} else "images"
+    return normalized if normalized in {"responses", "images", "async"} else "images"
 
 
 def _yandex_art_pipeline() -> str:
@@ -335,7 +337,7 @@ def _yandex_allow_direct_fallback() -> bool:
     """Allow lossy Responses -> direct Images downgrade only by operator opt-in."""
 
     return str(
-        os.getenv("YANDEX_ART_ALLOW_DIRECT_FALLBACK", "0") or "0"
+        os.getenv("YANDEX_ART_ALLOW_DIRECT_FALLBACK", "1") or "1"
     ).strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -434,7 +436,7 @@ class YandexArtProvider:
 
     def _generation_url(self) -> str:
         return (
-            self.config.base_url.rstrip("/")
+            (str(os.getenv("YANDEX_ART_ASYNC_BASE_URL", "") or "").strip() or self.config.base_url).rstrip("/")
             + "/foundationModels/v1/imageGenerationAsync"
         )
 
@@ -670,7 +672,11 @@ class YandexArtProvider:
         brief: CreativeBrief,
         *,
         authorization: str,
+        allow_direct_fallback: bool | None = None,
+        direct_only: bool = False,
     ) -> CreativeJob:
+        if allow_direct_fallback is None:
+            allow_direct_fallback = _yandex_allow_direct_fallback()
         width, height = _ratio_pair(brief.aspect_ratio)
         messages: list[dict[str, Any]] = [{"text": brief.prompt, "weight": "1"}]
         if brief.negative_prompt:
@@ -688,7 +694,7 @@ class YandexArtProvider:
         last_error: BaseException | None = None
         for model_uri in _yandex_image_model_candidates(self.config):
             try:
-                if _is_alice_image_model(model_uri):
+                if _is_alice_image_model(model_uri) and _yandex_art_pipeline() != "async":
                     # The default path lets Alice AI LLM interpret the natural
                     # owner request and invoke Alice AI ART via the Responses API
                     # Image Generation Tool. Operators can explicitly select the
@@ -707,7 +713,7 @@ class YandexArtProvider:
                             # degrade composition and semantic fidelity.
                             if str(exc or "").strip() != "http_403":
                                 raise
-                            if not _yandex_allow_direct_fallback():
+                            if not allow_direct_fallback:
                                 raise ProviderTransportError(
                                     "yandex_responses_not_authorized"
                                 ) from exc
