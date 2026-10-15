@@ -985,6 +985,7 @@ class YandexArtMotionVideoProvider(YandexArtProvider):
         image_job.provider_payload["motion_aspect_ratio"] = str(
             brief.aspect_ratio or "1:1"
         )
+        image_job.provider_payload["media_label"] = "animated_banner"
         if image_job.status != "succeeded":
             image_job.provider = "yandexart_motion"
             image_job.kind = "video"
