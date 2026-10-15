@@ -301,10 +301,22 @@ _PORTRAIT_RE = re.compile(
     r"(?:\bпортрет\w*|\bхедшот\w*|\bportrait\b|\bheadshot\b)",
     re.IGNORECASE,
 )
-# A state change ("становится добрым") is one scene. A storyboard is only the
-# layout the owner actually asked for: staged chronology, before/after, or an
-# explicit from-to pair. Bare "после" is not enough: it often means "after a
-# shower", not "draw three panels".
+_EXPLICIT_SINGLE_SCENE_RE = re.compile(
+    r"(?:"
+    r"\bодна\s+сцена\b|\bодин\s+кадр\b|\bв\s+одном\s+кадр\w*|"
+    r"\bпокажи\s+(?:героя|объект|предмет)\s+один\s+раз\b|"
+    r"\bбез\s+(?:коллаж\w*|панел\w*|триптих\w*|повтор\w*)\b|"
+    r"\bне\s+(?:дублир\w*|повторя\w*)\b|"
+    r"\b(?:single|one)\s+(?:scene|frame)\b|"
+    r"\bshow\s+(?:the\s+)?(?:subject|object)\s+once\b|"
+    r"\b(?:no|without)\s+(?:collage|panels?|triptych|duplicates?)\b"
+    r")",
+    re.IGNORECASE,
+)
+# Explicit chronology/before-after wording still requests a storyboard directly.
+# In addition, static image transformations now default to a staged composition
+# unless the owner explicitly asks for one scene/one frame or a portrait. A still
+# image cannot reliably communicate temporal change in a single final-state pose.
 _EXPLICIT_STORYBOARD_RE = re.compile(
     r"(?:"
     r"\bсначала\b|\bзатем\b|\bпотом\b|\bвначале\b|\bв\s+конце\b|"
@@ -313,6 +325,14 @@ _EXPLICIT_STORYBOARD_RE = re.compile(
     r"до\s*(?:и|/|→|->)\s*после|"
     r"\bbefore\s*(?:and|/|→|->)\s*after\b|"
     r"\bколлаж\w*|\bтриптих\w*|\bсториборд\w*|\bstoryboard\b"
+    r")",
+    re.IGNORECASE,
+)
+_NEGATED_STORYBOARD_LAYOUT_RE = re.compile(
+    r"(?:"
+    r"\bбез\s+(?:коллаж\w*|панел\w*|триптих\w*|сториборд\w*)|"
+    r"\bне\s+(?:коллаж\w*|триптих\w*|сториборд\w*)|"
+    r"\b(?:no|without)\s+(?:collage|panels?|triptych|storyboard)\b"
     r")",
     re.IGNORECASE,
 )
@@ -501,9 +521,22 @@ def _semantic_flags(request: str) -> tuple[str, ...]:
     # a transformation, so autopilot does not invent a character-state narrative.
     if subject_transformation and _VISIBLE_STATE_RE.search(request):
         flags.append("visible_state")
+    storyboard_source = _NEGATED_STORYBOARD_LAYOUT_RE.sub("", request)
     if "transformation" in flags and (
-        _EXPLICIT_STORYBOARD_RE.search(request)
+        _EXPLICIT_STORYBOARD_RE.search(storyboard_source)
         or _FROM_TO_STORYBOARD_RE.search(request)
+    ):
+        flags.append("storyboard")
+    return tuple(flags)
+
+
+def _image_semantic_flags(request: str) -> tuple[str, ...]:
+    flags = list(_semantic_flags(request))
+    if (
+        "transformation" in flags
+        and "storyboard" not in flags
+        and "portrait" not in flags
+        and not _EXPLICIT_SINGLE_SCENE_RE.search(request)
     ):
         flags.append("storyboard")
     return tuple(flags)
@@ -538,7 +571,7 @@ def build_visual_semantic_qa_contract(
         kind="image",
         country_code=str(country_code or "").strip().upper(),
         owner_request=owner_request,
-        semantic_flags=_semantic_flags(owner_request),
+        semantic_flags=_image_semantic_flags(owner_request),
         scene_contract=scene_contract,
     )
 
@@ -546,6 +579,11 @@ def build_visual_semantic_qa_contract(
 def semantic_flags_for_request(request: str) -> tuple[str, ...]:
     owner_request = _clean(request, field="request", limit=_MAX_REQUEST_CHARS)
     return _semantic_flags(owner_request)
+
+
+def image_semantic_flags_for_request(request: str) -> tuple[str, ...]:
+    owner_request = _clean(request, field="request", limit=_MAX_REQUEST_CHARS)
+    return _image_semantic_flags(owner_request)
 
 
 def _scene_contract_directives(
@@ -943,7 +981,11 @@ def compile_visual_prompt(
     if visual_purpose not in {"owner_visual", "advertising"}:
         raise ValueError("visual purpose is invalid")
 
-    flags = _semantic_flags(owner_request)
+    flags = (
+        _image_semantic_flags(owner_request)
+        if visual_kind == "image"
+        else _semantic_flags(owner_request)
+    )
     resolved_style = resolve_visual_style_intent(
         request=owner_request,
         selected=style_intent,
@@ -1168,5 +1210,6 @@ __all__ = [
     "VisualSemanticQAContract",
     "build_visual_semantic_qa_contract",
     "compile_visual_prompt",
+    "image_semantic_flags_for_request",
     "semantic_flags_for_request",
 ]

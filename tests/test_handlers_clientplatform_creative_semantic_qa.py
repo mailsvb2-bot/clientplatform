@@ -93,11 +93,14 @@ async def test_semantic_qa_labels_questionable_image_before_success_caption() ->
     assert review.call_count == 1
     target.answer_photo.assert_awaited_once()
     caption = target.answer_photo.await_args.kwargs["caption"]
-    assert caption.startswith("⚠️ Картинка сгенерирована")
-    assert "проверить соответствие исходному запросу" in caption
+    assert caption.startswith("❌ Картинка не прошла автопроверку смысла")
+    assert "результат не считаю готовым" in caption
     messages = [call.args[0] for call in target.answer.await_args_list]
     assert any("не видно запрошенного изменения" in item for item in messages)
-    assert any("Новую генерацию я не запускала" in item for item in messages)
+    assert any(
+        "Новая платная генерация автоматически не запускалась" in item
+        for item in messages
+    )
 
 
 @pytest.mark.asyncio
@@ -143,10 +146,12 @@ async def test_semantic_qa_pass_keeps_normal_ready_caption() -> None:
 
 
 def test_semantic_qa_unavailable_is_not_presented_as_green_success() -> None:
-    warning = studio._semantic_qa_warning(
-        SimpleNamespace(status="unavailable", issues=(), summary="")
-    )
+    qa = SimpleNamespace(status="unavailable", issues=(), summary="")
+    warning = studio._semantic_qa_warning(qa)
+    caption = studio._semantic_qa_caption(qa)
 
     assert "автоматическая проверка соответствия" in warning
     assert "сейчас недоступна" in warning
     assert "Новую генерацию я не запускала" in warning
+    assert caption.startswith("⚠️ Картинка готова")
+    assert "автопроверка смысла сейчас недоступна" in caption
