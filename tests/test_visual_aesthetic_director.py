@@ -15,7 +15,8 @@ class StubClient:
         return self.reply
 
 
-def test_director_drops_invented_discounts_and_brand():
+def test_director_drops_invented_discounts_and_brand(monkeypatch):
+    monkeypatch.setenv("VISUAL_AESTHETIC_DIRECTOR_ENABLED", "1")
     response = json.dumps({
         "subject": "чашка кофе",
         "setting": "уютная кофейня",
@@ -35,7 +36,8 @@ def test_director_drops_invented_discounts_and_brand():
     assert result["action"] == ""
 
 
-def test_director_degrades_without_provider():
+def test_director_degrades_without_provider(monkeypatch):
+    monkeypatch.setenv("VISUAL_AESTHETIC_DIRECTOR_ENABLED", "1")
     assert director.direct_visual_aesthetics(
         owner_request="чашка кофе",
         kind="image",
