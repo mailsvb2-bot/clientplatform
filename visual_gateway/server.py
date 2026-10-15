@@ -865,9 +865,22 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_w
     return lines
 
 
+def _paint_scrim(layer: Image.Image, primary: str, *, scrim_h: int, from_top: bool) -> None:
+    import math
+    rgb = tuple(int(primary[index:index+2], 16) for index in (1, 3, 5))
+    width, height = layer.size
+    scrim_h = max(1, min(height, scrim_h))
+    strip = Image.new("RGBA", (1, scrim_h))
+    for row in range(scrim_h):
+        progress = row / max(1, scrim_h - 1)
+        if from_top:
+            progress = 1.0 - progress
+        strip.putpixel((0, row), (*rgb, int(200 * (progress ** 1.6))))
+    layer.alpha_composite(strip.resize((width, scrim_h)), (0, 0 if from_top else height - scrim_h))
+
+
 def _overlay(config: GatewayConfig, width: int, height: int, composition: dict[str, Any]) -> Image.Image:
     layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(layer)
     brand = composition.get("brand") if isinstance(composition.get("brand"), dict) else {}
     primary = _color(brand.get("primary_color"), "#172033")
     accent = _color(brand.get("accent_color"), "#E9C46A")
@@ -875,52 +888,42 @@ def _overlay(config: GatewayConfig, width: int, height: int, composition: dict[s
     headline = " ".join(str(composition.get("headline") or "").split())[:160]
     body = " ".join(str(composition.get("body") or "").split())[:500]
     cta = " ".join(str(composition.get("cta") or "").split())[:80]
-    layout = str(composition.get("layout") or "lower_card").strip().lower()
-    card_h = max(250, int(height * 0.36))
-    top = int(height * 0.06) if layout == "top_card" else height - card_h - int(height * 0.06)
-    left = int(width * 0.06)
-    right = width - left
-    radius = max(20, int(min(width, height) * 0.025))
-    draw.rounded_rectangle((left, top, right, top + card_h), radius=radius, fill=primary + "E8")
-    pad = max(24, int(width * 0.04))
-    x = left + pad
-    y = top + pad
-    maxw = right - x - pad
+    top_layout = str(composition.get("layout") or "lower_card").strip().lower() == "top_card"
+    _paint_scrim(layer, primary, scrim_h=max(280, int(height * 0.46)), from_top=top_layout)
+    draw = ImageDraw.Draw(layer)
+    left = int(width * 0.07)
+    maxw = width - left * 2
+    pad = max(16, int(width * 0.02))
     font_preset = _font_preset(composition, resolve_auto=True)
-    hfont = _font(
-        config,
-        max(32, int(width * 0.052)),
-        preset=font_preset,
-        role="headline",
-    )
-    bfont = _font(
-        config,
-        max(24, int(width * 0.030)),
-        preset=font_preset,
-        role="body",
-    )
-    cfont = _font(
-        config,
-        max(24, int(width * 0.032)),
-        preset=font_preset,
-        role="cta",
-    )
-    for line in _wrap(draw, headline, hfont, maxw, 2):
-        draw.text((x, y), line, font=hfont, fill=text_color)
-        y += int(hfont.size * 1.22) if hasattr(hfont, "size") else 42
-    y += max(8, int(height * 0.008))
-    for line in _wrap(draw, body, bfont, maxw, 3):
-        draw.text((x, y), line, font=bfont, fill=text_color)
-        y += int(bfont.size * 1.30) if hasattr(bfont, "size") else 32
-    if cta:
-        bbox = draw.textbbox((0, 0), cta, font=cfont)
-        cta_w = min(maxw, bbox[2] + pad * 2)
-        cta_h = bbox[3] - bbox[1] + max(16, pad // 2)
-        cta_y = min(top + card_h - cta_h - pad, y + max(12, pad // 2))
-        draw.rounded_rectangle((x, cta_y, x + cta_w, cta_y + cta_h), radius=cta_h // 2, fill=accent)
-        draw.text((x + pad, cta_y + max(6, pad // 4)), cta, font=cfont, fill=primary)
+    hfont = _font(config, max(36, int(width * 0.064)), preset=font_preset, role="headline")
+    bfont = _font(config, max(24, int(width * 0.032)), preset=font_preset, role="body")
+    cfont = _font(config, max(24, int(width * 0.034)), preset=font_preset, role="cta")
+    hstep = int(hfont.size * 1.12) if hasattr(hfont, "size") else 44
+    bstep = int(bfont.size * 1.34) if hasattr(bfont, "size") else 32
+    head_lines = _wrap(draw, headline, hfont, maxw, 2)
+    body_lines = _wrap(draw, body, bfont, maxw, 3)
+    gap = max(10, int(height * 0.012))
+    cbox = draw.textbbox((0, 0), cta, font=cfont) if cta else None
+    cta_h = cbox[3] - cbox[1] + max(22, pad) if cbox else 0
+    block_h = len(head_lines) * hstep + gap + len(body_lines) * bstep + (gap * 2 + cta_h if cta else 0)
+    margin = int(height * 0.06)
+    y = margin if top_layout else height - margin - block_h
+    offset = max(1, int(width * 0.002))
+    for line in head_lines:
+        draw.text((left + offset, y + offset), line, font=hfont, fill=(0, 0, 0, 110))
+        draw.text((left, y), line, font=hfont, fill=text_color)
+        y += hstep
+    y += gap
+    for line in body_lines:
+        draw.text((left + offset, y + offset), line, font=bfont, fill=(0, 0, 0, 110))
+        draw.text((left, y), line, font=bfont, fill=text_color + "F0")
+        y += bstep
+    if cbox:
+        y += gap * 2
+        cta_w = min(maxw, cbox[2] + pad * 4)
+        draw.rounded_rectangle((left, y, left + cta_w, y + cta_h), radius=cta_h // 2, fill=accent)
+        draw.text((left + pad * 2, y + (cta_h - (cbox[3] - cbox[1])) // 2 - cbox[1]), cta, font=cfont, fill=primary)
     return layer
-
 
 def _durable_write(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
