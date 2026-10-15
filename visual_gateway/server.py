@@ -866,7 +866,6 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_w
 
 
 def _paint_scrim(layer: Image.Image, primary: str, *, scrim_h: int, from_top: bool) -> None:
-    import math
     rgb = tuple(int(primary[index:index+2], 16) for index in (1, 3, 5))
     width, height = layer.size
     scrim_h = max(1, min(height, scrim_h))
