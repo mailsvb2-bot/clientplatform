@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from clientplatform.domain.visual_prompt_compiler import (
     compile_visual_prompt,
     semantic_flags_for_request,
@@ -14,6 +16,11 @@ from clientplatform.domain.visual_style_intent import VisualStyleIntent
 from visual_provider_gateway import engine
 from visual_provider_gateway.models import CreativeBrief, CreativeJob
 from visual_provider_gateway.prompt_adapter import adapt_visual_brief_for_provider
+
+
+@pytest.fixture(autouse=True)
+def _legacy_prompt_mode(monkeypatch):
+    monkeypatch.setenv("VISUAL_PROMPT_MODE", "legacy")
 
 
 def _compiled_brief(*, kind: str = "image") -> CreativeBrief:
