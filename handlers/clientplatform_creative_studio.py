@@ -614,7 +614,7 @@ async def send_creative_studio_menu(
     video_status = (
         "✅ полноценная AI-генерация"
         if video_mode == "native"
-        else "🟡 доступно оживление AI-кадра"
+        else "🟡 только анимированный баннер (AI-кадр + движение камеры)"
         if video_mode == "motion"
         else "⚠️ генератор недоступен"
     )
@@ -720,7 +720,7 @@ async def creative_provider_status(callback: CallbackQuery) -> None:
         status_text = (
             "✅ Полноценная AI-генерация видео подключена."
             if video_mode == "native"
-            else "🟡 Сейчас доступно только оживление AI-кадра, а не генерация движущейся сцены."
+            else "🟡 Сейчас доступен только анимированный баннер (оживление AI-кадра), а не генерация движущейся сцены."
         )
     else:
         noun = "видео" if kind == "video" else "картинок"
@@ -858,8 +858,8 @@ async def _ask_creative_prompt(
     if kind == "video":
         if video_mode == "motion":
             prompt_text = (
-                "Сейчас доступен безопасный резервный режим: ClientPlatform создаст "
-                "AI-кадр и превратит его в короткий MP4 с плавным движением камеры. "
+                "Сейчас доступен только анимированный баннер: ClientPlatform создаст "
+                "AI-кадр и сделает из него короткий MP4 с плавным движением камеры. "
                 "Это не генерация движущейся сцены. Опишите ключевой кадр обычными словами."
             )
         else:
