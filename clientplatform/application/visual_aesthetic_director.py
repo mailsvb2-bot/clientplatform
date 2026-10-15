@@ -87,7 +87,7 @@ def direct_visual_aesthetics(
         return None
     try:
         selected = client or OpenAIClient.from_settings()
-    except (RuntimeError, ValueError, OSError):
+    except RuntimeError:
         return None
     if selected is None:
         return None
@@ -116,7 +116,7 @@ def direct_visual_aesthetics(
             temperature=0.7,
             max_tokens=400,
         )
-    except (RuntimeError, ValueError, OSError):
+    except RuntimeError:
         return None
     return sanitize_visual_direction(
         _json_object(raw or ""), owner_context=f"{request} {brand_context}",
