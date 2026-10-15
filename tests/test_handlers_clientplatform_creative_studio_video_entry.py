@@ -325,6 +325,7 @@ def test_motion_mode_prompt_does_not_claim_native_video(monkeypatch) -> None:
     state.set_state.assert_awaited_once()
     text = target.answer.await_args.args[0]
     assert "Это не генерация движущейся сцены" in text
+    assert "анимированный баннер" in text
     assert "AI-кадр" in text
 
 
@@ -348,7 +349,7 @@ def test_video_status_explains_motion_fallback(monkeypatch) -> None:
     asyncio.run(studio.creative_provider_status(callback))
 
     text = target.answer.await_args.args[0]
-    assert "оживление AI-кадра" in text
+    assert "анимированный баннер" in text
     assert "не генерация движущейся сцены" in text
 
 
