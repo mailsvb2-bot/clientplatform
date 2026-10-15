@@ -80,7 +80,7 @@ def direct_visual_aesthetics(
     client: OpenAIClient | None = None,
 ) -> dict[str, str] | None:
     """Provide sanitized aesthetics or None, allowing deterministic provider fallback."""
-    if not _truthy("VISUAL_AESTHETIC_DIRECTOR_ENABLED", "1"):
+    if not _truthy("VISUAL_AESTHETIC_DIRECTOR_ENABLED", "0"):
         return None
     request = _clean(owner_request.replace("\n", " "))[:_FIELD_LIMIT * 4]
     if not request:
