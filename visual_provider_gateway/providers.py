@@ -768,17 +768,28 @@ class YandexArtProvider:
                 return self._submit_with_authorization(
                     brief,
                     authorization=primary,
+                    allow_direct_fallback=False,
                 )
             except ProviderTransportError as exc:
                 if not self._auth_rejected(exc):
                     raise
                 renewable = self._renewable_authorization()
                 if not renewable or renewable == primary:
+                    if str(exc) == "yandex_responses_not_authorized" and _yandex_allow_direct_fallback():
+                        return self._submit_with_authorization(
+                            brief, authorization=primary, direct_only=True,
+                        )
                     raise
-                return self._submit_with_authorization(
-                    brief,
-                    authorization=renewable,
-                )
+                try:
+                    return self._submit_with_authorization(
+                        brief, authorization=renewable, allow_direct_fallback=False,
+                    )
+                except ProviderTransportError as second_error:
+                    if str(second_error) == "yandex_responses_not_authorized" and _yandex_allow_direct_fallback():
+                        return self._submit_with_authorization(
+                            brief, authorization=renewable, direct_only=True,
+                        )
+                    raise
 
         renewable = self._renewable_authorization()
         if renewable:
