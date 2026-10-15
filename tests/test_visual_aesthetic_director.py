@@ -103,3 +103,63 @@ def test_direction_validation_rejects_unknown_fields_and_brand_hallucination():
     assert director.sanitize_visual_direction("coffee", owner_context="кофе") is None
     assert director.invents_fact("ACME", owner_context="кофе")
     assert not director.invents_fact("чашка кофе", owner_context="чашка кофе")
+
+
+def test_provider_returns_null_or_empty_response(monkeypatch):
+    monkeypatch.setenv("VISUAL_AESTHETIC_DIRECTOR_ENABLED", "1")
+    assert director.direct_visual_aesthetics(
+        owner_request="кофе", kind="image", client=StubClient(None),
+    ) is None
+    assert director.direct_visual_aesthetics(
+        owner_request="кофе", kind="image", client=StubClient("{}"),
+    ) is None
+
+
+def test_director_accepts_owner_factual_claim_only_when_present():
+    assert director.invents_fact("скидка 25%", owner_context="кофе")
+    assert not director.invents_fact("скидка 25%", owner_context="скидка 25%")
+    assert director.sanitize_visual_direction(None, owner_context="кофе") is None
+    assert director.sanitize_visual_direction({}, owner_context="кофе") is None
+
+
+def test_direction_preserves_fields_when_owner_supplies_language_and_numbers():
+    result = director.sanitize_visual_direction(
+        {"subject": "товар 2026", "setting": "studio", "light": "мягкий"},
+        owner_context="товар 2026 studio",
+    )
+    assert result is not None
+    assert result["subject"] == "товар 2026"
+    assert result["setting"] == "studio"
+
+
+def test_director_explicitly_disabled_flag_does_not_call_provider(monkeypatch):
+    monkeypatch.setenv("VISUAL_AESTHETIC_DIRECTOR_ENABLED", "false")
+    class ExplodingClient:
+        def chat(self, *args, **kwargs):
+            raise AssertionError("disabled director must not call provider")
+    assert director.direct_visual_aesthetics(
+        owner_request="кофе", kind="image", client=ExplodingClient(),
+    ) is None
+
+
+def test_director_bounded_long_owner_input(monkeypatch):
+    monkeypatch.setenv("VISUAL_AESTHETIC_DIRECTOR_ENABLED", "1")
+    class InspectingClient:
+        def chat(self, messages, **kwargs):
+            payload = json.loads(messages[-1]["content"])
+            assert len(payload["request"]) <= 120
+            return '{"subject":"кофе"}'
+    result = director.direct_visual_aesthetics(
+        owner_request="кофе " * 500, kind="image", client=InspectingClient(),
+    )
+    assert result is not None
+
+
+def test_direction_sanitizer_removes_unknown_english_brand_but_retains_subject():
+    result = director.sanitize_visual_direction(
+        {"subject": "кофе", "palette": "Acme", "light": "дневной"},
+        owner_context="кофе",
+    )
+    assert result is not None
+    assert result["palette"] == ""
+    assert result["light"] == "дневной"
