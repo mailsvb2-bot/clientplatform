@@ -337,7 +337,7 @@ def _yandex_allow_direct_fallback() -> bool:
     """Allow lossy Responses -> direct Images downgrade only by operator opt-in."""
 
     return str(
-        os.getenv("YANDEX_ART_ALLOW_DIRECT_FALLBACK", "1") or "1"
+        os.getenv("YANDEX_ART_ALLOW_DIRECT_FALLBACK", "0") or "0"
     ).strip().lower() in {"1", "true", "yes", "on"}
 
 
