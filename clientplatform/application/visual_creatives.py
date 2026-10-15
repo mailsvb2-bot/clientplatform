@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
+import re
 from pathlib import Path
 import os
 
+from clientplatform.application.visual_aesthetic_director import direct_visual_aesthetics
 from clientplatform.application.visual_scene_variants import VisualSceneVariant
 from clientplatform.domain.visual_prompt_compiler import (
     VisualSemanticQAContract,
@@ -515,6 +518,19 @@ def build_business_image_brief(
     )
 
 
+_OWNER_REQUEST_RE = re.compile(r'Owner request, preserve its meaning exactly: "(.*?)"', re.DOTALL)
+
+
+def _with_aesthetic_direction(brief: VisualCreativeBrief) -> VisualCreativeBrief:
+    """Enrich visuals without changing the frozen owner request or blocking production."""
+    match = _OWNER_REQUEST_RE.search(brief.prompt)
+    owner_request = match.group(1) if match else brief.prompt.split("Production constraints:")[0]
+    direction = direct_visual_aesthetics(
+        owner_request=owner_request, kind=brief.kind, brand_context=brief.brand_context,
+    )
+    return brief if direction is None else replace(brief, visual_direction=direction)
+
+
 def create_business_visual_from_frozen_payload(
     *,
     provider_payload_json: str,
@@ -522,6 +538,7 @@ def create_business_visual_from_frozen_payload(
     idempotency_key: str,
 ) -> VisualCreativeJob:
     brief, wait_seconds = _load_frozen_business_visual_payload(provider_payload_json)
+    brief = _with_aesthetic_direction(brief)
     try:
         return submit_visual(
             brief,
