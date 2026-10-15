@@ -555,7 +555,7 @@ _QA_RANK = {"pass": 3, "needs_review": 1, "unavailable": 0}
 
 def _image_variant_count() -> int:
     try:
-        count = int(os.getenv("VISUAL_IMAGE_VARIANTS", "3") or 3)
+        count = int(os.getenv("VISUAL_IMAGE_VARIANTS", "1") or 1)
     except ValueError:
         count = 3
     return max(1, min(count, 4))
